@@ -5,19 +5,15 @@
 //! writes the JSON args to stdin, and returns stdout to the agent.
 
 use std::sync::Arc;
-use std::time::Duration;
 
+use eureka_graph::process::run_subprocess;
 use eureka_graph::scheduler::SchedulerEvent;
 use rig_core::completion::ToolDefinition;
 use rig_core::tool::{ToolDyn, ToolError};
 use rig_core::wasm_compat::WasmBoxedFuture;
-use tokio::io::AsyncWriteExt;
 use tokio::sync::mpsc;
 
 use crate::def::ToolDef;
-
-/// Maximum bytes captured from subprocess stdout.
-const MAX_OUTPUT_BYTES: usize = 64 * 1024;
 
 /// A Rig tool backed by a shell command.
 ///
@@ -39,7 +35,13 @@ impl CommandTool {
         round: u32,
         event_tx: Option<mpsc::Sender<SchedulerEvent>>,
     ) -> Self {
-        Self { def, node_id, node_kind, round, event_tx }
+        Self {
+            def,
+            node_id,
+            node_kind,
+            round,
+            event_tx,
+        }
     }
 
     async fn execute(&self, args_json: String) -> Result<String, ToolError> {
@@ -65,43 +67,15 @@ impl CommandTool {
             None => return Err(ToolError::ToolCallError("command array is empty".into())),
         };
 
-        let mut child = tokio::process::Command::new(binary)
-            .args(rest)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped())
-            .spawn()
-            .map_err(|e| {
-                ToolError::ToolCallError(format!("failed to spawn '{}': {e}", binary).into())
-            })?;
+        let result = run_subprocess(binary, rest, None, &[], &args_json, self.def.timeout_secs)
+            .await
+            .map_err(|e| ToolError::ToolCallError(e.to_string().into()))?;
 
-        // Write args JSON to stdin then close the pipe.
-        if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(args_json.as_bytes()).await;
-            // stdin drops here, EOF is sent to the child
-        }
-
-        let timeout = Duration::from_secs(u64::from(self.def.timeout_secs));
-        let output = match tokio::time::timeout(timeout, child.wait_with_output()).await {
-            Ok(Ok(out)) => out,
-            Ok(Err(e)) => return Err(ToolError::ToolCallError(e.into())),
-            Err(_elapsed) => {
-                return Ok(format!("Error: timed out after {}s", self.def.timeout_secs));
-            }
-        };
-
-        if output.status.success() {
-            let raw = String::from_utf8_lossy(&output.stdout);
-            let trimmed = raw.trim();
-            if trimmed.len() > MAX_OUTPUT_BYTES {
-                Ok(format!("{}\n[truncated]", &trimmed[..MAX_OUTPUT_BYTES]))
-            } else {
-                Ok(trimmed.to_string())
-            }
+        if result.success {
+            Ok(result.stdout)
         } else {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let snippet: String = stderr.chars().take(500).collect();
-            let code = output.status.code().unwrap_or(-1);
+            let snippet: String = result.stderr.chars().take(500).collect();
+            let code = result.exit_code.unwrap_or(-1);
             Ok(format!("Error (exit {code}): {snippet}"))
         }
     }
