@@ -596,7 +596,6 @@ dependencies = [
  "eureka-db",
  "eureka-engine",
  "eureka-graph",
- "eureka-plugins",
  "rig-core",
  "serde",
  "serde_json",
@@ -637,8 +636,10 @@ dependencies = [
 name = "eureka-engine"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
  "async-trait",
  "chrono",
+ "dirs",
  "eureka-agents",
  "eureka-config",
  "eureka-db",
@@ -646,6 +647,7 @@ dependencies = [
  "rig-core",
  "serde",
  "serde_json",
+ "tempfile",
  "thiserror 2.0.18",
  "tokio",
  "tokio-util",
@@ -668,22 +670,6 @@ dependencies = [
  "toml",
  "tracing",
  "uuid",
-]
-
-[[package]]
-name = "eureka-plugins"
-version = "0.1.0"
-dependencies = [
- "async-trait",
- "dirs",
- "eureka-graph",
- "serde",
- "serde_json",
- "tempfile",
- "thiserror 2.0.18",
- "tokio",
- "tokio-util",
- "tracing",
 ]
 
 [[package]]

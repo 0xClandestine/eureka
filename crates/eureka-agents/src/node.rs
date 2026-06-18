@@ -189,7 +189,9 @@ mod tests {
                 _node_id: &str,
                 _node_kind: &str,
                 _round: u32,
-                _event_tx: Option<tokio::sync::mpsc::Sender<eureka_graph::scheduler::SchedulerEvent>>,
+                _event_tx: Option<
+                    tokio::sync::mpsc::Sender<eureka_graph::scheduler::SchedulerEvent>,
+                >,
             ) -> Result<serde_json::Value, AgentError> {
                 Ok(serde_json::json!({
                     "insights": { "recurring_patterns": [] },
@@ -282,7 +284,9 @@ mod tests {
                 _node_id: &str,
                 _node_kind: &str,
                 _round: u32,
-                _event_tx: Option<tokio::sync::mpsc::Sender<eureka_graph::scheduler::SchedulerEvent>>,
+                _event_tx: Option<
+                    tokio::sync::mpsc::Sender<eureka_graph::scheduler::SchedulerEvent>,
+                >,
             ) -> Result<serde_json::Value, AgentError> {
                 *self.captured.lock().unwrap() = Some(initial_message.to_string());
                 Ok(serde_json::json!({ "hypotheses": [] }))
