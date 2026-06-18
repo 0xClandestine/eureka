@@ -7,8 +7,7 @@
   "roles": ["node"],
   "node": {
     "inputs": [
-      {"port": "in",    "kind": "Reviews"},
-      {"port": "cycle", "kind": "Control"}
+      {"port": "in", "kind": "Reviews"}
     ],
     "outputs": [
       {"port": "top",   "kind": "Hypotheses"},

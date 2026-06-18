@@ -5,11 +5,12 @@ Reads a JSON call from stdin and writes a JSON result to stdout.
 
 Modes
 -----
-search  Search arXiv metadata via the HuggingFace dataset snapshot.
-        Returns paper metadata (title, abstract, authors, year, arxiv_id).
+search  Keyword search via the official arXiv Atom API
+        (https://export.arxiv.org/api/query).  Free, no key required,
+        relevance-ranked, ~2.4 M papers.
 
-fetch   Fetch and convert a specific arXiv paper to markdown via arxiv2md.
-        Returns the paper text (truncated to ~50 k chars if large).
+fetch   Retrieve a paper's full text as clean Markdown via the arxiv2md REST
+        API (https://arxiv2md.org).  No package install required.
 
 Input schema
 ------------
@@ -17,77 +18,105 @@ Input schema
   "mode": "search" | "fetch",
   "query": "...",        # required for mode=search
   "arxiv_id": "...",     # required for mode=fetch  (e.g. "2404.01234")
-  "max_results": 5       # optional, mode=search only, default 5
+  "max_results": 5,      # optional, mode=search only, default 5
+  "page": 0              # optional, zero-based page, default 0
 }
 
 Dependencies
 ------------
-  pip install arxiv2md          # for mode=fetch full text
-  (search mode has no deps beyond stdlib)
+  stdlib only (xml.etree.ElementTree + urllib)
 """
 
 import json
 import sys
 import urllib.parse
 import urllib.request
+import xml.etree.ElementTree as ET
 
-HF_SEARCH_URL = "https://datasets-server.huggingface.co/search"
-DATASET = "librarian-bots/arxiv-metadata-snapshot"
+ARXIV_API    = "https://export.arxiv.org/api/query"
+ARXIV2MD_API = "https://arxiv2md.org/api/markdown"
 MAX_FULL_TEXT = 50_000  # chars; keeps context window manageable
 
+# XML namespaces used by the Atom feed
+_NS = {
+    "atom":       "http://www.w3.org/2005/Atom",
+    "opensearch": "http://a9.com/-/spec/opensearch/1.1/",
+    "arxiv":      "http://arxiv.org/schemas/atom",
+}
+
 
 # ---------------------------------------------------------------------------
-# Search
+# Search — official arXiv Atom API
 # ---------------------------------------------------------------------------
 
-def search_arxiv(query: str, max_results: int, page: int) -> dict:
-    """Search arXiv metadata via the HuggingFace datasets server REST API.
-
-    No local data download required — the API does the filtering server-side.
-    """
+def search_arxiv(query: str, max_results: int, page: int = 0) -> dict:
+    """Relevance-ranked keyword search via the arXiv Atom API."""
     params = urllib.parse.urlencode({
-        "dataset": DATASET,
-        "config": "default",
-        "split": "train",
-        "query": query,
-        "offset": page * max_results,
-        "length": max_results,
+        "search_query": f"all:{query}",
+        "start":        page * max_results,
+        "max_results":  max_results,
+        "sortBy":       "relevance",
+        "sortOrder":    "descending",
     })
-    url = f"{HF_SEARCH_URL}?{params}"
+    url = f"{ARXIV_API}?{params}"
     try:
         req = urllib.request.Request(url, headers={"User-Agent": "eureka-agent/1.0"})
         with urllib.request.urlopen(req, timeout=30) as resp:
-            data = json.loads(resp.read().decode())
+            xml_text = resp.read().decode()
     except Exception as exc:  # noqa: BLE001
-        return {"error": f"HF dataset search failed: {exc}", "papers": []}
+        return {"error": f"arXiv API request failed: {exc}", "papers": []}
+
+    try:
+        root = ET.fromstring(xml_text)
+    except ET.ParseError as exc:
+        return {"error": f"Failed to parse arXiv response: {exc}", "papers": []}
+
+    total_str = root.findtext("opensearch:totalResults", namespaces=_NS) or "0"
+    try:
+        total = int(total_str)
+    except ValueError:
+        total = 0
 
     papers = []
-    for row_obj in data.get("rows", []):
-        row = row_obj.get("row", {})
-        authors_raw = row.get("authors", "")
-        if isinstance(authors_raw, list):
-            short = [str(a) for a in authors_raw[:5]]
-            authors = ", ".join(short) + (" et al." if len(authors_raw) > 5 else "")
-        else:
-            authors = str(authors_raw)
+    for entry in root.findall("atom:entry", _NS):
+        raw_id   = entry.findtext("atom:id", namespaces=_NS) or ""
+        arxiv_id = raw_id.split("/abs/")[-1].strip()
+
+        title    = (entry.findtext("atom:title",   namespaces=_NS) or "").replace("\n", " ").strip()
+        abstract = (entry.findtext("atom:summary", namespaces=_NS) or "").replace("\n", " ").strip()
+        published = (entry.findtext("atom:published", namespaces=_NS) or "")[:4]
+
+        author_els  = entry.findall("atom:author", _NS)
+        author_names = [
+            (a.findtext("atom:name", namespaces=_NS) or "")
+            for a in author_els[:5]
+        ]
+        authors = ", ".join(author_names) + (" et al." if len(author_els) > 5 else "")
+
+        categories = " ".join(
+            cat.get("term", "") for cat in entry.findall("atom:category", _NS)
+        )
+
+        doi_el = entry.find("arxiv:doi", _NS)
+        doi    = doi_el.text.strip() if doi_el is not None and doi_el.text else ""
 
         papers.append({
-            "arxiv_id":  row.get("id", "").strip(),
-            "title":     row.get("title", "").strip(),
-            "abstract":  row.get("abstract", "").strip(),
-            "authors":   authors,
-            "categories": row.get("categories", ""),
-            "year":      str(row.get("update_date", ""))[:4],
-            "doi":       row.get("doi", "") or "",
+            "arxiv_id":   arxiv_id,
+            "title":      title,
+            "abstract":   abstract,
+            "authors":    authors,
+            "categories": categories,
+            "year":       published,
+            "doi":        doi,
         })
 
-    total = data.get("num_rows_total", len(papers))
+    start = page * max_results
     return {
-        "papers": papers,
+        "papers":      papers,
         "total_found": total,
-        "page": page,
+        "page":        page,
         "max_results": max_results,
-        "has_more": (page + 1) * max_results < total,
+        "has_more":    start + max_results < total,
     }
 
 
@@ -96,61 +125,34 @@ def search_arxiv(query: str, max_results: int, page: int) -> dict:
 # ---------------------------------------------------------------------------
 
 def fetch_paper(arxiv_id: str) -> dict:
-    """Fetch and convert an arXiv paper to markdown via arxiv2md.
+    """Fetch a paper as clean Markdown via the arxiv2md REST API.
 
-    Falls back to returning the abstract from the metadata snapshot if the
-    arxiv2md package is not installed or conversion fails.
+    No package install required — single GET to arxiv2md.org.
+    Rate limit: 30 req/min per IP.
     """
     paper_id = arxiv_id.strip()
-
-    # --- attempt 1: arxiv2md.arxiv_to_md ---------------------------------
+    params   = urllib.parse.urlencode({
+        "url":               paper_id,
+        "remove_refs":       "true",
+        "remove_toc":        "true",
+        "remove_citations":  "true",
+    })
+    url = f"{ARXIV2MD_API}?{params}"
     try:
-        from arxiv2md import arxiv_to_md  # type: ignore[import-untyped]
-        text = arxiv_to_md(paper_id)
-        if isinstance(text, str) and text.strip():
-            return {
-                "arxiv_id": paper_id,
-                "text": text[:MAX_FULL_TEXT],
-                "truncated": len(text) > MAX_FULL_TEXT,
-            }
-    except (ImportError, Exception):  # noqa: BLE001
-        pass
+        req = urllib.request.Request(url, headers={"User-Agent": "eureka-agent/1.0"})
+        with urllib.request.urlopen(req, timeout=60) as resp:
+            text = resp.read().decode()
+    except Exception as exc:  # noqa: BLE001
+        return {"error": f"arxiv2md fetch failed for '{paper_id}': {exc}"}
 
-    # --- attempt 2: arxiv2md.convert (alternate API shape) ---------------
-    try:
-        import arxiv2md  # type: ignore[import-untyped]
-        fn = getattr(arxiv2md, "convert", None) or getattr(arxiv2md, "fetch", None)
-        if callable(fn):
-            text = fn(paper_id)
-            if isinstance(text, str) and text.strip():
-                return {
-                    "arxiv_id": paper_id,
-                    "text": text[:MAX_FULL_TEXT],
-                    "truncated": len(text) > MAX_FULL_TEXT,
-                }
-    except (ImportError, Exception):  # noqa: BLE001
-        pass
+    if not text.strip():
+        return {"error": f"arxiv2md returned empty content for '{paper_id}' (paper may predate HTML conversion)"}
 
-    # --- fallback: return abstract from metadata snapshot -----------------
-    result = search_arxiv(paper_id, 1)
-    papers = result.get("papers", [])
-    if papers:
-        p = papers[0]
-        text = (
-            f"# {p['title']}\n\n"
-            f"**Authors**: {p['authors']}\n"
-            f"**Year**: {p['year']}  "
-            f"**arXiv**: {p['arxiv_id']}\n\n"
-            f"## Abstract\n\n{p['abstract']}"
-        )
-        return {
-            "arxiv_id": paper_id,
-            "text": text,
-            "truncated": False,
-            "note": "arxiv2md not installed — abstract only. Run: pip install arxiv2md",
-        }
-
-    return {"error": f"Could not fetch '{paper_id}': arxiv2md not installed and paper not found in metadata snapshot."}
+    return {
+        "arxiv_id":  paper_id,
+        "text":      text[:MAX_FULL_TEXT],
+        "truncated": len(text) > MAX_FULL_TEXT,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -163,7 +165,14 @@ def main() -> None:
     except (json.JSONDecodeError, EOFError):
         args = {}
 
-    mode = args.get("mode", "search")
+    # Infer mode from fields when not explicit — models often call the tool by
+    # a logical name (arxiv_search vs arxiv_fetch) and omit the mode field.
+    if "mode" in args:
+        mode = args["mode"]
+    elif "arxiv_id" in args and args.get("arxiv_id"):
+        mode = "fetch"
+    else:
+        mode = "search"
 
     if mode == "search":
         query = args.get("query", "").strip()

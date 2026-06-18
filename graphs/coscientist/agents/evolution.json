@@ -8,18 +8,29 @@
   "config": { "temperature": 0.8, "max_iterations": 10 },
   "tools": [
     {
-      "name": "arxiv_search",
-      "description": "Search arXiv literature or retrieve a paper's full text. Use mode='search' with a query to find relevant papers (returns title, abstract, authors, year, arxiv_id). Use mode='fetch' with an arxiv_id to retrieve the full paper in markdown.",
+      "name": "search_literature",
+      "description": "Search arXiv for papers matching a query. Returns title, abstract, authors, year, and arxiv_id for each result.",
       "command": ["python3", "graphs/coscientist/tools/arxiv_search.py"],
       "args_schema": {
         "type": "object",
-        "required": ["mode"],
+        "required": ["query"],
         "properties": {
-          "mode":        { "type": "string", "enum": ["search", "fetch"], "description": "Operation: 'search' finds papers, 'fetch' retrieves full text" },
-          "query":       { "type": "string", "description": "Keyword or phrase to search for (mode=search)" },
-          "arxiv_id":    { "type": "string", "description": "ArXiv paper ID e.g. '2404.01234' (mode=fetch)" },
-          "max_results": { "type": "integer", "description": "Number of results per page (mode=search, default 5, max 20)" },
-          "page": { "type": "integer", "description": "Zero-based page number for pagination (mode=search, default 0)" }
+          "query":       { "type": "string", "description": "Keywords or phrase to search for" },
+          "max_results": { "type": "integer", "description": "Number of results to return (default 5, max 20)" },
+          "page":        { "type": "integer", "description": "Zero-based page number for pagination (default 0)" }
+        }
+      },
+      "timeout_secs": 30
+    },
+    {
+      "name": "read_paper",
+      "description": "Retrieve the full text of an arXiv paper as clean Markdown. Use the arxiv_id returned by arxiv_search.",
+      "command": ["python3", "graphs/coscientist/tools/arxiv_search.py"],
+      "args_schema": {
+        "type": "object",
+        "required": ["arxiv_id"],
+        "properties": {
+          "arxiv_id": { "type": "string", "description": "ArXiv paper ID e.g. '2404.01234' or '2404.01234v2'" }
         }
       },
       "timeout_secs": 60

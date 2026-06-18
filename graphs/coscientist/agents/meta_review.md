@@ -16,4 +16,4 @@ their review scores, produce:
    - Open questions and limitations
    - Suggested next steps for experimental validation
 
-The final overview is the terminal output of the session.
+The final overview is the terminal output of the session. Call `submit` once your synthesis is complete.

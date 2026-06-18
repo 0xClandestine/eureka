@@ -19,3 +19,5 @@ you include are real papers. Search before adding a citation, not after.
 
 The goal is to produce a diverse set of improved hypotheses that explore
 the frontier of the hypothesis space.
+
+Once you have generated your evolved hypotheses, call `submit` with the full set.
