@@ -1,0 +1,25 @@
+[package]
+name = "eureka-graph"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Graph framework: Node, Artifact, GraphSpec, Scheduler, and validator for Eureka"
+categories = ["science", "artificial-intelligence"]
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+schemars = "0.8"
+thiserror = "2"
+tokio = { version = "1", features = ["sync", "rt", "macros", "time"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+async-trait = "0.1"
+tracing = "0.1"
+uuid = { version = "1", features = ["v7"] }
+serde_json = "1"
+toml = "0.8"
+itertools = "0.13"
+
+
+[lints]
+workspace = true

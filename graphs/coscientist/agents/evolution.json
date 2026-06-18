@@ -1,0 +1,90 @@
+{
+  "name": "evolution",
+  "description": "Mutates and crossbreeds top-ranked hypotheses into improved offspring",
+  "inputs": [{ "kind": "Hypotheses", "port": "in" }],
+  "outputs": [
+    { "kind": "Hypotheses", "port": "out" }
+  ],
+  "config": { "temperature": 0.8, "max_iterations": 10 },
+  "tools": [
+    {
+      "name": "arxiv_search",
+      "description": "Search arXiv literature or retrieve a paper's full text. Use mode='search' with a query to find relevant papers (returns title, abstract, authors, year, arxiv_id). Use mode='fetch' with an arxiv_id to retrieve the full paper in markdown.",
+      "command": ["python3", "graphs/coscientist/tools/arxiv_search.py"],
+      "args_schema": {
+        "type": "object",
+        "required": ["mode"],
+        "properties": {
+          "mode":        { "type": "string", "enum": ["search", "fetch"], "description": "Operation: 'search' finds papers, 'fetch' retrieves full text" },
+          "query":       { "type": "string", "description": "Keyword or phrase to search for (mode=search)" },
+          "arxiv_id":    { "type": "string", "description": "ArXiv paper ID e.g. '2404.01234' (mode=fetch)" },
+          "max_results": { "type": "integer", "description": "Number of results per page (mode=search, default 5, max 20)" },
+          "page": { "type": "integer", "description": "Zero-based page number for pagination (mode=search, default 0)" }
+        }
+      },
+      "timeout_secs": 60
+    }
+  ],
+  "output_schema": {
+    "type": "object",
+    "required": ["hypotheses"],
+    "properties": {
+      "hypotheses": {
+        "type": "array",
+        "description": "Evolved offspring hypotheses",
+        "items": {
+          "type": "object",
+          "required": ["parent_indices", "operation", "change_rationale", "rationale", "assumptions", "testable_predictions", "statement"],
+          "properties": {
+            "parent_indices": {
+              "type": "array",
+              "items": { "type": "integer" },
+              "description": "Zero-based indices of parent hypotheses from the input"
+            },
+            "operation": {
+              "type": "string",
+              "enum": ["mutation", "crossover"],
+              "description": "Whether this offspring was produced by mutation or crossover"
+            },
+            "change_rationale": {
+              "type": "string",
+              "description": "What was changed from the parent(s) and why"
+            },
+            "rationale": {
+              "type": "string",
+              "description": "Full mechanistic reasoning for the evolved hypothesis"
+            },
+            "assumptions": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "testable_predictions": {
+              "type": "array",
+              "items": { "type": "string" }
+            },
+            "statement": {
+              "type": "string",
+              "description": "Concise statement of the evolved hypothesis"
+            },
+            "proposed_experiment": { "type": "string" },
+            "citations": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["title", "authors", "venue", "year", "relevance"],
+                "properties": {
+                  "title":     { "type": "string" },
+                  "authors":   { "type": "string" },
+                  "venue":     { "type": "string" },
+                  "year":      { "type": "integer" },
+                  "doi":       { "type": "string" },
+                  "relevance": { "type": "string" }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

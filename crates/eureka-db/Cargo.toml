@@ -1,0 +1,20 @@
+[package]
+name = "eureka-db"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Session database for Eureka: SQLite-backed persistence for scientific work"
+categories = ["science", "artificial-intelligence"]
+
+[dependencies]
+rusqlite = { version = "0.32", features = ["bundled"] }
+serde_json = "1"
+thiserror = "2"
+dirs = "5"
+
+[dev-dependencies]
+tempfile = "3"
+
+[lints]
+workspace = true

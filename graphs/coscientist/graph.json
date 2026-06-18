@@ -1,0 +1,52 @@
+{
+  "name": "AI Co-Scientist",
+  "description": "Reproduction of Google Research's AI co-scientist topology (Feb 2025)",
+  "nodes": [
+    { "id": "generation",  "kind": "generation",        "description": "Drafts novel hypotheses from the research goal" },
+    { "id": "reflection",  "kind": "reflection",        "description": "Multi-axis peer review of hypotheses" },
+    {
+      "id": "ranking", "kind": "elo-ranker",
+      "description": "Pairwise Elo tournament over reviewed hypotheses",
+      "config": {
+        "items_field": "reviews",
+        "score_field": "score",
+        "item_field": "hypothesis",
+        "id_field": "statement",
+        "output_field": "hypotheses",
+        "top_k": 5
+      }
+    },
+    { "id": "evolution",   "kind": "evolution",         "description": "Mutates and crossbreeds top hypotheses" },
+    {
+      "id": "proximity", "kind": "jaccard-dedup",
+      "description": "Deduplicates and preserves a diverse hypothesis frontier",
+      "config": {
+        "items_field": "hypotheses",
+        "text_field": "statement",
+        "threshold": 0.65,
+        "output_field": "hypotheses"
+      }
+    },
+    { "id": "meta_review", "kind": "meta_review",       "description": "Synthesizes insights and produces the final overview" },
+    {
+      "id": "governor", "kind": "round-governor",
+      "description": "Budget and convergence control",
+      "config": { "max_rounds": 5 }
+    }
+  ],
+  "edges": [
+    { "from_node": "generation",  "from_port": "out",      "to_node": "reflection",  "to_port": "in",      "description": "Raw hypotheses → peer review" },
+    { "from_node": "reflection",  "from_port": "out",      "to_node": "ranking",     "to_port": "in",      "description": "Reviewed hypotheses → Elo tournament" },
+    { "from_node": "ranking",     "from_port": "top",      "to_node": "evolution",   "to_port": "in",      "description": "Top-ranked hypotheses → evolution" },
+    { "from_node": "evolution",   "from_port": "out",      "to_node": "proximity",   "to_port": "in",      "description": "Evolved hypotheses → deduplication" },
+    { "from_node": "proximity",   "from_port": "unique",   "to_node": "governor",    "to_port": "in",      "description": "Unique hypotheses → budget check" },
+    { "from_node": "governor",    "from_port": "continue", "to_node": "reflection",  "to_port": "in",      "description": "Evolved hypotheses → re-review for next round", "feedback": true },
+    { "from_node": "ranking",     "from_port": "state",    "to_node": "meta_review", "to_port": "in",      "description": "Tournament state → meta-review (fires every round)" },
+    { "from_node": "meta_review", "from_port": "insights", "to_node": "generation",  "to_port": "context", "description": "Meta-insights → enrich next generation", "feedback": true }
+  ],
+  "metadata": {
+    "version": "0.5.0",
+    "author": "Eureka Team",
+    "reference": "Google Research, AI co-scientist, Feb 2025"
+  }
+}

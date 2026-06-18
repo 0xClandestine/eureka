@@ -1,0 +1,69 @@
+{
+  "name": "meta_review",
+  "description": "Synthesizes recurring patterns and produces the final research overview",
+  "inputs": [{ "kind": "Ranking", "port": "in" }],
+  "outputs": [
+    { "kind": "Insights", "port": "insights" },
+    { "kind": "Overview", "port": "overview" }
+  ],
+  "config": { "temperature": 0.4 },
+  "output_schema": {
+    "type": "object",
+    "required": ["insights", "overview"],
+    "properties": {
+      "insights": {
+        "type": "object",
+        "description": "Meta-insights fed back to the generation agent for the next round",
+        "required": ["recurring_patterns", "common_weaknesses", "promising_directions", "context_improvements"],
+        "properties": {
+          "recurring_patterns": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Themes and mechanisms appearing across top hypotheses"
+          },
+          "common_weaknesses": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Systematic issues identified in reviews"
+          },
+          "promising_directions": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Lines of inquiry most worth pursuing next"
+          },
+          "context_improvements": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Suggested prompt or context changes for the next generation round"
+          }
+        }
+      },
+      "overview": {
+        "type": "object",
+        "description": "Terminal research overview — the final output of the session",
+        "required": ["summary", "key_insights", "open_questions", "suggested_next_steps"],
+        "properties": {
+          "summary": {
+            "type": "string",
+            "description": "Synthesized narrative summary of findings"
+          },
+          "key_insights": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "The most important conclusions from this session"
+          },
+          "open_questions": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Unresolved questions or limitations"
+          },
+          "suggested_next_steps": {
+            "type": "array",
+            "items": { "type": "string" },
+            "description": "Concrete experimental or theoretical next steps"
+          }
+        }
+      }
+    }
+  }
+}

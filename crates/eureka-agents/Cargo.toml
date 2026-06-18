@@ -1,0 +1,26 @@
+[package]
+name = "eureka-agents"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Data-driven LLM agents for Eureka: load preamble + JSON Schema at runtime, run via a single generic node"
+categories = ["science", "artificial-intelligence"]
+
+[dependencies]
+eureka-graph = { path = "../eureka-graph" }
+rig-core = { package = "rig-core", version = "0.38", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tracing = "0.1"
+async-trait = "0.1"
+tokio = { version = "1", features = ["process", "time", "io-util"] }
+tokio-util = { version = "0.7", features = ["rt"] }
+
+[dev-dependencies]
+tokio = { version = "1", features = ["rt", "macros"] }
+tempfile = "3"
+
+[lints]
+workspace = true

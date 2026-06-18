@@ -1,0 +1,45 @@
+# Eureka Configuration
+# Layered: defaults → file → env → CLI
+#
+# Set OPENROUTER_API_KEY to run. Switch kind/model to use any other provider.
+
+# Which graph specification to run — the topology IS config
+graph = "graphs/coscientist/graph.json"
+
+[provider]
+kind = "openrouter"
+generation_model = "deepseek/deepseek-v4-flash"
+
+# Per-agent model overrides (optional). Useful for assigning cheaper/faster
+# models to high-volume agents (evolution) and more rigorous ones to quality
+# gates (reflection, meta_review). Falls back to generation_model when absent.
+#
+# [provider.agent_models]
+# reflection  = "anthropic/claude-opus-4-5"
+# meta_review = "anthropic/claude-opus-4-5"
+# evolution   = "deepseek/deepseek-v4-flash"
+
+# Other providers — swap kind + model + set the matching env var:
+#
+# kind = "anthropic"    ANTHROPIC_API_KEY   model = "claude-sonnet-4-20250514"
+# kind = "openai"       OPENAI_API_KEY      model = "gpt-4o"
+# kind = "gemini"       GEMINI_API_KEY      model = "gemini-2.0-flash"
+# kind = "groq"         GROQ_API_KEY        model = "llama-3.3-70b-versatile"
+# kind = "mistral"      MISTRAL_API_KEY     model = "mistral-large-latest"
+# kind = "deepseek"     DEEPSEEK_API_KEY    model = "deepseek-chat"
+# kind = "together"     TOGETHER_API_KEY    model = "meta-llama/Llama-3-70b-chat-hf"
+# kind = "xai"          XAI_API_KEY         model = "grok-3-mini"
+# kind = "perplexity"   PERPLEXITY_API_KEY  model = "sonar-pro"
+# kind = "cohere"       COHERE_API_KEY      model = "command-r-plus"
+# kind = "ollama"       (no key needed)     model = "llama3.1:8b"
+
+[scheduler]
+max_in_flight = 8
+
+[budget]
+# Safety backstop values. Round count is primarily controlled by the
+# round-governor plugin (graph.json → nodes.governor.config.max_rounds).
+max_cost_usd = 25.0
+max_tokens = 5_000_000
+max_wallclock = "45m"
+max_rounds = 100

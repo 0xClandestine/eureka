@@ -1,0 +1,38 @@
+[workspace]
+resolver = "3"
+members = [
+    "crates/eureka-graph",
+    "crates/eureka-agents",
+    "crates/eureka-engine",
+    "crates/eureka-config",
+    "crates/eureka-db",
+    "crates/eureka-plugins",
+    "crates/eureka-cli",
+    "xtask",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+rust-version = "1.96"
+
+[workspace.lints.clippy]
+# Group lints at lower priority so individual overrides take precedence.
+pedantic = { level = "warn", priority = -1 }
+nursery = { level = "warn", priority = -1 }
+missing_docs_in_private_items = "warn"
+must_use_candidate = "warn"
+return_self_not_must_use = "warn"
+use_self = "warn"
+cargo_common_metadata = "warn"
+multiple_crate_versions = "warn"
+unwrap_used = "deny"
+expect_used = "deny"
+
+[workspace.lints.rust]
+unsafe_code = "forbid"
+missing_docs = "warn"
+trivial_casts = "warn"
+trivial_numeric_casts = "warn"
+unused_qualifications = "warn"

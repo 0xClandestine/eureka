@@ -1,0 +1,90 @@
+{
+  "name": "reflection",
+  "description": "Multi-axis peer review of hypotheses",
+  "inputs": [{ "kind": "Hypotheses", "port": "in" }],
+  "outputs": [
+    { "kind": "Reviews", "port": "out" }
+  ],
+  "config": { "temperature": 0.3, "max_iterations": 10 },
+  "tools": [
+    {
+      "name": "arxiv_search",
+      "description": "Search arXiv literature or retrieve a paper's full text. Use mode='search' with a query to find relevant papers (returns title, abstract, authors, year, arxiv_id). Use mode='fetch' with an arxiv_id to retrieve the full paper in markdown.",
+      "command": ["python3", "graphs/coscientist/tools/arxiv_search.py"],
+      "args_schema": {
+        "type": "object",
+        "required": ["mode"],
+        "properties": {
+          "mode":        { "type": "string", "enum": ["search", "fetch"], "description": "Operation: 'search' finds papers, 'fetch' retrieves full text" },
+          "query":       { "type": "string", "description": "Keyword or phrase to search for (mode=search)" },
+          "arxiv_id":    { "type": "string", "description": "ArXiv paper ID e.g. '2404.01234' (mode=fetch)" },
+          "max_results": { "type": "integer", "description": "Number of results per page (mode=search, default 5, max 20)" },
+          "page": { "type": "integer", "description": "Zero-based page number for pagination (mode=search, default 0)" }
+        }
+      },
+      "timeout_secs": 60
+    }
+  ],
+  "output_schema": {
+    "type": "object",
+    "required": ["reviews"],
+    "properties": {
+      "reviews": {
+        "type": "array",
+        "description": "One review entry per hypothesis per dimension",
+        "items": {
+          "type": "object",
+          "required": ["hypothesis_index", "hypothesis", "kind", "reasoning", "strengths", "weaknesses", "suggestions", "score"],
+          "properties": {
+            "hypothesis_index": {
+              "type": "integer",
+              "description": "Zero-based index of the hypothesis being reviewed"
+            },
+            "hypothesis": {
+              "type": "object",
+              "description": "The full hypothesis being reviewed (pass-through for downstream ranking)",
+              "required": ["statement", "rationale", "assumptions", "testable_predictions"],
+              "properties": {
+                "statement":            { "type": "string" },
+                "rationale":            { "type": "string" },
+                "assumptions":          { "type": "array", "items": { "type": "string" } },
+                "testable_predictions": { "type": "array", "items": { "type": "string" } },
+                "proposed_experiment":  { "type": "string" }
+              }
+            },
+            "kind": {
+              "type": "string",
+              "enum": ["Novelty", "Correctness", "Feasibility", "Safety", "Overall"],
+              "description": "The review dimension"
+            },
+            "reasoning": {
+              "type": "string",
+              "description": "Detailed critique reasoning for this dimension"
+            },
+            "strengths": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Specific strengths identified"
+            },
+            "weaknesses": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Specific weaknesses identified"
+            },
+            "suggestions": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Concrete suggestions for improvement"
+            },
+            "score": {
+              "type": "number",
+              "minimum": 0,
+              "maximum": 10,
+              "description": "Numeric score for this dimension (0-10)"
+            }
+          }
+        }
+      }
+    }
+  }
+}

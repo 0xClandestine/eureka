@@ -1,0 +1,26 @@
+{
+  "name": "jaccard-dedup",
+  "version": "1.0.0",
+  "description": "Deduplicates items using word-level Jaccard similarity. Items above the threshold are dropped.",
+  "runtime": "process",
+  "command": ["python3", "dedup.py"],
+  "roles": ["node"],
+  "node": {
+    "inputs": [
+      {"port": "in", "kind": "Hypotheses"}
+    ],
+    "outputs": [
+      {"port": "unique", "kind": "Hypotheses"}
+    ],
+    "timeout_secs": 10,
+    "config_schema": {
+      "type": "object",
+      "properties": {
+        "items_field":  {"type": "string", "default": "hypotheses"},
+        "text_field":   {"type": "string", "default": "statement"},
+        "threshold":    {"type": "number", "default": 0.65},
+        "output_field": {"type": "string", "default": "hypotheses"}
+      }
+    }
+  }
+}

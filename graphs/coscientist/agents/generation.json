@@ -1,0 +1,84 @@
+{
+  "name": "generation",
+  "description": "Drafts novel hypotheses from a research goal",
+  "inputs": [
+    { "kind": "Goal",    "port": "in" },
+    { "kind": "Insights","port": "context" }
+  ],
+  "outputs": [
+    { "kind": "Hypotheses", "port": "out" }
+  ],
+  "config": { "temperature": 0.9, "max_iterations": 12 },
+  "tools": [
+    {
+      "name": "arxiv_search",
+      "description": "Search arXiv literature or retrieve a paper's full text. Use mode='search' with a query to find relevant papers (returns title, abstract, authors, year, arxiv_id). Use mode='fetch' with an arxiv_id to retrieve the full paper in markdown.",
+      "command": ["python3", "graphs/coscientist/tools/arxiv_search.py"],
+      "args_schema": {
+        "type": "object",
+        "required": ["mode"],
+        "properties": {
+          "mode":        { "type": "string", "enum": ["search", "fetch"], "description": "Operation: 'search' finds papers, 'fetch' retrieves full text" },
+          "query":       { "type": "string", "description": "Keyword or phrase to search for (mode=search)" },
+          "arxiv_id":    { "type": "string", "description": "ArXiv paper ID e.g. '2404.01234' (mode=fetch)" },
+          "max_results": { "type": "integer", "description": "Number of results per page (mode=search, default 5, max 20)" },
+          "page": { "type": "integer", "description": "Zero-based page number for pagination (mode=search, default 0)" }
+        }
+      },
+      "timeout_secs": 60
+    }
+  ],
+  "output_schema": {
+    "type": "object",
+    "required": ["hypotheses"],
+    "properties": {
+      "hypotheses": {
+        "type": "array",
+        "description": "Candidate hypotheses generated from the research goal",
+        "items": {
+          "type": "object",
+          "required": ["rationale", "assumptions", "testable_predictions", "statement"],
+          "properties": {
+            "rationale": {
+              "type": "string",
+              "description": "Mechanistic or theoretical reasoning behind the hypothesis"
+            },
+            "assumptions": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Key assumptions underlying the hypothesis"
+            },
+            "testable_predictions": {
+              "type": "array",
+              "items": { "type": "string" },
+              "description": "Concrete, falsifiable predictions that can be experimentally verified"
+            },
+            "statement": {
+              "type": "string",
+              "description": "Concise one- or two-sentence statement of the hypothesis"
+            },
+            "proposed_experiment": {
+              "type": "string",
+              "description": "A concrete experimental design to validate this hypothesis"
+            },
+            "citations": {
+              "type": "array",
+              "items": {
+                "type": "object",
+                "required": ["title", "authors", "venue", "year", "relevance"],
+                "properties": {
+                  "title":     { "type": "string" },
+                  "authors":   { "type": "string" },
+                  "venue":     { "type": "string" },
+                  "year":      { "type": "integer" },
+                  "doi":       { "type": "string" },
+                  "relevance": { "type": "string" }
+                }
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

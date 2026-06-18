@@ -1,0 +1,32 @@
+{
+  "name": "elo-ranker",
+  "version": "1.0.0",
+  "description": "Pairwise Elo ranking of hypothesis objects. Elo state persists across rounds via EUREKA_DB_PATH.",
+  "runtime": "process",
+  "command": ["python3", "ranker.py"],
+  "roles": ["node"],
+  "node": {
+    "inputs": [
+      {"port": "in",    "kind": "Reviews"},
+      {"port": "cycle", "kind": "Control"}
+    ],
+    "outputs": [
+      {"port": "top",   "kind": "Hypotheses"},
+      {"port": "state", "kind": "Ranking"}
+    ],
+    "timeout_secs": 15,
+    "config_schema": {
+      "type": "object",
+      "properties": {
+        "items_field":  {"type": "string", "default": "reviews"},
+        "score_field":  {"type": "string", "default": "score"},
+        "item_field":   {"type": "string", "default": "hypothesis"},
+        "id_field":     {"type": "string", "default": "statement"},
+        "output_field": {"type": "string", "default": "hypotheses"},
+        "top_k":        {"type": "integer", "default": 5},
+        "k_factor":     {"type": "number",  "default": 32.0}
+      },
+      "required": ["items_field", "score_field", "item_field", "id_field", "output_field"]
+    }
+  }
+}
