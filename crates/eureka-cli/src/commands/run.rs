@@ -136,7 +136,10 @@ pub async fn execute(args: RunArgs) -> Result<()> {
     let _server_handle;
     let _tracker_handle;
     if args.port > 0 {
-        let live_state = Arc::new(tokio::sync::Mutex::new(crate::server::LiveState::default()));
+        let live_state = Arc::new(tokio::sync::Mutex::new(crate::server::LiveState {
+            goal: args.goal.clone(),
+            ..Default::default()
+        }));
         _tracker_handle =
             crate::server::track_live_state(event_tx.subscribe(), Arc::clone(&live_state));
         _server_handle =

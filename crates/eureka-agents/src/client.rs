@@ -7,9 +7,11 @@
 use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
+use eureka_graph::scheduler::SchedulerEvent;
 use rig_core::agent::AgentBuilder;
 use rig_core::completion::{CompletionModel, Prompt, ToolDefinition};
 use rig_core::tool::Tool;
+use tokio::sync::mpsc;
 
 use crate::def::ToolDef;
 use crate::error::AgentError;
@@ -39,6 +41,10 @@ pub trait LlmClient: Send + Sync {
         initial_message: &str,
         max_iterations: u32,
         temperature: f64,
+        node_id: &str,
+        node_kind: &str,
+        round: u32,
+        event_tx: Option<mpsc::Sender<SchedulerEvent>>,
     ) -> Result<serde_json::Value, AgentError>;
 }
 
@@ -64,6 +70,10 @@ impl<M: CompletionModel + Clone + Send + Sync + 'static> LlmClient for RigClient
         initial_message: &str,
         max_iterations: u32,
         temperature: f64,
+        node_id: &str,
+        node_kind: &str,
+        round: u32,
+        event_tx: Option<mpsc::Sender<SchedulerEvent>>,
     ) -> Result<serde_json::Value, AgentError> {
         let result: Arc<Mutex<Option<serde_json::Value>>> = Arc::new(Mutex::new(None));
 
@@ -73,12 +83,18 @@ impl<M: CompletionModel + Clone + Send + Sync + 'static> LlmClient for RigClient
         };
 
         let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
-        let full_preamble = build_preamble(preamble, &tool_names);
+        let full_preamble = build_preamble(preamble, &tool_names, max_iterations);
 
         let command_tools: Vec<Box<dyn rig_core::tool::ToolDyn>> = tools
             .iter()
             .map(|t| -> Box<dyn rig_core::tool::ToolDyn> {
-                Box::new(CommandTool::new(Arc::new(t.clone())))
+                Box::new(CommandTool::new(
+                    Arc::new(t.clone()),
+                    node_id.to_string(),
+                    node_kind.to_string(),
+                    round,
+                    event_tx.clone(),
+                ))
             })
             .collect();
 
@@ -109,21 +125,25 @@ impl<M: CompletionModel + Clone + Send + Sync + 'static> LlmClient for RigClient
 }
 
 /// Build the full system preamble by appending submit/tool instructions.
-fn build_preamble(preamble: &str, tool_names: &[&str]) -> String {
+fn build_preamble(preamble: &str, tool_names: &[&str], max_iterations: u32) -> String {
     if tool_names.is_empty() {
         format!(
             "{preamble}\n\n\
-             When you have completed your analysis, call the `submit` tool with \
-             your structured output. Do not write JSON directly — always use submit."
+             You have at most {max_iterations} turns. When you have completed your \
+             analysis, call the `submit` tool with your structured output. \
+             Do not write JSON directly — always use submit. \
+             IMPORTANT: You must call `submit` before your turns run out."
         )
     } else {
         let names = tool_names.join(", ");
         format!(
             "{preamble}\n\n\
-             You have access to tools: {names}. Use them to gather information \
-             before forming your answer. When you are ready to deliver your final \
-             result, call the `submit` tool. Do not write JSON directly — always \
-             use submit."
+             You have at most {max_iterations} turns (each tool call or response \
+             counts as one turn). You have access to tools: {names}. Use them to \
+             gather information, but budget your turns — leave at least one turn \
+             to call `submit`. When you are ready to deliver your final result, \
+             call the `submit` tool. Do not write JSON directly — always use submit. \
+             IMPORTANT: You must call `submit` before your turns run out."
         )
     }
 }

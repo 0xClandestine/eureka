@@ -41,7 +41,7 @@ impl Node for LlmAgentNode {
         self.def.to_port_spec()
     }
 
-    async fn process(&self, _ctx: &NodeCtx, msg: PortMsg) -> Result<Vec<Emit>, NodeError> {
+    async fn process(&self, ctx: &NodeCtx, msg: PortMsg) -> Result<Vec<Emit>, NodeError> {
         // For multi-input agents, prefix the message with the port name so the
         // LLM knows which kind of artifact it is receiving.
         let initial_message = if self.def.inputs.len() > 1 {
@@ -63,6 +63,10 @@ impl Node for LlmAgentNode {
                 &initial_message,
                 self.def.config.max_iterations,
                 self.def.config.temperature,
+                &ctx.node_id,
+                &ctx.node_kind,
+                ctx.round,
+                ctx.event_tx.clone(),
             )
             .await
             .map_err(|e| NodeError::Agent(e.to_string()))?;
@@ -119,6 +123,10 @@ mod tests {
             initial_message: &str,
             _max_iterations: u32,
             _temperature: f64,
+            _node_id: &str,
+            _node_kind: &str,
+            _round: u32,
+            _event_tx: Option<tokio::sync::mpsc::Sender<eureka_graph::scheduler::SchedulerEvent>>,
         ) -> Result<serde_json::Value, AgentError> {
             Ok(serde_json::json!({ "echo": initial_message }))
         }
@@ -178,6 +186,10 @@ mod tests {
                 _initial_message: &str,
                 _max_iterations: u32,
                 _temperature: f64,
+                _node_id: &str,
+                _node_kind: &str,
+                _round: u32,
+                _event_tx: Option<tokio::sync::mpsc::Sender<eureka_graph::scheduler::SchedulerEvent>>,
             ) -> Result<serde_json::Value, AgentError> {
                 Ok(serde_json::json!({
                     "insights": { "recurring_patterns": [] },
@@ -267,6 +279,10 @@ mod tests {
                 initial_message: &str,
                 _max_iterations: u32,
                 _temperature: f64,
+                _node_id: &str,
+                _node_kind: &str,
+                _round: u32,
+                _event_tx: Option<tokio::sync::mpsc::Sender<eureka_graph::scheduler::SchedulerEvent>>,
             ) -> Result<serde_json::Value, AgentError> {
                 *self.captured.lock().unwrap() = Some(initial_message.to_string());
                 Ok(serde_json::json!({ "hypotheses": [] }))

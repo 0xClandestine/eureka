@@ -8,7 +8,7 @@
 use std::collections::HashSet;
 use std::convert::Infallible;
 use std::sync::Arc;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use axum::{
     extract::State,
@@ -35,14 +35,18 @@ pub struct ServerState {
     event_tx: broadcast::Sender<SchedulerEvent>,
     /// Mutable live run state.
     live: Arc<Mutex<LiveState>>,
+    /// Wall-clock start time for computing elapsed seconds.
+    started_at: Instant,
 }
 
 /// Live run state snapshot served at `GET /api/state`.
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct LiveState {
+    /// Research goal string.
+    pub goal: String,
     /// Scheduler rounds completed so far.
     pub rounds: u32,
-    /// Wall-clock seconds elapsed.
+    /// Wall-clock seconds elapsed (computed dynamically by the handler).
     pub elapsed_secs: f64,
     /// Node IDs whose activations are currently in flight.
     pub active_nodes: HashSet<String>,
@@ -87,6 +91,7 @@ pub fn track_live_state(
                             s.rounds = *total_rounds;
                             s.finished = true;
                         }
+                        SchedulerEvent::ToolCalled { .. } => {}
                     }
                 }
                 Err(broadcast::error::RecvError::Lagged(n)) => {
@@ -112,6 +117,7 @@ pub fn start_server(
         spec: Arc::new(spec),
         event_tx,
         live,
+        started_at: Instant::now(),
     };
 
     let app = Router::new()
@@ -148,7 +154,11 @@ async fn graph_handler(State(s): State<ServerState>) -> Json<serde_json::Value> 
 
 /// `GET /api/state` — return a snapshot of the live run state.
 async fn state_handler(State(s): State<ServerState>) -> Json<LiveState> {
-    Json(s.live.lock().await.clone())
+    let mut snapshot = s.live.lock().await.clone();
+    if !snapshot.finished {
+        snapshot.elapsed_secs = s.started_at.elapsed().as_secs_f64();
+    }
+    Json(snapshot)
 }
 
 /// `GET /api/events` — SSE stream that replays every `SchedulerEvent`.

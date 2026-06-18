@@ -5,9 +5,11 @@ use std::sync::Arc;
 use async_trait::async_trait;
 
 use serde::{Deserialize, Serialize};
+use tokio::sync::mpsc;
 
 use crate::artifact::Artifact;
 use crate::port::{PortId, PortSpec};
+use crate::scheduler::SchedulerEvent;
 
 /// A message arriving on an input port of a node.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -52,6 +54,8 @@ pub struct NodeCtx {
     pub round: u32,
     /// A cancellation token for graceful shutdown.
     pub cancel: tokio_util::sync::CancellationToken,
+    /// Optional sender for emitting observability events (e.g. tool calls).
+    pub event_tx: Option<mpsc::Sender<SchedulerEvent>>,
 }
 
 impl NodeCtx {
@@ -68,6 +72,7 @@ impl NodeCtx {
             node_kind: node_kind.into(),
             round,
             cancel,
+            event_tx: None,
         }
     }
 

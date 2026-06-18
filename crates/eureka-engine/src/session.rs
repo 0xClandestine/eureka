@@ -238,6 +238,14 @@ impl Session {
                     SchedulerEvent::CycleCompleted { round } => {
                         info!(round, "Cycle completed");
                     }
+                    SchedulerEvent::ToolCalled {
+                        node_id,
+                        tool,
+                        args_summary,
+                        ..
+                    } => {
+                        info!(%node_id, %tool, %args_summary, "Tool called");
+                    }
                     SchedulerEvent::RunHalted {
                         reason,
                         total_rounds,

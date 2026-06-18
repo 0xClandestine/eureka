@@ -7,10 +7,12 @@
 use std::sync::Arc;
 use std::time::Duration;
 
+use eureka_graph::scheduler::SchedulerEvent;
 use rig_core::completion::ToolDefinition;
 use rig_core::tool::{ToolDyn, ToolError};
 use rig_core::wasm_compat::WasmBoxedFuture;
 use tokio::io::AsyncWriteExt;
+use tokio::sync::mpsc;
 
 use crate::def::ToolDef;
 
@@ -22,17 +24,39 @@ const MAX_OUTPUT_BYTES: usize = 64 * 1024;
 /// Created from a [`ToolDef`] at agent startup. One instance per tool per agent.
 pub struct CommandTool {
     pub(crate) def: Arc<ToolDef>,
+    node_id: String,
+    node_kind: String,
+    round: u32,
+    event_tx: Option<mpsc::Sender<SchedulerEvent>>,
 }
 
 impl CommandTool {
     /// Create a new command tool from a definition.
-    pub fn new(def: Arc<ToolDef>) -> Self {
-        Self { def }
+    pub fn new(
+        def: Arc<ToolDef>,
+        node_id: String,
+        node_kind: String,
+        round: u32,
+        event_tx: Option<mpsc::Sender<SchedulerEvent>>,
+    ) -> Self {
+        Self { def, node_id, node_kind, round, event_tx }
     }
 
     async fn execute(&self, args_json: String) -> Result<String, ToolError> {
         let args_val: serde_json::Value = serde_json::from_str(&args_json)
             .unwrap_or_else(|_| serde_json::Value::Object(Default::default()));
+
+        // Notify the live feed that this tool is being called.
+        if let Some(tx) = &self.event_tx {
+            let summary = args_summary(&args_val);
+            let _ = tx.try_send(SchedulerEvent::ToolCalled {
+                node_id: self.node_id.clone(),
+                node_kind: self.node_kind.clone(),
+                round: self.round,
+                tool: self.def.name.clone(),
+                args_summary: summary,
+            });
+        }
 
         let argv = interpolate(&self.def.command, &args_val);
 
@@ -100,6 +124,19 @@ impl ToolDyn for CommandTool {
     fn call<'a>(&'a self, args: String) -> WasmBoxedFuture<'a, Result<String, ToolError>> {
         Box::pin(self.execute(args))
     }
+}
+
+/// Build a concise human-readable summary of a tool call's arguments.
+///
+/// Returns the first string value found in the args object, truncated to 80
+/// characters. This is intentionally generic — the engine has no knowledge of
+/// specific tool names; the first meaningful string argument (query, id, etc.)
+/// is always the most relevant thing to show in the live feed.
+fn args_summary(args: &serde_json::Value) -> String {
+    args.as_object()
+        .and_then(|obj| obj.values().find_map(|v| v.as_str()))
+        .map(|s| s.chars().take(80).collect())
+        .unwrap_or_default()
 }
 
 /// Substitute `{{key}}` tokens in each argv element using values from `args`.
@@ -199,7 +236,7 @@ mod tests {
             args_schema: serde_json::json!({ "type": "object" }),
             timeout_secs: 5,
         });
-        let tool = CommandTool::new(def);
+        let tool = CommandTool::new(def, "test".into(), "test".into(), 0, None);
         let result = tool.execute("{}".to_string()).await.unwrap();
         assert_eq!(result, "hello");
     }
@@ -213,7 +250,7 @@ mod tests {
             args_schema: serde_json::json!({ "type": "object" }),
             timeout_secs: 5,
         });
-        let tool = CommandTool::new(def);
+        let tool = CommandTool::new(def, "test".into(), "test".into(), 0, None);
         let result = tool.execute("{}".to_string()).await.unwrap();
         assert!(result.starts_with("Error (exit 1)"));
     }
@@ -228,7 +265,7 @@ mod tests {
             args_schema: serde_json::json!({ "type": "object" }),
             timeout_secs: 5,
         });
-        let tool = CommandTool::new(def);
+        let tool = CommandTool::new(def, "test".into(), "test".into(), 0, None);
         let result = tool
             .execute(r#"{"key":"value"}"#.to_string())
             .await

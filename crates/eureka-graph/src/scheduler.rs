@@ -68,6 +68,19 @@ pub enum SchedulerEvent {
         /// The round number of the completed cycle.
         round: u32,
     },
+    /// An agent node called a tool (e.g. a literature search or paper fetch).
+    ToolCalled {
+        /// The ID of the node that invoked the tool.
+        node_id: String,
+        /// The kind of the node.
+        node_kind: String,
+        /// The scheduler round.
+        round: u32,
+        /// The name of the tool that was called.
+        tool: String,
+        /// A human-readable one-line summary of the arguments.
+        args_summary: String,
+    },
     /// The run was halted.
     RunHalted {
         /// The reason the run was halted.
@@ -209,12 +222,13 @@ impl Scheduler {
                         continue;
                     };
 
-                    let ctx = NodeCtx::new(
+                    let mut ctx = NodeCtx::new(
                         source_id.clone(),
                         self.spec.node_kind(source_id).unwrap_or("unknown"),
                         self.stats.rounds_completed,
                         self.cancel.clone(),
                     );
+                    ctx.event_tx = Some(self.event_tx.clone());
 
                     let msg = PortMsg {
                         port: port_name,
@@ -234,6 +248,12 @@ impl Scheduler {
                 }
             }
         }
+
+        // Budget ticker — fires every 100ms independently of activation throughput.
+        // Using an interval (not sleep-in-select) so the timer is not reset on
+        // every loop iteration; it fires even when activations complete instantly.
+        let mut budget_ticker = tokio::time::interval(std::time::Duration::from_millis(100));
+        budget_ticker.tick().await; // consume the immediate first tick
 
         // Main activation loop — exits when pending == 0 (quiescent).
         loop {
@@ -358,8 +378,8 @@ impl Scheduler {
                     }
                 }
 
-                // Budget check on an interval (every 100ms)
-                () = tokio::time::sleep(std::time::Duration::from_millis(100)) => {
+                // Budget check fires every 100ms regardless of activation rate.
+                _ = budget_ticker.tick() => {
                     self.stats.elapsed_secs = start.elapsed().as_secs_f64();
                     if let Some(reason) = self.stats.is_budget_exhausted(&self.budget) {
                         info!(%reason, "Budget exhausted, halting run");
@@ -420,12 +440,13 @@ impl Scheduler {
                 .unwrap_or("unknown")
                 .to_string();
 
-            let ctx = NodeCtx::new(
+            let mut ctx = NodeCtx::new(
                 target_id.clone(),
                 target_kind,
                 self.stats.rounds_completed,
                 self.cancel.clone(),
             );
+            ctx.event_tx = Some(self.event_tx.clone());
 
             let msg = PortMsg {
                 port: target_port.clone(),
