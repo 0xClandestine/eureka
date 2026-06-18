@@ -13,7 +13,6 @@ eureka-agents = { path = "../eureka-agents" }
 eureka-engine = { path = "../eureka-engine" }
 eureka-config = { path = "../eureka-config" }
 eureka-db = { path = "../eureka-db" }
-eureka-plugins = { path = "../eureka-plugins" }
 uuid = { version = "1", features = ["v7"] }
 rig-core = { package = "rig-core", version = "0.38", features = ["derive"] }
 clap = { version = "4", features = ["derive"] }

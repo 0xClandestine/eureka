@@ -1,8 +1,8 @@
-//! # Eureka Plugins
+//! Subprocess-based plugin system for Eureka: control nodes and agent tools
+//! as external programs. Merged from the former `eureka-plugins` crate.
 //!
-//! Subprocess-based plugin system for Eureka. A plugin is an external program
-//! (Python, shell, or any executable) that can act as a **control node** in a
-//! graph and/or a **tool** available to agents.
+//! A plugin is an external program (Python, shell, or any executable) that can
+//! act as a **control node** in a graph and/or a **tool** available to agents.
 //!
 //! ## Discovery
 //!
@@ -34,12 +34,10 @@
 //! | `EUREKA_CONFIG` | JSON-encoded node `config` from `graph.json` |
 //! | `EUREKA_DB_PATH` | Path to the session SQLite database (if available) |
 
-pub mod error;
 pub mod manifest;
 pub mod node;
 pub mod registry;
 
-pub use error::PluginError;
 pub use manifest::PluginManifest;
 pub use node::ControlPluginNode;
 pub use registry::{PluginEntry, PluginRegistry};

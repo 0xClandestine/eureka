@@ -13,18 +13,14 @@
 //! - `EUREKA_DB_PATH` — path to the session SQLite database (if available)
 
 use std::path::PathBuf;
-use std::time::Duration;
 
 use async_trait::async_trait;
 use eureka_graph::artifact::Artifact;
 use eureka_graph::node::{Emit, Node, NodeCtx, NodeError, PortMsg};
 use eureka_graph::port::{PortDirection, PortSpec, PortSpecEntry};
-use tokio::io::AsyncWriteExt as _;
+use eureka_graph::process::run_subprocess;
 
-use crate::manifest::PluginManifest;
-
-/// Maximum bytes captured from the subprocess stdout.
-const MAX_OUTPUT_BYTES: usize = 64 * 1024;
+use super::manifest::PluginManifest;
 
 /// A graph node implemented by a subprocess plugin.
 pub struct ControlPluginNode {
@@ -80,53 +76,37 @@ impl ControlPluginNode {
 
         let config_str = serde_json::to_string(&self.config).unwrap_or_else(|_| "{}".to_string());
 
+        // Build env vars.
+        let mut envs: Vec<(&str, String)> = vec![
+            ("EUREKA_SESSION_ID", self.session_id.clone()),
+            ("EUREKA_NODE_ID", ctx.node_id.clone()),
+            ("EUREKA_ROUND", ctx.round.to_string()),
+            ("EUREKA_CONFIG", config_str),
+        ];
+        if let Some(db_path) = &self.db_path {
+            envs.push(("EUREKA_DB_PATH", db_path.display().to_string()));
+        }
+
         // Resolve the binary: if relative, resolve from plugin_dir.
         let argv = &self.manifest.command;
         let (binary, rest) = argv
             .split_first()
             .ok_or_else(|| NodeError::Internal("Plugin command array is empty".to_string()))?;
 
-        let mut cmd = tokio::process::Command::new(binary);
-        cmd.args(rest)
-            .current_dir(&self.plugin_dir)
-            .env("EUREKA_SESSION_ID", &self.session_id)
-            .env("EUREKA_NODE_ID", &ctx.node_id)
-            .env("EUREKA_ROUND", ctx.round.to_string())
-            .env("EUREKA_CONFIG", &config_str)
-            .stdin(std::process::Stdio::piped())
-            .stdout(std::process::Stdio::piped())
-            .stderr(std::process::Stdio::piped());
+        let output = run_subprocess(
+            binary,
+            rest,
+            Some(&self.plugin_dir),
+            &envs,
+            &envelope_str,
+            node_cfg.timeout_secs,
+        )
+        .await
+        .map_err(|e| NodeError::Internal(format!("Plugin '{}' failed: {e}", self.manifest.name)))?;
 
-        if let Some(db_path) = &self.db_path {
-            cmd.env("EUREKA_DB_PATH", db_path);
-        }
-
-        let mut child = cmd.spawn().map_err(|e| {
-            NodeError::Internal(format!("Failed to spawn plugin '{}': {e}", binary))
-        })?;
-
-        // Write call envelope to stdin then close the pipe.
-        if let Some(mut stdin) = child.stdin.take() {
-            let _ = stdin.write_all(envelope_str.as_bytes()).await;
-            // stdin drops here — EOF sent to child
-        }
-
-        let timeout = Duration::from_secs(u64::from(node_cfg.timeout_secs));
-        let output = match tokio::time::timeout(timeout, child.wait_with_output()).await {
-            Ok(Ok(out)) => out,
-            Ok(Err(e)) => return Err(NodeError::Internal(e.to_string())),
-            Err(_elapsed) => {
-                return Err(NodeError::Timeout(format!(
-                    "Plugin '{}' timed out after {}s",
-                    self.manifest.name, node_cfg.timeout_secs
-                )));
-            }
-        };
-
-        if !output.status.success() {
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            let snippet: String = stderr.chars().take(500).collect();
-            let code = output.status.code().unwrap_or(-1);
+        if !output.success {
+            let snippet: String = output.stderr.chars().take(500).collect();
+            let code = output.exit_code.unwrap_or(-1);
             return Err(NodeError::Internal(format!(
                 "Plugin '{}' exited with code {code}: {snippet}",
                 self.manifest.name
@@ -134,15 +114,8 @@ impl ControlPluginNode {
         }
 
         // Parse stdout as newline-delimited JSON emit envelopes.
-        let raw = String::from_utf8_lossy(&output.stdout);
-        let capped = if raw.len() > MAX_OUTPUT_BYTES {
-            &raw[..MAX_OUTPUT_BYTES]
-        } else {
-            &raw
-        };
-
         let mut emits = Vec::new();
-        for line in capped.lines() {
+        for line in output.stdout.lines() {
             let line = line.trim();
             if line.is_empty() {
                 continue;
@@ -221,8 +194,8 @@ impl Node for ControlPluginNode {
 
 #[cfg(test)]
 mod tests {
+    use super::super::manifest::{NodeRoleConfig, PortDef};
     use super::*;
-    use crate::manifest::{NodeRoleConfig, PortDef};
     use tokio_util::sync::CancellationToken;
 
     fn echo_manifest() -> PluginManifest {

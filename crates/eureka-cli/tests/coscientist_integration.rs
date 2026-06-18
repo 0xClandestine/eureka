@@ -329,8 +329,7 @@ fn build_scripted_registry(graph_dir: &Path) -> NodeRegistry {
 
 /// Resolves the coscientist graph directory relative to this crate's manifest.
 fn graph_dir() -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../graphs/coscientist")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../graphs/coscientist")
 }
 
 #[tokio::test]
@@ -347,8 +346,7 @@ async fn test_coscientist_one_round_scripted() {
         ..Default::default()
     };
 
-    let mut session =
-        Session::new(config, registry).expect("Failed to create session");
+    let mut session = Session::new(config, registry).expect("Failed to create session");
 
     let goal = json!({
         "goal": "Integration test goal",
@@ -356,10 +354,7 @@ async fn test_coscientist_one_round_scripted() {
         "domain": "machine-learning"
     });
 
-    let stats = session
-        .run(goal)
-        .await
-        .expect("Session run failed");
+    let stats = session.run(goal).await.expect("Session run failed");
 
     // The budget fires after 1 round completes, so rounds_completed should be >= 1.
     assert!(
@@ -376,8 +371,8 @@ async fn test_coscientist_one_round_scripted() {
 #[tokio::test]
 #[ignore]
 async fn smoke_coscientist_real_plugins_scripted_llm() {
+    use eureka_engine::plugin::{ControlPluginNode, PluginRegistry};
     use eureka_graph::port::PortSpecEntry;
-    use eureka_plugins::{ControlPluginNode, PluginRegistry};
 
     let dir = graph_dir();
     let agents_dir = dir.join("agents");

@@ -9,10 +9,10 @@ use std::path::Path;
 
 use anyhow::{Context, Result};
 use eureka_agents::AgentDef;
+use eureka_engine::plugin::PluginRegistry;
 use eureka_graph::port::{PortDirection, PortSpec, PortSpecEntry};
 use eureka_graph::spec::GraphSpec;
 use eureka_graph::validate::{validate_graph, PortRegistry};
-use eureka_plugins::PluginRegistry;
 
 /// Execute the `validate` command.
 ///

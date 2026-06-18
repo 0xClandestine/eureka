@@ -7,7 +7,9 @@
 //! provides mechanism.
 
 pub mod error;
+pub mod plugin;
 pub mod registry;
+pub mod registry_builder;
 pub mod run;
 pub mod session;
 

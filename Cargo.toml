@@ -6,7 +6,6 @@ members = [
     "crates/eureka-engine",
     "crates/eureka-config",
     "crates/eureka-db",
-    "crates/eureka-plugins",
     "crates/eureka-cli",
     "xtask",
 ]
