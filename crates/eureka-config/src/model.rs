@@ -107,55 +107,12 @@ impl Default for SchedulerConfig {
     }
 }
 
-/// Budget configuration for a run.
+/// Budget for a run — reuses [`eureka_graph::control::Budget`] directly.
 ///
-/// This acts as a hard safety backstop. The graph's governor plugin is the
-/// primary round controller — set `max_rounds` in the governor node's `config`
-/// block in `graph.json`. The values here only fire if cost/time/token limits
-/// are exceeded, or as a last-resort round cap.
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct BudgetConfig {
-    /// Maximum total cost in USD.
-    #[serde(default = "default_max_cost")]
-    pub max_cost_usd: f64,
-    /// Maximum total tokens consumed.
-    #[serde(default = "default_max_tokens")]
-    pub max_tokens: u64,
-    /// Maximum wall-clock time (human-readable duration).
-    #[serde(default = "default_max_wallclock")]
-    pub max_wallclock: String,
-    /// Hard round cap. The governor plugin in graph.json is the primary
-    /// controller; this only fires if the plugin fails to halt.
-    #[serde(default = "default_max_rounds")]
-    pub max_rounds: u32,
-}
-
-const fn default_max_cost() -> f64 {
-    25.0
-}
-
-const fn default_max_tokens() -> u64 {
-    5_000_000
-}
-
-fn default_max_wallclock() -> String {
-    "45m".into()
-}
-
-const fn default_max_rounds() -> u32 {
-    100
-}
-
-impl Default for BudgetConfig {
-    fn default() -> Self {
-        Self {
-            max_cost_usd: default_max_cost(),
-            max_tokens: default_max_tokens(),
-            max_wallclock: default_max_wallclock(),
-            max_rounds: default_max_rounds(),
-        }
-    }
-}
+/// The custom deserializer on `max_wallclock_secs` accepts both a float
+/// (seconds) and a human-readable string (`"30s"`, `"45m"`, `"2h"`)
+/// through the alias `max_wallclock`.
+pub use eureka_graph::control::Budget as BudgetConfig;
 
 /// The top-level Eureka configuration, loaded from layered sources.
 ///
@@ -216,37 +173,10 @@ impl EurekaConfig {
         toml::from_str(toml_str).map_err(|e| ConfigError::ParseError(e.to_string()))
     }
 
-    /// Convert to a `Budget` for the scheduler.
+    /// Return the budget directly (type is already `eureka_graph::control::Budget`).
     #[must_use]
     pub fn to_graph_budget(&self) -> eureka_graph::control::Budget {
-        let max_wallclock_secs = parse_duration(&self.budget.max_wallclock).unwrap_or(2700.0);
-        eureka_graph::control::Budget {
-            max_cost_usd: self.budget.max_cost_usd,
-            max_tokens: self.budget.max_tokens,
-            max_wallclock_secs,
-            max_rounds: self.budget.max_rounds,
-        }
-    }
-}
-
-/// Parse a human-readable duration string (e.g., "45m", "2h", "30s") to seconds.
-#[must_use]
-fn parse_duration(duration: &str) -> Option<f64> {
-    let duration = duration.trim();
-    if duration.ends_with('s') {
-        duration[..duration.len() - 1].parse::<f64>().ok()
-    } else if duration.ends_with('m') {
-        duration[..duration.len() - 1]
-            .parse::<f64>()
-            .ok()
-            .map(|v| v * 60.0)
-    } else if duration.ends_with('h') {
-        duration[..duration.len() - 1]
-            .parse::<f64>()
-            .ok()
-            .map(|v| v * 3600.0)
-    } else {
-        duration.parse::<f64>().ok()
+        self.budget.clone()
     }
 }
 
@@ -260,10 +190,6 @@ pub enum ConfigError {
     /// A file could not be read.
     #[error("File error: {0}")]
     FileError(String),
-
-    /// A required field is missing.
-    #[error("Missing config: {0}")]
-    Missing(String),
 }
 
 #[cfg(test)]
@@ -280,10 +206,16 @@ mod tests {
 
     #[test]
     fn test_duration_parsing() {
-        assert!((parse_duration("30s").unwrap() - 30.0).abs() < f64::EPSILON);
-        assert!((parse_duration("45m").unwrap() - 2700.0).abs() < f64::EPSILON);
-        assert!((parse_duration("2h").unwrap() - 7200.0).abs() < f64::EPSILON);
-        assert!((parse_duration("30").unwrap() - 30.0).abs() < f64::EPSILON);
+        assert!(
+            (eureka_graph::control::parse_duration("30s").unwrap() - 30.0).abs() < f64::EPSILON
+        );
+        assert!(
+            (eureka_graph::control::parse_duration("45m").unwrap() - 2700.0).abs() < f64::EPSILON
+        );
+        assert!(
+            (eureka_graph::control::parse_duration("2h").unwrap() - 7200.0).abs() < f64::EPSILON
+        );
+        assert!((eureka_graph::control::parse_duration("30").unwrap() - 30.0).abs() < f64::EPSILON);
     }
 
     #[test]
@@ -315,6 +247,6 @@ max_rounds = 6
         let config = EurekaConfig::default();
         let budget = config.to_graph_budget();
         assert!((budget.max_wallclock_secs - 2700.0).abs() < f64::EPSILON);
-        assert_eq!(budget.max_rounds, 100);
+        assert_eq!(budget.max_rounds, 12);
     }
 }

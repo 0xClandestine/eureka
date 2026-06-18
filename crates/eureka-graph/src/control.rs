@@ -41,6 +41,10 @@ pub struct Budget {
     /// Maximum total tokens consumed.
     pub max_tokens: u64,
     /// Maximum wall-clock time in seconds.
+    ///
+    /// Supports deserialization from either a float (seconds) or a string
+    /// with a suffix (`"30s"`, `"45m"`, `"2h"`).
+    #[serde(alias = "max_wallclock", deserialize_with = "deserialize_wallclock")]
     pub max_wallclock_secs: f64,
     /// Maximum number of rounds (cycles). Acts as a hard backstop;
     /// the graph's governor plugin is the primary round controller.
@@ -55,6 +59,68 @@ impl Default for Budget {
             max_wallclock_secs: 2700.0, // 45 minutes
             max_rounds: 12,
         }
+    }
+}
+
+/// Deserialize a wall-clock value that is either a float (seconds) or a
+/// human-readable duration string (`"30s"`, `"45m"`, `"2h"`).
+fn deserialize_wallclock<'de, D>(deserializer: D) -> Result<f64, D::Error>
+where
+    D: serde::Deserializer<'de>,
+{
+    use serde::de;
+
+    struct WallclockVisitor;
+
+    impl<'de> de::Visitor<'de> for WallclockVisitor {
+        type Value = f64;
+
+        fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+            f.write_str("a float (seconds) or a string with suffix (e.g. \"45m\", \"2h\", \"30s\")")
+        }
+
+        fn visit_f64<E: de::Error>(self, v: f64) -> Result<f64, E> {
+            Ok(v)
+        }
+
+        fn visit_i64<E: de::Error>(self, v: i64) -> Result<f64, E> {
+            Ok(v as f64)
+        }
+
+        fn visit_u64<E: de::Error>(self, v: u64) -> Result<f64, E> {
+            Ok(v as f64)
+        }
+
+        fn visit_str<E: de::Error>(self, s: &str) -> Result<f64, E> {
+            parse_duration(s).ok_or_else(|| de::Error::custom(format!(
+                "invalid duration string: '{s}'. Expected format: number + suffix (s/m/h), e.g. \"45m\""
+            )))
+        }
+    }
+
+    deserializer.deserialize_any(WallclockVisitor)
+}
+
+/// Parse a human-readable duration string (e.g., `"45m"`, `"2h"`, `"30s"`)
+/// into seconds. Supports `s` (seconds), `m` (minutes), `h` (hours). A plain
+/// number without a suffix is returned as-is.
+#[must_use]
+pub fn parse_duration(duration: &str) -> Option<f64> {
+    let duration = duration.trim();
+    if duration.ends_with('s') {
+        duration[..duration.len() - 1].parse::<f64>().ok()
+    } else if duration.ends_with('m') {
+        duration[..duration.len() - 1]
+            .parse::<f64>()
+            .ok()
+            .map(|v| v * 60.0)
+    } else if duration.ends_with('h') {
+        duration[..duration.len() - 1]
+            .parse::<f64>()
+            .ok()
+            .map(|v| v * 3600.0)
+    } else {
+        duration.parse::<f64>().ok()
     }
 }
 

@@ -43,19 +43,7 @@ impl Session {
     ///
     /// Returns an `EngineError` if the graph cannot be loaded or validated.
     pub fn new(config: EurekaConfig, registry: NodeRegistry) -> Result<Self, EngineError> {
-        let raw = std::fs::read_to_string(&config.graph).map_err(|e| {
-            EngineError::Graph(eureka_graph::spec::GraphError::ParseError(format!(
-                "Failed to read graph file '{}': {e}",
-                config.graph
-            )))
-        })?;
-
-        let spec = if config.graph.ends_with(".json") {
-            GraphSpec::from_json(&raw)?
-        } else {
-            GraphSpec::from_toml(&raw)?
-        };
-
+        let spec = GraphSpec::load(std::path::Path::new(&config.graph))?;
         Self::with_spec(config, spec, registry)
     }
 
@@ -73,19 +61,7 @@ impl Session {
         registry: NodeRegistry,
         session_id: uuid::Uuid,
     ) -> Result<Self, EngineError> {
-        let raw = std::fs::read_to_string(&config.graph).map_err(|e| {
-            EngineError::Graph(eureka_graph::spec::GraphError::ParseError(format!(
-                "Failed to read graph file '{}': {e}",
-                config.graph
-            )))
-        })?;
-
-        let spec = if config.graph.ends_with(".json") {
-            GraphSpec::from_json(&raw)?
-        } else {
-            GraphSpec::from_toml(&raw)?
-        };
-
+        let spec = GraphSpec::load(std::path::Path::new(&config.graph))?;
         Self::with_spec_and_id(config, spec, registry, session_id)
     }
 

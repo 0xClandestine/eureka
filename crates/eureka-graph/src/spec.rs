@@ -62,6 +62,26 @@ impl GraphSpec {
         serde_json::from_str(json_str).map_err(|e| GraphError::ParseError(e.to_string()))
     }
 
+    /// Load a `GraphSpec` from a file path. Dispatches to `from_json` or
+    /// `from_toml` based on the file extension (`.json` → JSON, else TOML).
+    ///
+    /// # Errors
+    ///
+    /// Returns a `GraphError` if the file cannot be read or parsed.
+    pub fn load(path: &std::path::Path) -> Result<Self, GraphError> {
+        let raw = std::fs::read_to_string(path).map_err(|e| {
+            GraphError::ParseError(format!(
+                "Failed to read graph file '{}': {e}",
+                path.display()
+            ))
+        })?;
+        if path.extension().and_then(|e| e.to_str()) == Some("json") {
+            Self::from_json(&raw)
+        } else {
+            Self::from_toml(&raw)
+        }
+    }
+
     /// Serialize this `GraphSpec` to TOML.
     ///
     /// # Errors
