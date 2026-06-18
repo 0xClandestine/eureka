@@ -1,4 +1,6 @@
 /target
+**/.build
+**/.swiftpm
 *.swp
 *.swo
 *.bak
