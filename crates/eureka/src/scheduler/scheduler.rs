@@ -209,8 +209,18 @@ impl Scheduler {
                                 round,
                             }).await;
 
-                            let permit = self.in_flight_sem.clone().acquire_owned().await
-                                .map_err(|_| SchedulerError::Internal("Semaphore closed".into()))?;
+                            // Acquire a permit, but bail out promptly if the run is
+                            // cancelled while waiting for a free slot.
+                            let permit = tokio::select! {
+                                biased;
+                                () = self.cancel.cancelled() => {
+                                    self.stats.elapsed_secs = start.elapsed().as_secs_f64();
+                                    return Ok(self.stats.clone());
+                                }
+                                p = self.in_flight_sem.clone().acquire_owned() => {
+                                    p.map_err(|_| SchedulerError::Internal("Semaphore closed".into()))?
+                                }
+                            };
 
                             let node = self.nodes.get(&node_id).ok_or_else(|| {
                                 SchedulerError::NodeNotFound(node_id.clone())
