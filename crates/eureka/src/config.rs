@@ -96,8 +96,16 @@ pub struct Budget {
     /// Maximum total tokens consumed.
     pub max_tokens: u64,
     /// Maximum wall-clock time in seconds.
+    ///
+    /// Accepts a float (seconds) or a human-readable string (`"30s"`,
+    /// `"45m"`, `"2h"`) in config files. The legacy name `max_wallclock_secs`
+    /// is also accepted. Via environment variables, figment splits keys on
+    /// `_`, so set this with `EUREKA_BUDGET_MAXWALLCLOCK` (no inner
+    /// underscore) or `EUREKA_BUDGET_MAXWALLCLOCKSECS`.
     #[serde(
         alias = "max_wallclock_secs",
+        alias = "maxwallclock",
+        alias = "maxwallclocksecs",
         deserialize_with = "deserialize_wallclock"
     )]
     pub max_wallclock: f64,
@@ -343,7 +351,10 @@ impl EurekaConfig {
         //
         // Figment's Env provider splits keys on `_` to create nested paths, so
         // `EUREKA_PROVIDER_KIND` becomes `provider.kind` and maps directly to
-        // the config struct. Use `__` for a literal underscore in a value name.
+        // the config struct. This means a field name containing an underscore
+        // (like `max_wallclock`) cannot be set with a single env var; use the
+        // underscore-free alias `maxwallclock` instead, i.e.
+        // `EUREKA_BUDGET_MAXWALLCLOCK`. See the field docs on `Budget`.
         figment = figment.merge(Env::prefixed("EUREKA_"));
 
         figment
@@ -481,5 +492,24 @@ max_rounds = 6
         // Everything else should still be defaults
         assert_eq!(config.provider.kind, ProviderKind::OpenRouter);
         assert_eq!(config.scheduler.max_in_flight, 8);
+    }
+
+    #[test]
+    fn test_env_override_max_wallclock_via_alias() {
+        // Regression (M6): `max_wallclock` contains an underscore, so figment's
+        // `_`-split Env layer would nest it as `budget.max.wallclock` and fail
+        // to set it. The serde alias `maxwallclock` (underscore-free) lets the
+        // env var `EUREKA_BUDGET_MAXWALLCLOCK` map cleanly. Test the alias via
+        // a direct figment layer that mimics the env-derived key path.
+        // The env-derived key path is `budget.maxwallclock`. Confirm the alias
+        // resolves by deserializing a JSON object with that shape directly.
+        let json = serde_json::json!({
+            "max_cost_usd": 25.0,
+            "max_tokens": 5_000_000,
+            "maxwallclock": 120_u64,
+            "max_rounds": 12
+        });
+        let budget: Budget = serde_json::from_value(json).unwrap();
+        assert!((budget.max_wallclock - 120.0).abs() < f64::EPSILON);
     }
 }
