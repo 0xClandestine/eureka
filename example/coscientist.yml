@@ -1,0 +1,357 @@
+name: AI Co-Scientist
+description: Reproduction of Google Research's AI co-scientist topology (Feb 2025)
+
+# ── LLM agents ──────────────────────────────────────────────────────────
+agents:
+  - id: generation
+    description: Drafts novel hypotheses from the research goal via literature
+                 exploration, self-play debates, and assumption decomposition
+    prompt: prompts/generation.md
+    inputs:
+      - port: in
+        kind: Goal
+      - port: context
+        kind: Insights
+    outputs:
+      - port: out
+        kind: Hypotheses
+    config:
+      temperature: 0.9
+      max_iterations: 15
+    tools:
+      - name: search_literature
+        description: Search arXiv for papers matching a query
+        command: [python3, tools/arxiv_search.py]
+        args_schema:
+          type: object
+          required: [query]
+          properties:
+            query:       { type: string,  description: "Keywords or phrase to search for" }
+            max_results: { type: integer, description: "Max results (default 5, max 20)" }
+            page:        { type: integer, description: "Page number (default 0)" }
+        timeout_secs: 30
+      - name: read_paper
+        description: Retrieve the full text of an arXiv paper as clean Markdown
+        command: [python3, tools/arxiv_search.py]
+        args_schema:
+          type: object
+          required: [arxiv_id]
+          properties:
+            arxiv_id: { type: string, description: "ArXiv paper ID e.g. 2404.01234" }
+        timeout_secs: 60
+    output_schema:
+      type: object
+      required: [hypotheses]
+      properties:
+        hypotheses:
+          type: array
+          description: List of generated scientific hypotheses
+          items:
+            type: object
+            required: [statement, rationale, assumptions, testable_predictions, proposed_experiment]
+            properties:
+              statement:            { type: string, description: "One-sentence hypothesis claim" }
+              rationale:            { type: string, description: "Mechanistic or theoretical justification with citations" }
+              assumptions:          { type: array, items: { type: string }, description: "Explicit testable intermediate assumptions" }
+              testable_predictions: { type: array, items: { type: string }, description: "Falsifiable, concrete predictions" }
+              proposed_experiment:  { type: string, description: "Concrete experimental design for validation" }
+              citations:            { type: array, items: { type: object }, description: "Supporting literature references" }
+
+  - id: reflection
+    description: Multi-type peer review — initial, full, deep verification,
+                 observation, simulation, and recurrent review
+    prompt: prompts/reflection.md
+    inputs:
+      - port: in
+        kind: Hypotheses
+      - port: context
+        kind: Insights
+    outputs:
+      - port: out
+        kind: Reviews
+    config:
+      temperature: 0.7
+      max_iterations: 12
+    tools:
+      - name: search_literature
+        description: Search arXiv for papers matching a query
+        command: [python3, tools/arxiv_search.py]
+        args_schema:
+          type: object
+          required: [query]
+          properties:
+            query:       { type: string }
+            max_results: { type: integer }
+            page:        { type: integer }
+        timeout_secs: 30
+      - name: read_paper
+        description: Retrieve full text of an arXiv paper
+        command: [python3, tools/arxiv_search.py]
+        args_schema:
+          type: object
+          required: [arxiv_id]
+          properties:
+            arxiv_id: { type: string }
+        timeout_secs: 60
+    output_schema:
+      type: object
+      required: [reviews]
+      properties:
+        reviews:
+          type: array
+          description: One review entry per hypothesis
+          items:
+            type: object
+            required: [hypothesis, kind, reasoning, score]
+            properties:
+              hypothesis:  { type: object, description: "Full hypothesis object pass-through for downstream ranking" }
+              kind:        { type: string, enum: [initial, full, deep_verification, observation, simulation, recurrent] }
+              eliminated:  { type: boolean, description: "True if hypothesis should be discarded entirely" }
+              reasoning:   { type: string, description: "Detailed critique with evidence" }
+              strengths:   { type: array, items: { type: string } }
+              weaknesses:  { type: array, items: { type: string } }
+              suggestions: { type: array, items: { type: string } }
+              score:       { type: number, description: "Overall quality score 0–10" }
+
+  - id: evolution
+    description: Refines top hypotheses via grounding, coherence, inspiration,
+                 combination, simplification, and out-of-box thinking
+    prompt: prompts/evolution.md
+    inputs:
+      - port: in
+        kind: Hypotheses
+      - port: context
+        kind: Insights
+    outputs:
+      - port: out
+        kind: Hypotheses
+    config:
+      temperature: 0.85
+      max_iterations: 12
+    tools:
+      - name: search_literature
+        description: Search arXiv for papers matching a query
+        command: [python3, tools/arxiv_search.py]
+        args_schema:
+          type: object
+          required: [query]
+          properties:
+            query:       { type: string }
+            max_results: { type: integer }
+            page:        { type: integer }
+        timeout_secs: 30
+      - name: read_paper
+        description: Retrieve full text of an arXiv paper
+        command: [python3, tools/arxiv_search.py]
+        args_schema:
+          type: object
+          required: [arxiv_id]
+          properties:
+            arxiv_id: { type: string }
+        timeout_secs: 60
+    output_schema:
+      type: object
+      required: [hypotheses]
+      properties:
+        hypotheses:
+          type: array
+          description: Evolved offspring hypotheses
+          items:
+            type: object
+            required: [statement, rationale, operation, change_rationale]
+            properties:
+              parent_indices:       { type: array, items: { type: integer }, description: "Indices into the input hypothesis list" }
+              operation:            { type: string, enum: [grounding, coherence, inspiration, combination, simplification, out_of_box] }
+              change_rationale:     { type: string, description: "What was changed from the parent and why" }
+              statement:            { type: string }
+              rationale:            { type: string }
+              assumptions:          { type: array, items: { type: string } }
+              testable_predictions: { type: array, items: { type: string } }
+              proposed_experiment:  { type: string }
+              citations:            { type: array, items: { type: object } }
+
+  - id: meta_review
+    description: Synthesises tournament insights, feeds back to all agents,
+                 identifies research contacts, produces final overview
+    prompt: prompts/meta_review.md
+    inputs:
+      - port: in
+        kind: Ranking
+    outputs:
+      - port: insights
+        kind: Insights
+      - port: overview
+        kind: Overview
+    config:
+      temperature: 0.7
+      max_iterations: 10
+    output_schema:
+      type: object
+      required: [insights, overview]
+      properties:
+        insights:
+          type: object
+          description: Per-agent feedback for use in the next round
+          properties:
+            generation_context:    { type: array, items: { type: string }, description: "Specific directions and gaps for the Generation agent" }
+            reflection_heuristics: { type: array, items: { type: string }, description: "Review patterns and heuristics for the Reflection agent" }
+            evolution_guidance:    { type: array, items: { type: string }, description: "Strategy observations for the Evolution agent" }
+            recurring_patterns:    { type: array, items: { type: string }, description: "Themes appearing across top hypotheses" }
+            common_weaknesses:     { type: array, items: { type: string } }
+            promising_directions:  { type: array, items: { type: string } }
+            context_improvements:  { type: array, items: { type: string } }
+        overview:
+          type: object
+          description: Comprehensive research synthesis
+          properties:
+            summary:              { type: string, description: "Original goal, approach, and top findings" }
+            key_insights:         { type: array, items: { type: string } }
+            open_questions:       { type: array, items: { type: string } }
+            suggested_next_steps: { type: array, items: { type: string } }
+            research_contacts:
+              type: array
+              description: Domain experts who should review the findings
+              items:
+                type: object
+                properties:
+                  expertise: { type: string }
+                  rationale: { type: string }
+
+# ── Control nodes (subprocess-backed) ─────────────────────────────────
+control:
+  - id: ranking
+    kind: elo-ranker
+    description: Elo tournament with similarity-based matchmaking from proximity graph
+    command: [python3, control/ranker.py]
+    inputs:
+      - port: in
+        kind: Reviews
+      - port: graph
+        kind: ProximityGraph
+    outputs:
+      - port: top
+        kind: Hypotheses
+      - port: state
+        kind: Ranking
+    config:
+      items_field: reviews
+      score_field: score
+      item_field: hypothesis
+      id_field: statement
+      output_field: hypotheses
+      top_k: 5
+    timeout_secs: 15
+
+  - id: proximity
+    kind: proximity
+    description: Builds similarity graph, clusters hypotheses, selects diverse frontier
+    command: [python3, control/proximity.py]
+    inputs:
+      - port: in
+        kind: Hypotheses
+    outputs:
+      - port: unique
+        kind: Hypotheses
+      - port: graph
+        kind: ProximityGraph
+    config:
+      items_field: hypotheses
+      text_field: statement
+      threshold: 0.65
+      output_field: hypotheses
+      max_frontier: 10
+    timeout_secs: 15
+
+  - id: supervisor
+    kind: supervisor
+    description: Dynamic orchestrator — computes statistics, tracks convergence,
+                 persists context memory, decides continue/evolve/halt
+    command: [python3, control/supervisor.py]
+    inputs:
+      - port: in
+        kind: Hypotheses
+    outputs:
+      - port: continue
+        kind: Hypotheses
+      - port: halt
+        kind: Control
+    config:
+      max_rounds: 5
+      min_rounds: 2
+      convergence_threshold: 200.0
+      min_hypotheses: 3
+    timeout_secs: 10
+
+# ── Graph topology ─────────────────────────────────────────────────────
+# Forward pipeline: generation → reflection → ranking → evolution → proximity → supervisor
+# Feedback loops: supervisor → reflection (continue), proximity.graph → ranking,
+#                 meta_review.insights → generation, reflection, evolution
+edges:
+  # ── Forward pipeline ──
+  - from_node: generation
+    from_port: out
+    to_node: reflection
+    to_port: in
+
+  - from_node: reflection
+    from_port: out
+    to_node: ranking
+    to_port: in
+
+  - from_node: ranking
+    from_port: top
+    to_node: evolution
+    to_port: in
+
+  - from_node: evolution
+    from_port: out
+    to_node: proximity
+    to_port: in
+
+  - from_node: proximity
+    from_port: unique
+    to_node: supervisor
+    to_port: in
+
+  # ── Proximity graph → Ranking matchmaking ──
+  - from_node: proximity
+    from_port: graph
+    to_node: ranking
+    to_port: graph
+
+  # ── Tournament state → Meta-review ──
+  - from_node: ranking
+    from_port: state
+    to_node: meta_review
+    to_port: in
+
+  # ── Meta-review feedback → all agents ──
+  - from_node: meta_review
+    from_port: insights
+    to_node: generation
+    to_port: context
+    feedback: true
+
+  - from_node: meta_review
+    from_port: insights
+    to_node: reflection
+    to_port: context
+    feedback: true
+
+  - from_node: meta_review
+    from_port: insights
+    to_node: evolution
+    to_port: context
+    feedback: true
+
+  # ── Supervisor feedback loop ──
+  - from_node: supervisor
+    from_port: continue
+    to_node: reflection
+    to_port: in
+    feedback: true
+
+metadata:
+  version: 0.6.0
+  author: Eureka Team
+  reference: Google Research, AI co-scientist, Feb 2025

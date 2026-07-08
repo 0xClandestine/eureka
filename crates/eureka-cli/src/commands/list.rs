@@ -7,7 +7,7 @@ use anyhow::Result;
 /// # Errors
 ///
 /// This command never returns an error.
-pub async fn execute() -> Result<()> {
+pub fn execute() -> Result<()> {
     println!("╔══════════════════════════════════════════════════════════╗");
     println!("║                 Eureka — Agent Registry                 ║");
     println!("╚══════════════════════════════════════════════════════════╝");
@@ -33,19 +33,23 @@ pub async fn execute() -> Result<()> {
     );
     print_agent(
         "proximity",
-        "Deduplicates and preserves a diverse hypothesis frontier via embeddings",
+        "Builds similarity graph, clusters hypotheses, selects diverse frontier",
     );
     print_agent(
         "meta_review",
-        "Synthesizes recurring patterns and produces the final ResearchOverview",
+        "Synthesizes tournament insights, feeds back to all agents, produces overview",
     );
     println!();
 
     println!("── Control Nodes ──");
     println!();
     print_agent(
-        "control.governor",
-        "Cycle gate: enforces budget (cost/tokens/time/rounds) and convergence detection",
+        "supervisor",
+        "Dynamic orchestrator: computes statistics, tracks convergence, manages context memory",
+    );
+    print_agent(
+        "elo-ranker",
+        "Elo tournament with similarity-based matchmaking from the proximity graph",
     );
     print_agent(
         "control.router",
@@ -56,38 +60,28 @@ pub async fn execute() -> Result<()> {
         "control.broadcast",
         "Fan-out policy for distributing artifacts to multiple consumers",
     );
-    print_agent(
-        "control.human_gate",
-        "Optional human-in-the-loop pause point for seed injection / feedback",
-    );
     println!();
 
     println!("── Available Tools ──");
     println!();
-    print_tool("web_search", "Searches the web for grounding information");
-    print_tool("fetch", "Fetches and extracts content from URLs");
+    print_tool("search_literature", "Searches arXiv for grounding literature");
+    print_tool("read_paper", "Fetches full text of arXiv papers as Markdown");
     println!();
 
     println!("── Shipped Graph Specs ──");
     println!();
-    println!("  graphs/coscientist/graph.json  — Google's co-scientist topology (default)");
-    println!("  graphs/debate/graph.json       — Debate-only ensemble topology");
-    println!("  graphs/jury/graph.json         — Multi-ranker jury topology");
-    println!();
-
-    println!("── Graph-as-Eval ──");
-    println!();
-    println!("  eureka eval <graph_a> <graph_b> <goal>");
-    println!("  A/B test two graph topologies on the same goal + seed.");
+    println!("  coscientist/coscientist.yml  — Google's co-scientist topology (default)");
     println!();
 
     Ok(())
 }
 
+/// Print a formatted agent entry.
 fn print_agent(name: &str, description: &str) {
     println!("  {name:25}  {description}");
 }
 
+/// Print a formatted tool entry.
 fn print_tool(name: &str, description: &str) {
     println!("  {name:25}  {description}");
 }

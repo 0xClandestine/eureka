@@ -22,6 +22,7 @@ struct Cli {
     command: Commands,
 }
 
+/// Available subcommands for the Eureka CLI.
 #[derive(Debug, Subcommand)]
 enum Commands {
     /// Run a research session.
@@ -52,22 +53,6 @@ enum Commands {
         /// Port for the real-time UI server (0 to disable).
         #[arg(long, default_value_t = 7773)]
         port: u16,
-    },
-
-    /// Evaluate two graph specifications on the same goal.
-    Eval {
-        /// First graph spec file.
-        graph_a: String,
-
-        /// Second graph spec file.
-        graph_b: String,
-
-        /// The research goal.
-        goal: String,
-
-        /// Output file for comparison results.
-        #[arg(short, long)]
-        output: Option<String>,
     },
 
     /// Validate a graph specification file.
@@ -116,26 +101,11 @@ async fn main() -> anyhow::Result<()> {
             })
             .await?;
         }
-        Commands::Eval {
-            graph_a,
-            graph_b,
-            goal,
-            output,
-        } => {
-            commands::eval::execute(commands::eval::EvalArgs {
-                config_path: cli.config,
-                graph_a,
-                graph_b,
-                goal,
-                output,
-            })
-            .await?;
-        }
         Commands::Validate { graph } => {
-            commands::validate::execute(graph).await?;
+            commands::validate::execute(&graph)?;
         }
         Commands::List => {
-            commands::list::execute().await?;
+            commands::list::execute()?;
         }
     }
 

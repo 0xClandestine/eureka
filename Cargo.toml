@@ -1,13 +1,8 @@
 [workspace]
 resolver = "3"
 members = [
-    "crates/eureka-graph",
-    "crates/eureka-agents",
-    "crates/eureka-engine",
-    "crates/eureka-config",
-    "crates/eureka-db",
+    "crates/eureka",
     "crates/eureka-cli",
-    "xtask",
 ]
 
 [workspace.package]
@@ -25,7 +20,8 @@ must_use_candidate = "warn"
 return_self_not_must_use = "warn"
 use_self = "warn"
 cargo_common_metadata = "warn"
-multiple_crate_versions = "warn"
+# Transitive dependency version conflicts are outside our control.
+multiple_crate_versions = "allow"
 unwrap_used = "deny"
 expect_used = "deny"
 

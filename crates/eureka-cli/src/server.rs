@@ -24,7 +24,8 @@ use tokio::sync::{broadcast, Mutex};
 use tokio_stream::{wrappers::BroadcastStream, Stream, StreamExt};
 use tower_http::cors::CorsLayer;
 
-use eureka_graph::{scheduler::SchedulerEvent, spec::GraphSpec};
+use eureka::graph::GraphSpec;
+use eureka::scheduler::SchedulerEvent;
 
 /// Shared state injected into every axum handler.
 #[derive(Clone)]
@@ -52,7 +53,7 @@ pub struct LiveState {
     pub active_nodes: HashSet<String>,
     /// Whether the session has finished.
     pub finished: bool,
-    /// Latest outputs per node: node_id → `[{ port, kind, data }]`
+    /// Latest outputs per node: `node_id` → `[{ port, kind, data }]`
     pub node_outputs: std::collections::HashMap<String, Vec<serde_json::Value>>,
 }
 
@@ -166,12 +167,11 @@ async fn events_handler(
     State(s): State<ServerState>,
 ) -> Sse<impl Stream<Item = Result<Event, Infallible>>> {
     let rx = s.event_tx.subscribe();
-    let stream = BroadcastStream::new(rx).filter_map(|result| match result {
-        Ok(event) => {
+    let stream = BroadcastStream::new(rx).filter_map(|result| {
+        result.ok().map(|event| {
             let data = serde_json::to_string(&event).unwrap_or_default();
-            Some(Ok(Event::default().data(data)))
-        }
-        Err(_) => None, // lagged — skip silently
+            Ok(Event::default().data(data))
+        })
     });
 
     Sse::new(stream).keep_alive(

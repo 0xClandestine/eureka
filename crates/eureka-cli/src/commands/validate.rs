@@ -1,45 +1,31 @@
 //! `eureka validate` command — validate a graph specification file.
 //!
-//! Builds a port registry by loading the real agent definitions and plugin
-//! manifests from the graph's directory, then validates the graph topology
-//! against them. This means validation is fully data-driven: no node kind is
-//! hardcoded here.
+//! Loads the YAML manifest, builds a port registry from agent and control
+//! specs declared inline, then validates the graph topology.
 
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use eureka_agents::AgentDef;
-use eureka_engine::plugin::PluginRegistry;
-use eureka_graph::port::{PortDirection, PortSpec, PortSpecEntry};
-use eureka_graph::spec::GraphSpec;
-use eureka_graph::validate::{validate_graph, PortRegistry};
+use eureka::graph::port::{PortDirection, PortSpec, PortSpecEntry};
+use eureka::graph::validate::{validate_graph, PortRegistry};
+use eureka::manifest::GraphManifest;
 
 /// Execute the `validate` command.
 ///
 /// # Errors
 ///
 /// Returns an error if the graph specification is invalid.
-pub async fn execute(graph_path: String) -> Result<()> {
-    let content = std::fs::read_to_string(&graph_path)
-        .with_context(|| format!("Failed to read graph spec: {graph_path}"))?;
+pub fn execute(graph_path: &str) -> Result<()> {
+    let manifest = GraphManifest::load(Path::new(graph_path))
+        .with_context(|| format!("Failed to load graph manifest from '{graph_path}'"))?;
 
-    let spec = if graph_path.ends_with(".json") {
-        GraphSpec::from_json(&content)
-            .with_context(|| format!("Failed to parse JSON graph spec: {graph_path}"))?
-    } else {
-        GraphSpec::from_toml(&content)
-            .with_context(|| format!("Failed to parse TOML graph spec: {graph_path}"))?
-    };
+    let spec = manifest.to_graph_spec();
 
     println!("Graph: {}", spec.name.as_deref().unwrap_or("(unnamed)"));
     println!("  Nodes: {}", spec.nodes.len());
     println!("  Edges: {}", spec.edges.len());
 
-    let graph_dir = Path::new(&graph_path).parent().unwrap_or(Path::new("."));
-
-    let registry =
-        build_registry_for_validation(graph_dir).context("Failed to build validation registry")?;
-
+    let registry = build_registry_from_manifest(&manifest);
     let result = validate_graph(&spec, &registry);
 
     if result.valid {
@@ -57,44 +43,13 @@ pub async fn execute(graph_path: String) -> Result<()> {
     }
 }
 
-/// Build a `PortRegistry` by scanning `graph_dir` for agents and plugins.
-///
-/// - Agents are loaded from `<graph_dir>/agents/`.
-/// - Plugins are discovered from `<graph_dir>/plugins/` and `~/.eureka/plugins/`.
-///
-/// Missing directories are silently skipped so validation works even for
-/// partial graph packages.
-///
-/// # Errors
-///
-/// Returns an error if a present `agents/` directory or `plugin.json` file
-/// cannot be read.
-fn build_registry_for_validation(graph_dir: &Path) -> Result<PortRegistry> {
+/// Build a `PortRegistry` from the agents and control nodes declared in a
+/// `GraphManifest`. No filesystem scanning needed — everything is inline.
+fn build_registry_from_manifest(manifest: &GraphManifest) -> PortRegistry {
     let mut reg = PortRegistry::new();
 
-    // Register agent kinds from the agents directory.
-    let agents_dir = graph_dir.join("agents");
-    if agents_dir.is_dir() {
-        let defs = AgentDef::load_all(&agents_dir)
-            .with_context(|| format!("Failed to load agents from '{}'", agents_dir.display()))?;
-        for def in defs {
-            reg.register(def.name.clone(), def.to_port_spec());
-        }
-    }
-
-    // Register plugin node kinds from plugin manifests.
-    let plugin_registry = PluginRegistry::discover(graph_dir)
-        .with_context(|| format!("Failed to discover plugins in '{}'", graph_dir.display()))?;
-
-    for (_name, entry) in plugin_registry.iter() {
-        if !entry.manifest.has_node_role() {
-            continue;
-        }
-        let Some(node_cfg) = &entry.manifest.node else {
-            continue;
-        };
-
-        let inputs = node_cfg
+    for agent in &manifest.agents {
+        let inputs = agent
             .inputs
             .iter()
             .map(|p| PortSpecEntry {
@@ -105,7 +60,7 @@ fn build_registry_for_validation(graph_dir: &Path) -> Result<PortRegistry> {
             })
             .collect();
 
-        let outputs = node_cfg
+        let outputs = agent
             .outputs
             .iter()
             .map(|p| PortSpecEntry {
@@ -116,81 +71,91 @@ fn build_registry_for_validation(graph_dir: &Path) -> Result<PortRegistry> {
             })
             .collect();
 
-        reg.register(entry.manifest.name.clone(), PortSpec::new(inputs, outputs));
+        reg.register(agent.id.clone(), PortSpec::new(inputs, outputs));
     }
 
-    Ok(reg)
+    for ctrl in &manifest.control {
+        let inputs = ctrl
+            .inputs
+            .iter()
+            .map(|p| PortSpecEntry {
+                name: p.port.clone(),
+                direction: PortDirection::Input,
+                kind: p.kind.clone(),
+                required: true,
+            })
+            .collect();
+
+        let outputs = ctrl
+            .outputs
+            .iter()
+            .map(|p| PortSpecEntry {
+                name: p.port.clone(),
+                direction: PortDirection::Output,
+                kind: p.kind.clone(),
+                required: false,
+            })
+            .collect();
+
+        reg.register(ctrl.kind.clone(), PortSpec::new(inputs, outputs));
+    }
+
+    reg
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::io::Write as _;
+    use std::path::PathBuf;
     use tempfile::TempDir;
 
-    fn write_agent(dir: &Path, name: &str, json: &str, md: &str) {
-        let agents = dir.join("agents");
-        std::fs::create_dir_all(&agents).unwrap();
-        std::fs::File::create(agents.join(format!("{name}.json")))
-            .unwrap()
-            .write_all(json.as_bytes())
-            .unwrap();
-        std::fs::File::create(agents.join(format!("{name}.md")))
-            .unwrap()
-            .write_all(md.as_bytes())
-            .unwrap();
-    }
-
-    fn write_plugin(dir: &Path, name: &str, json: &str) {
-        let plugin_dir = dir.join("plugins").join(name);
-        std::fs::create_dir_all(&plugin_dir).unwrap();
-        std::fs::File::create(plugin_dir.join("plugin.json"))
-            .unwrap()
-            .write_all(json.as_bytes())
-            .unwrap();
+    fn write_manifest(dir: &Path, yml: &str) -> PathBuf {
+        let path = dir.join("test.yml");
+        let mut f = std::fs::File::create(&path).unwrap();
+        f.write_all(yml.as_bytes()).unwrap();
+        // Create a dummy prompt file referenced by the manifest
+        std::fs::create_dir_all(dir.join("prompts")).unwrap();
+        std::fs::write(dir.join("prompts/gen.md"), "test prompt").unwrap();
+        path
     }
 
     #[test]
-    fn test_registry_loads_agents_and_plugins() {
-        let tmp = TempDir::new().unwrap();
-        let dir = tmp.path();
-
-        write_agent(
-            dir,
-            "generation",
-            r#"{"inputs":[{"kind":"Goal","port":"in"}],"outputs":[{"kind":"Hypotheses","port":"out"}],"output_schema":{"type":"object"}}"#,
-            "Preamble.",
+    fn test_valid_manifest() {
+        let dir = TempDir::new().unwrap();
+        let path = write_manifest(
+            dir.path(),
+            r#"
+name: test
+agents:
+  - id: gen
+    prompt: prompts/gen.md
+    inputs:
+      - port: in
+        kind: Goal
+    outputs:
+      - port: out
+        kind: Hypotheses
+    output_schema:
+      type: object
+edges:
+  - from_node: gen
+    from_port: out
+    to_node: sink
+    to_port: in
+"#,
         );
-
-        write_plugin(
-            dir,
-            "round-governor",
-            r#"{
-                "name": "round-governor",
-                "version": "1.0.0",
-                "description": "Governor.",
-                "runtime": "process",
-                "command": ["python3", "governor.py"],
-                "roles": ["node"],
-                "node": {
-                    "inputs":  [{"port": "in",       "kind": "Hypotheses"}],
-                    "outputs": [
-                        {"port": "continue", "kind": "Control"},
-                        {"port": "halt",     "kind": "Control"}
-                    ]
-                }
-            }"#,
-        );
-
-        let reg = build_registry_for_validation(dir).unwrap();
-        assert!(reg.get("generation").is_some());
-        assert!(reg.get("round-governor").is_some());
+        let manifest = GraphManifest::load(&path).unwrap();
+        let reg = build_registry_from_manifest(&manifest);
+        assert!(reg.get("gen").is_some());
     }
 
     #[test]
-    fn test_registry_empty_dirs_ok() {
-        let tmp = TempDir::new().unwrap();
-        let reg = build_registry_for_validation(tmp.path()).unwrap();
+    fn test_empty_manifest_ok() {
+        let dir = TempDir::new().unwrap();
+        let path = write_manifest(dir.path(), "name: empty");
+        let manifest = GraphManifest::load(&path).unwrap();
+        let reg = build_registry_from_manifest(&manifest);
         assert!(reg.get("anything").is_none());
     }
 }

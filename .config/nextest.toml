@@ -1,9 +1,0 @@
-[test-runner]
-path = "nextest"
-
-[profile.default]
-slow-timeout = "120s"
-leak-timeout = "60s"
-status-level = "pass"
-failure-output = "immediate-final"
-success-output = "never"

@@ -5,16 +5,14 @@ edition.workspace = true
 license.workspace = true
 rust-version.workspace = true
 description = "CLI binary for the Eureka AI co-scientist"
+repository = "https://github.com/eureka-research/eureka"
+readme = "README.md"
+keywords = ["ai", "agents", "cli", "research"]
 categories = ["science", "artificial-intelligence"]
 
 [dependencies]
-eureka-graph = { path = "../eureka-graph" }
-eureka-agents = { path = "../eureka-agents" }
-eureka-engine = { path = "../eureka-engine" }
-eureka-config = { path = "../eureka-config" }
-eureka-db = { path = "../eureka-db" }
+eureka = { path = "../eureka" }
 uuid = { version = "1", features = ["v7"] }
-rig-core = { package = "rig-core", version = "0.38", features = ["derive"] }
 clap = { version = "4", features = ["derive"] }
 tokio = { version = "1", features = ["full"] }
 tracing = "0.1"
@@ -22,13 +20,13 @@ tracing-subscriber = { version = "0.3", features = ["json", "env-filter"] }
 anyhow = "1"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-async-trait = "0.1"
 axum = { version = "0.8", features = ["macros"] }
 tokio-stream = { version = "0.1", features = ["net", "sync"] }
 tower-http = { version = "0.6", features = ["cors"] }
 
 [dev-dependencies]
 tempfile = "3"
+async-trait = "0.1"
 
 [lints]
 workspace = true
