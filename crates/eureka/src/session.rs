@@ -727,8 +727,15 @@ mod tests {
             )
         }
 
-        async fn process(&self, _ctx: &NodeCtx, msg: PortMsg) -> Result<Vec<Emit>, NodeError> {
-            Ok(vec![Emit::new("out", msg.artifact)])
+        async fn process(
+            &self,
+            _ctx: &NodeCtx,
+            inputs: Vec<PortMsg>,
+        ) -> Result<Vec<Emit>, NodeError> {
+            Ok(inputs
+                .into_iter()
+                .map(|m| Emit::new("out", m.artifact))
+                .collect())
         }
     }
 
@@ -753,8 +760,15 @@ mod tests {
             )
         }
 
-        async fn process(&self, _ctx: &NodeCtx, msg: PortMsg) -> Result<Vec<Emit>, NodeError> {
-            Ok(vec![Emit::new("out", msg.artifact)])
+        async fn process(
+            &self,
+            _ctx: &NodeCtx,
+            inputs: Vec<PortMsg>,
+        ) -> Result<Vec<Emit>, NodeError> {
+            Ok(inputs
+                .into_iter()
+                .map(|m| Emit::new("out", m.artifact))
+                .collect())
         }
     }
 
@@ -858,7 +872,7 @@ edges: []
             },
         };
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let result = rt.block_on(boxed.process(&ctx, msg));
+        let result = rt.block_on(boxed.process(&ctx, vec![msg]));
         assert!(
             result.is_ok(),
             "control node should spawn successfully with bare `python3`; got: {:?}",
@@ -918,7 +932,7 @@ edges: []
             },
         };
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let emits = rt.block_on(boxed.process(&ctx, msg)).expect("spawn ok");
+        let emits = rt.block_on(boxed.process(&ctx, vec![msg])).expect("spawn ok");
         assert_eq!(emits.len(), 1);
         let db = emits[0].artifact.data["db"].as_str().unwrap_or("");
         assert_eq!(db, db_path.to_string_lossy());

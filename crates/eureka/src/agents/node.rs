@@ -51,13 +51,32 @@ impl Node for LlmAgentNode {
         self.def.to_port_spec()
     }
 
-    async fn process(&self, ctx: &NodeCtx, msg: PortMsg) -> Result<Vec<Emit>, NodeError> {
+    async fn process(
+        &self,
+        ctx: &NodeCtx,
+        inputs: Vec<PortMsg>,
+    ) -> Result<Vec<Emit>, NodeError> {
+        // Build the initial loop message from all available inputs. For a
+        // single-input agent, this is just the artifact payload. For a
+        // multi-input agent, each input is labelled with its port name so the
+        // model can distinguish goal vs. context, etc.
         let initial_message = if self.def.inputs.len() > 1 {
-            let data = serde_json::to_string_pretty(&msg.artifact.data)
-                .map_err(|e| NodeError::Internal(e.to_string()))?;
-            format!("Port: {}\n\n{data}", msg.port)
+            let mut parts = Vec::with_capacity(inputs.len());
+            for msg in &inputs {
+                let data = serde_json::to_string_pretty(&msg.artifact.data)
+                    .map_err(|e| NodeError::Internal(e.to_string()))?;
+                parts.push(format!("Port: {}\n\n{data}", msg.port));
+            }
+            parts.join("\n\n---\n\n")
         } else {
-            serde_json::to_string_pretty(&msg.artifact.data)
+            // Single (or undeclared) input: use the first available payload
+            // verbatim, falling back to null if somehow empty.
+            let data = inputs
+                .into_iter()
+                .next()
+                .map(|m| m.artifact.data)
+                .unwrap_or(serde_json::Value::Null);
+            serde_json::to_string_pretty(&data)
                 .map_err(|e| NodeError::Internal(e.to_string()))?
         };
 
@@ -170,7 +189,7 @@ mod tests {
             },
         };
 
-        let emits = node.process(&ctx, msg).await.unwrap();
+        let emits = node.process(&ctx, vec![msg]).await.unwrap();
         assert_eq!(emits.len(), 1);
         assert_eq!(emits[0].port, "out");
         assert_eq!(emits[0].artifact.kind, "Hypotheses");
@@ -237,7 +256,7 @@ mod tests {
             },
         };
 
-        let emits = node.process(&ctx, msg).await.unwrap();
+        let emits = node.process(&ctx, vec![msg]).await.unwrap();
         assert_eq!(emits.len(), 2);
 
         let ports: Vec<&str> = emits.iter().map(|e| e.port.as_str()).collect();
@@ -311,7 +330,7 @@ mod tests {
             },
         };
 
-        node.process(&ctx, msg).await.unwrap();
+        node.process(&ctx, vec![msg]).await.unwrap();
         let prompt = client.captured.lock().unwrap().clone().unwrap();
         assert!(prompt.starts_with("Port: context"));
     }

@@ -22,8 +22,8 @@ struct Activation {
     node_id: String,
     /// The context for this activation.
     ctx: NodeCtx,
-    /// The input message.
-    msg: PortMsg,
+    /// The joined input messages (one per populated input port).
+    inputs: Vec<PortMsg>,
 }
 
 /// The event-driven scheduler that walks the graph.
@@ -121,49 +121,41 @@ impl Scheduler {
             map
         };
 
-        // Unbounded so that `route_emission` never blocks waiting for the
-        // single consumer loop to drain a large fan-out (which would deadlock
-        // when one activation routes >256 new activations). Memory is bounded
-        // in practice by the graph topology and budget backstops.
+        // Unbounded so that a large fan-out never blocks the single consumer
+        // loop. Memory is bounded in practice by the graph topology and budget
+        // backstops.
         let (activation_tx, mut activation_rx) = mpsc::unbounded_channel::<Activation>();
         let mut pending: usize = 0;
 
+        // Per-node input buffer keyed by (node_id, round). The scheduler joins
+        // inputs: a node fires once when all its required input ports are
+        // present for a given round. Single-input nodes fire immediately on
+        // arrival, exactly as before.
+        let mut input_buffer: HashMap<(String, u32), HashMap<String, Artifact>> = HashMap::new();
+
         for (source_id, artifacts) in &initial_artifacts {
-            if let Some(node) = self.nodes.get(source_id) {
-                let ports = node.ports();
+            if self.nodes.get(source_id).is_some() {
                 for artifact in artifacts {
                     let span = span!(Level::INFO, "inject", node = %source_id);
                     let _guard = span.enter();
-
-                    let port_name = if let Some(input_name) = ports.input_names().first() {
-                        input_name.clone()
-                    } else {
-                        continue;
-                    };
-
-                    let mut ctx = NodeCtx::new(
-                        source_id.clone(),
-                        self.spec.node_kind(source_id).unwrap_or("unknown"),
+                    // Delivering the goal artifact into the source node's first
+                    // input port; this either fires immediately (single-input
+                    // node) or buffers until the remaining required inputs arrive.
+                    pending += self.deliver_input(
+                        source_id,
+                        // The first declared input port receives the goal.
+                        self.nodes[source_id]
+                            .ports()
+                            .input_names()
+                            .first()
+                            .cloned()
+                            .unwrap_or_default()
+                            .as_str(),
+                        artifact.clone(),
                         self.stats.rounds_completed,
-                        self.cancel.clone(),
-                    );
-                    ctx.event_tx = Some(self.event_tx.clone());
-
-                    let msg = PortMsg {
-                        port: port_name,
-                        artifact: artifact.clone(),
-                    };
-
-                    let act = Activation {
-                        node_id: source_id.clone(),
-                        ctx,
-                        msg,
-                    };
-
-                    if activation_tx.send(act).is_err() {
-                        return Err(SchedulerError::Internal("Activation channel closed".into()));
-                    }
-                    pending += 1;
+                        &mut input_buffer,
+                        &activation_tx,
+                    )?;
                 }
             }
         }
@@ -225,9 +217,9 @@ impl Scheduler {
                             })?;
 
                             let ctx = activation.ctx;
-                            let msg = activation.msg;
+                            let inputs = activation.inputs;
 
-                            let result = node.process(&ctx, msg).await;
+                            let result = node.process(&ctx, inputs).await;
 
                             drop(permit);
 
@@ -254,6 +246,8 @@ impl Scheduler {
                                             &node_id,
                                             &emit,
                                             &outbound,
+                                            self.stats.rounds_completed,
+                                            &mut input_buffer,
                                             &activation_tx,
                                         ).await?;
                                         pending += new_count;
@@ -306,7 +300,9 @@ impl Scheduler {
         Ok(self.stats.clone())
     }
 
-    /// Route a single emission along its outbound edges.
+    /// Route a single emission along its outbound edges, buffering each
+    /// delivered input and dispatching an activation when a target node's
+    /// required inputs are all present.
     ///
     /// Returns `(enqueued_count, crossed_feedback_edge)`.
     async fn route_emission(
@@ -314,6 +310,8 @@ impl Scheduler {
         from_node_id: &str,
         emit: &Emit,
         outbound: &HashMap<String, Vec<Edge>>,
+        round: u32,
+        input_buffer: &mut HashMap<(String, u32), HashMap<String, Artifact>>,
         activation_tx: &mpsc::UnboundedSender<Activation>,
     ) -> Result<(usize, bool), SchedulerError> {
         let Some(edges) = outbound.get(from_node_id) else {
@@ -328,45 +326,91 @@ impl Scheduler {
                 continue;
             }
 
-            let target_id = &edge.to_node;
-            let target_port = &edge.to_port;
-
             if edge.feedback {
                 crossed_feedback = true;
             }
 
-            let target_kind = self
-                .spec
-                .node_kind(target_id)
-                .unwrap_or("unknown")
-                .to_string();
+            // The round attributed to a feedback input is the *next* round,
+            // since it crossed a cycle boundary.
+            let target_round = if edge.feedback { round + 1 } else { round };
 
-            let mut ctx = NodeCtx::new(
-                target_id.clone(),
-                target_kind,
-                self.stats.rounds_completed,
-                self.cancel.clone(),
-            );
-            ctx.event_tx = Some(self.event_tx.clone());
-
-            let msg = PortMsg {
-                port: target_port.clone(),
-                artifact: emit.artifact.clone(),
-            };
-
-            let act = Activation {
-                node_id: target_id.clone(),
-                ctx,
-                msg,
-            };
-
-            if activation_tx.send(act).is_err() {
-                return Err(SchedulerError::Internal("Activation channel closed".into()));
-            }
-            enqueued += 1;
+            enqueued += self.deliver_input(
+                &edge.to_node,
+                &edge.to_port,
+                emit.artifact.clone(),
+                target_round,
+                input_buffer,
+                activation_tx,
+            )?;
         }
 
         Ok((enqueued, crossed_feedback))
+    }
+
+    /// Buffer a single input for `(node_id, round)` and, if the node now has
+    /// all required inputs present, drain the buffer into an `Activation` and
+    /// dispatch it. Returns the number of activations dispatched (0 or 1).
+    fn deliver_input(
+        &self,
+        node_id: &str,
+        port: &str,
+        artifact: Artifact,
+        round: u32,
+        input_buffer: &mut HashMap<(String, u32), HashMap<String, Artifact>>,
+        activation_tx: &mpsc::UnboundedSender<Activation>,
+    ) -> Result<usize, SchedulerError> {
+        let bucket = input_buffer.entry((node_id.to_string(), round)).or_default();
+        bucket.insert(port.to_string(), artifact);
+
+        // Determine readiness: are all required input ports present?
+        let Some(node) = self.nodes.get(node_id) else {
+            return Err(SchedulerError::NodeNotFound(node_id.to_string()));
+        };
+        let ports = node.ports();
+        let required: Vec<String> = ports.required_inputs();
+
+        let ready = !required.is_empty()
+            && required
+                .iter()
+                .all(|p| bucket.contains_key(p));
+
+        if !ready {
+            return Ok(0);
+        }
+
+        // Drain the buffer for this (node, round) into a joined input vec.
+        let bucket = input_buffer
+            .remove(&(node_id.to_string(), round))
+            .unwrap_or_default();
+        let mut inputs: Vec<PortMsg> = Vec::with_capacity(ports.inputs.len());
+        // Emit required inputs first, then any optional inputs that arrived.
+        for p in &ports.inputs {
+            if let Some(art) = bucket.get(&p.name) {
+                inputs.push(PortMsg {
+                    port: p.name.clone(),
+                    artifact: art.clone(),
+                });
+            }
+        }
+
+        let mut ctx = NodeCtx::new(
+            node_id.to_string(),
+            self.spec.node_kind(node_id).unwrap_or("unknown"),
+            round,
+            self.cancel.clone(),
+        );
+        ctx.event_tx = Some(self.event_tx.clone());
+
+        let act = Activation {
+            node_id: node_id.to_string(),
+            ctx,
+            inputs,
+        };
+
+        if activation_tx.send(act).is_err() {
+            return Err(SchedulerError::Internal("Activation channel closed".into()));
+        }
+        Ok(1)
     }
 }
 
@@ -395,7 +439,11 @@ mod tests {
             self.ports.clone()
         }
 
-        async fn process(&self, _ctx: &NodeCtx, _msg: PortMsg) -> Result<Vec<Emit>, NodeError> {
+        async fn process(
+            &self,
+            _ctx: &NodeCtx,
+            _inputs: Vec<PortMsg>,
+        ) -> Result<Vec<Emit>, NodeError> {
             if let Some(artifact) = &self.output {
                 Ok(vec![Emit::new("out", artifact.clone())])
             } else {
@@ -553,5 +601,158 @@ mod tests {
         .expect("run must not deadlock on large fan-out")
         .unwrap();
         assert_eq!(stats.rounds_completed, 0);
+    }
+
+    #[tokio::test]
+    async fn test_multi_input_node_receives_joined_inputs() {
+        // Regression (A): a node with multiple required inputs must receive
+        // ALL of them in a single process() call, not one call per input.
+        use std::sync::Mutex;
+
+        struct JoiningNode {
+            received: Arc<Mutex<Vec<Vec<String>>>>,
+            ports: PortSpec,
+        }
+
+        #[async_trait]
+        impl Node for JoiningNode {
+            fn ports(&self) -> PortSpec {
+                self.ports.clone()
+            }
+
+            async fn process(
+                &self,
+                _ctx: &NodeCtx,
+                inputs: Vec<PortMsg>,
+            ) -> Result<Vec<Emit>, NodeError> {
+                let ports: Vec<String> = inputs.iter().map(|m| m.port.clone()).collect();
+                self.received.lock().unwrap().push(ports);
+                Ok(vec![])
+            }
+        }
+
+        let received: Arc<Mutex<Vec<Vec<String>>>> = Arc::new(Mutex::new(Vec::new()));
+        let join_ports = PortSpec::new(
+            vec![
+                PortSpecEntry {
+                    name: "in".into(),
+                    direction: PortDirection::Input,
+                    kind: "Goal".to_string(),
+                    required: true,
+                },
+                PortSpecEntry {
+                    name: "context".into(),
+                    direction: PortDirection::Input,
+                    kind: "Insights".to_string(),
+                    required: true,
+                },
+            ],
+            vec![],
+        );
+
+        let mut nodes = HashMap::new();
+        nodes.insert(
+            "gen".to_string(),
+            BoxedNode::new(JoiningNode {
+                received: Arc::clone(&received),
+                ports: join_ports,
+            }),
+        );
+        nodes.insert(
+            "goal_src".to_string(),
+            BoxedNode::new(TestNode {
+                ports: PortSpec::new(
+                    vec![PortSpecEntry {
+                        name: "in".into(),
+                        direction: PortDirection::Input,
+                        kind: "Goal".to_string(),
+                        required: true,
+                    }],
+                    vec![PortSpecEntry {
+                        name: "out".into(),
+                        direction: PortDirection::Output,
+                        kind: "Goal".to_string(),
+                        required: false,
+                    }],
+                ),
+                output: Some(Artifact {
+                    kind: "Goal".to_string(),
+                    data: serde_json::json!({ "goal": "x" }),
+                }),
+            }),
+        );
+        nodes.insert(
+            "ctx_src".to_string(),
+            BoxedNode::new(TestNode {
+                ports: PortSpec::new(
+                    vec![PortSpecEntry {
+                        name: "in".into(),
+                        direction: PortDirection::Input,
+                        kind: "Goal".to_string(),
+                        required: true,
+                    }],
+                    vec![PortSpecEntry {
+                        name: "out".into(),
+                        direction: PortDirection::Output,
+                        kind: "Insights".to_string(),
+                        required: false,
+                    }],
+                ),
+                output: Some(Artifact {
+                    kind: "Insights".to_string(),
+                    data: serde_json::json!({ "insights": [] }),
+                }),
+            }),
+        );
+
+        let spec = GraphSpec {
+            name: Some("join-test".into()),
+            description: None,
+            nodes: vec![
+                GraphNodeSpec {
+                    id: "goal_src".into(),
+                    kind: "test.node".into(),
+                    config: serde_json::Value::Null,
+                    description: None,
+                },
+                GraphNodeSpec {
+                    id: "ctx_src".into(),
+                    kind: "test.node".into(),
+                    config: serde_json::Value::Null,
+                    description: None,
+                },
+                GraphNodeSpec {
+                    id: "gen".into(),
+                    kind: "test.node".into(),
+                    config: serde_json::Value::Null,
+                    description: None,
+                },
+            ],
+            edges: vec![
+                Edge::new("goal_src", "out", "gen", "in"),
+                Edge::new("ctx_src", "out", "gen", "context"),
+            ],
+            metadata: serde_json::Value::Null,
+        };
+        let mut scheduler = Scheduler::new(spec, nodes, Budget::default(), 4);
+        let goal = Artifact {
+            kind: "Goal".to_string(),
+            data: serde_json::json!({}),
+        };
+        let initial = HashMap::from([
+            ("goal_src".to_string(), vec![goal.clone()]),
+            ("ctx_src".to_string(), vec![goal]),
+        ]);
+        scheduler.run(initial).await.unwrap();
+
+        let calls = received.lock().unwrap().clone();
+        assert_eq!(
+            calls.len(),
+            1,
+            "joining node should be activated exactly once, got {calls:?}"
+        );
+        let mut ports = calls[0].clone();
+        ports.sort();
+        assert_eq!(ports, vec!["context".to_string(), "in".to_string()]);
     }
 }

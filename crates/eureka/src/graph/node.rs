@@ -124,8 +124,15 @@ pub trait Node: Send + Sync {
     /// Declared input/output ports and the `ArtifactKind` each carries.
     fn ports(&self) -> PortSpec;
 
-    /// React to one artifact; emit zero or more artifacts on named output ports.
-    async fn process(&self, ctx: &NodeCtx, msg: PortMsg) -> Result<Vec<Emit>, NodeError>;
+    /// React to one or more input artifacts arriving on the node's input
+    /// ports, then emit zero or more artifacts on named output ports.
+    ///
+    /// The scheduler joins inputs: when a node has all required inputs ready
+    /// for a round, `process` is called once with every available input
+    /// (required inputs plus any optional inputs that have arrived). For
+    /// single-input nodes this is exactly one `PortMsg`; for multi-input
+    /// nodes it is one per populated port.
+    async fn process(&self, ctx: &NodeCtx, inputs: Vec<PortMsg>) -> Result<Vec<Emit>, NodeError>;
 }
 
 /// A type-erased boxed node that supports cloning via Arc.
@@ -157,8 +164,12 @@ impl BoxedNode {
     /// # Errors
     ///
     /// Returns a `NodeError` if the underlying node fails to process the message.
-    pub async fn process(&self, ctx: &NodeCtx, msg: PortMsg) -> Result<Vec<Emit>, NodeError> {
-        self.inner.process(ctx, msg).await
+    pub async fn process(
+        &self,
+        ctx: &NodeCtx,
+        inputs: Vec<PortMsg>,
+    ) -> Result<Vec<Emit>, NodeError> {
+        self.inner.process(ctx, inputs).await
     }
 }
 
@@ -175,8 +186,15 @@ mod tests {
             PortSpec::new(vec![], vec![])
         }
 
-        async fn process(&self, _ctx: &NodeCtx, msg: PortMsg) -> Result<Vec<Emit>, NodeError> {
-            Ok(vec![Emit::new(msg.port, msg.artifact)])
+        async fn process(
+            &self,
+            _ctx: &NodeCtx,
+            inputs: Vec<PortMsg>,
+        ) -> Result<Vec<Emit>, NodeError> {
+            Ok(inputs
+                .into_iter()
+                .map(|m| Emit::new(m.port, m.artifact))
+                .collect())
         }
     }
 
@@ -192,7 +210,7 @@ mod tests {
                 data: serde_json::json!({ "goal": "Test" }),
             },
         };
-        let emits = node.process(&ctx, msg).await.unwrap();
+        let emits = node.process(&ctx, vec![msg]).await.unwrap();
         assert_eq!(emits.len(), 1);
     }
 }

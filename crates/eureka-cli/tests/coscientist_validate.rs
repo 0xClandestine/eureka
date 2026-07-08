@@ -33,7 +33,7 @@ impl Node for MockRanker {
             PortSpecEntry{name:"state".into(),direction:PortDirection::Output,kind:"Ranking".into(),required:false},
         ],
     )}
-    async fn process(&self,_:&NodeCtx,_:PortMsg)->Result<Vec<Emit>,NodeError>{Ok(vec![])}
+    async fn process(&self,_:&NodeCtx,_:Vec<PortMsg>)->Result<Vec<Emit>,NodeError>{Ok(vec![])}
 }
 
 struct MockProx;
@@ -46,7 +46,7 @@ impl Node for MockProx {
             PortSpecEntry{name:"graph".into(),direction:PortDirection::Output,kind:"ProximityGraph".into(),required:false},
         ],
     )}
-    async fn process(&self,_:&NodeCtx,_:PortMsg)->Result<Vec<Emit>,NodeError>{Ok(vec![])}
+    async fn process(&self,_:&NodeCtx,_:Vec<PortMsg>)->Result<Vec<Emit>,NodeError>{Ok(vec![])}
 }
 
 struct MockSup;
@@ -59,7 +59,7 @@ impl Node for MockSup {
             PortSpecEntry{name:"halt".into(),direction:PortDirection::Output,kind:"Control".into(),required:false},
         ],
     )}
-    async fn process(&self,_:&NodeCtx,_:PortMsg)->Result<Vec<Emit>,NodeError>{Ok(vec![])}
+    async fn process(&self,_:&NodeCtx,_:Vec<PortMsg>)->Result<Vec<Emit>,NodeError>{Ok(vec![])}
 }
 
 struct DummyClient;

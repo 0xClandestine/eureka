@@ -160,7 +160,19 @@ impl Node for ControlNode {
         self.port_spec.clone()
     }
 
-    async fn process(&self, ctx: &NodeCtx, msg: PortMsg) -> Result<Vec<Emit>, NodeError> {
+    async fn process(
+        &self,
+        ctx: &NodeCtx,
+        inputs: Vec<PortMsg>,
+    ) -> Result<Vec<Emit>, NodeError> {
+        // Control nodes currently consume a single call envelope per
+        // invocation. When multiple inputs arrive together, forward the first
+        // (primary) input; the subprocess protocol for multi-input control
+        // nodes can be extended later.
+        let msg = inputs
+            .into_iter()
+            .next()
+            .ok_or_else(|| NodeError::Internal("control node activated with no inputs".into()))?;
         self.invoke(ctx, &msg).await
     }
 }
@@ -236,7 +248,7 @@ mod tests {
             },
         };
 
-        let emits = node.process(&ctx, msg).await.unwrap();
+        let emits = node.process(&ctx, vec![msg]).await.unwrap();
         assert_eq!(emits.len(), 1);
         assert_eq!(emits[0].port, "out");
         assert_eq!(emits[0].artifact.data["value"], 42);

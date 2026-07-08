@@ -458,7 +458,11 @@ mod tests {
             self.ports.clone()
         }
 
-        async fn process(&self, _ctx: &NodeCtx, _msg: PortMsg) -> Result<Vec<Emit>, NodeError> {
+        async fn process(
+            &self,
+            _ctx: &NodeCtx,
+            _inputs: Vec<PortMsg>,
+        ) -> Result<Vec<Emit>, NodeError> {
             Ok(vec![])
         }
     }
