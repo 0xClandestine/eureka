@@ -17,6 +17,7 @@ use figment::{
     Figment,
 };
 use serde::{Deserialize, Serialize};
+use schemars::JsonSchema;
 use thiserror::Error;
 
 // ---------------------------------------------------------------------------
@@ -121,6 +122,98 @@ impl Default for Budget {
             max_tokens: 5_000_000,
             max_wallclock: 2700.0, // 45 minutes
             max_rounds: 12,
+        }
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Run statistics
+// ---------------------------------------------------------------------------
+
+/// Accumulated run statistics, aggregated by the scheduler from each node's
+/// [`NodeUsage`](crate::graph::node::NodeUsage) report and checked against a
+/// [`Budget`] each cycle.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct RunStats {
+    /// Total cost accumulated so far (best-effort; `0.0` if no per-model rate
+    /// is configured — see [`ProviderConfig::cost_per_million_tokens`]).
+    pub total_cost_usd: f64,
+    /// Total tokens consumed so far (input + output, or the provider's
+    /// aggregate when it does not split them).
+    pub total_tokens: u64,
+    /// Total prompt/input tokens consumed so far.
+    pub total_input_tokens: u64,
+    /// Total completion/output tokens consumed so far.
+    pub total_output_tokens: u64,
+    /// Wall-clock seconds elapsed.
+    pub elapsed_secs: f64,
+    /// Rounds completed.
+    pub rounds_completed: u32,
+}
+
+impl RunStats {
+    /// Check whether any budget limit has been exceeded.
+    ///
+    /// This is a hard backstop. The graph's governor node is the primary
+    /// round controller; this only fires if cost/time/token limits are hit
+    /// or if rounds exceed the configured hard cap.
+    #[must_use]
+    pub fn is_budget_exhausted(&self, budget: &Budget) -> Option<String> {
+        if self.total_cost_usd >= budget.max_cost_usd {
+            return Some(format!(
+                "Cost budget exhausted: ${:.2} >= ${:.2}",
+                self.total_cost_usd, budget.max_cost_usd
+            ));
+        }
+        if self.total_tokens >= budget.max_tokens {
+            return Some(format!(
+                "Token budget exhausted: {} >= {}",
+                self.total_tokens, budget.max_tokens
+            ));
+        }
+        if self.elapsed_secs >= budget.max_wallclock {
+            return Some(format!(
+                "Wall-clock budget exhausted: {:.0}s >= {:.0}s",
+                self.elapsed_secs, budget.max_wallclock
+            ));
+        }
+        if self.rounds_completed >= budget.max_rounds {
+            return Some(format!(
+                "Round budget exhausted: {} >= {}",
+                self.rounds_completed, budget.max_rounds
+            ));
+        }
+        None
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Control signals
+// ---------------------------------------------------------------------------
+
+/// Control signals that flow through control nodes and feedback edges.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+pub enum ControlSignal {
+    /// Continue processing (next round).
+    Continue {
+        /// The round number.
+        round: u32,
+    },
+    /// Halt processing (termination).
+    Halt {
+        /// Reason for halting.
+        reason: String,
+    },
+    /// Pause for human review.
+    Pause,
+}
+
+impl std::fmt::Display for ControlSignal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Continue { round } => write!(f, "Continue(round={round})"),
+            Self::Halt { reason } => write!(f, "Halt({reason})"),
+            Self::Pause => write!(f, "Pause"),
         }
     }
 }

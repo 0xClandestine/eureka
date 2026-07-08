@@ -10,9 +10,8 @@ use std::sync::Arc;
 
 use crate::agents::def::{AgentConfig, AgentDef, AgentPort, ToolDef};
 use crate::agents::{LlmAgentNode, LlmClient, RigClient};
-use crate::config::{EurekaConfig, ProviderKind};
+use crate::config::{EurekaConfig, ProviderKind, RunStats};
 use crate::graph::artifact::Artifact;
-use crate::graph::control::RunStats;
 use crate::graph::node::BoxedNode;
 use crate::graph::port::{PortDef, PortDirection, PortSpec, PortSpecEntry};
 use crate::graph::spec::{GraphError, GraphNodeSpec, GraphSpec};

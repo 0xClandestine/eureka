@@ -6,9 +6,8 @@ use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, span, warn, Level};
 
-use crate::config::Budget;
+use crate::config::{Budget, RunStats};
 use crate::graph::artifact::Artifact;
-use crate::graph::control::RunStats;
 use crate::graph::edge::Edge;
 use crate::graph::node::{BoxedNode, Emit, NodeCtx, NodeError, NodeUsage, PortMsg};
 use crate::graph::spec::GraphSpec;
