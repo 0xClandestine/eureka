@@ -13,7 +13,6 @@
 //! | [`manifest`] | YAML graph format — loads a file into a [`graph::GraphSpec`] |
 //! | [`agents`] | LLM-backed nodes: `AgentDef`, `LlmClient`, `LlmAgentNode` |
 //! | [`control`] | Subprocess-backed control nodes and the shared process runner |
-//! | [`db`] | SQLite session persistence |
 //! | [`config`] | Typed, layered runtime configuration |
 //! | [`session`] | Assembles all of the above into a single runnable session |
 

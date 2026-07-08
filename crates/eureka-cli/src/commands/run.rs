@@ -55,6 +55,26 @@ pub async fn execute(args: RunArgs) -> Result<()> {
     // Generate session ID early so it can be shared with the DB and plugins.
     let session_id = uuid::Uuid::now_v7();
 
+    // Compute a per-session SQLite database path. Control nodes (supervisor,
+    // ranker, proximity) use EUREKA_DB_PATH to persist Elo ratings, context
+    // memory, and the proximity graph across rounds. Co-locate it with the
+    // graph manifest under a `.eureka/` subdirectory so a graph's run state
+    // lives alongside the graph.
+    let graph_path = Path::new(&config.graph);
+    let graph_dir = graph_path
+        .parent()
+        .unwrap_or_else(|| Path::new("."));
+    let sessions_dir = graph_dir.join(".eureka").join("sessions");
+    let db_path = sessions_dir.join(format!("{session_id}.sqlite"));
+    if let Err(e) = std::fs::create_dir_all(&sessions_dir) {
+        tracing::warn!(
+            error = %e,
+            "Failed to create sessions directory '{}'; control-node persistence disabled",
+            sessions_dir.display()
+        );
+    }
+    let db_path = if sessions_dir.exists() { Some(db_path) } else { None };
+
     let goal = serde_json::json!({
         "goal": args.goal,
         "description": args.description.clone().unwrap_or_default(),
@@ -62,8 +82,8 @@ pub async fn execute(args: RunArgs) -> Result<()> {
     });
 
     // Create the session — loads the manifest, validates, preps for run
-    let mut session =
-        Session::new(config, &session_id.to_string(), None).context("Failed to create session")?;
+    let mut session = Session::new(config, &session_id.to_string(), db_path)
+        .context("Failed to create session")?;
 
     tracing::info!(
         goal = %args.goal,

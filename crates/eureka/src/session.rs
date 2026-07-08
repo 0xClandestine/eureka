@@ -872,6 +872,61 @@ edges: []
     }
 
     #[test]
+    fn test_control_node_receives_db_path_env() {
+        // Regression (E): when a db_path is provided, the control node must
+        // expose it to the subprocess as EUREKA_DB_PATH so the Python control
+        // nodes can persist state across rounds.
+        if std::process::Command::new("python3").arg("--version").output().is_err() {
+            return;
+        }
+        let dir = tempfile::TempDir::new().unwrap();
+        let graph_path = dir.path().join("graph.yml");
+        std::fs::write(
+            &graph_path,
+            r#"
+name: db-test
+control:
+  - id: probe
+    kind: probe-ctrl
+    command: [python3, -c, "import os,json; print(json.dumps({\"port\":\"out\",\"artifact\":{\"kind\":\"TestOut\",\"data\":{\"db\":os.environ.get('EUREKA_DB_PATH','')}}}))"]
+    inputs: [{ port: in, kind: Goal }]
+    outputs: [{ port: out, kind: TestOut }]
+edges: []
+"#,
+        )
+        .unwrap();
+
+        let mut config = EurekaConfig::default();
+        config.graph = graph_path.to_string_lossy().to_string();
+
+        let db_path = dir.path().join("session.sqlite");
+        let mut session = Session::new(
+            config,
+            "00000000-0000-0000-0000-000000000000",
+            Some(db_path.clone()),
+        )
+        .expect("session should construct");
+
+        let ctrl_spec = session.manifest.control.first().unwrap().clone();
+        let boxed = session.build_control_node(&ctrl_spec, &serde_json::Value::Null);
+        use crate::graph::node::Node;
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let ctx = NodeCtx::new("probe", "probe-ctrl", 0, cancel);
+        let msg = PortMsg {
+            port: "in".into(),
+            artifact: Artifact {
+                kind: "Goal".to_string(),
+                data: serde_json::json!({}),
+            },
+        };
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let emits = rt.block_on(boxed.process(&ctx, msg)).expect("spawn ok");
+        assert_eq!(emits.len(), 1);
+        let db = emits[0].artifact.data["db"].as_str().unwrap_or("");
+        assert_eq!(db, db_path.to_string_lossy());
+    }
+
+    #[test]
     fn test_session_from_parts_validation() {
         let config = EurekaConfig::default();
         let mut nodes = HashMap::new();
