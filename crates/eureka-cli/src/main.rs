@@ -109,7 +109,9 @@ async fn main() -> anyhow::Result<()> {
             commands::validate::execute(&graph)?;
         }
         Commands::List => {
-            commands::list::execute()?;
+            commands::list::execute(commands::list::ListArgs {
+                config_path: cli.config,
+            })?;
         }
     }
 
