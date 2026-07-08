@@ -114,9 +114,14 @@ allowing `unwrap_used` in `#[cfg(test)]` modules or switching tests to
 - **Feedback edges** (`feedback: true`) close cycles and are excluded from
   source-node detection so cyclic-but-source nodes (e.g. `generation`) still
   receive the initial goal.
-- **Round counting**: the scheduler increments `rounds_completed` whenever an
-  emission crosses a feedback edge. "Round" ≈ "feedback crossing count", not a
-  clean cycle index.
+- **Round counting**: the scheduler tracks a synchronized `current_round`.
+  Forward edges deliver to the same round; feedback edges deliver to
+  `round + 1`. A round is "complete" only when its outstanding-activation
+  count hits zero, at which point the scheduler advances to the next round
+  that has buffered work and emits a single `CycleCompleted`. So
+  `rounds_completed` counts fully drained cycles, not per-emit feedback
+  crossings — a single emit fanning out to many feedback edges increments the
+  round by at most one.
 - **Budget**: `RunStats` aggregates `total_cost_usd`/`total_tokens`/
   `total_input_tokens`/`total_output_tokens` from each `Node::process`'s
   `NodeUsage` return. The cost/token backstops (`max_cost_usd`/
@@ -144,20 +149,7 @@ allowing `unwrap_used` in `#[cfg(test)]` modules or switching tests to
 These are known limitations or surprising behaviors — verify before relying
 on the affected behavior:
 
-1. **Round model is fuzzy.** `rounds_completed` is incremented per emission
-   that crosses a feedback edge, and feedback inputs are attributed to
-   `round + 1`. There is no synchronized cycle/barrier, so `round` is really
-   a "feedback-crossing count". `max_rounds` is a loose backstop; the
-   supervisor control node's own `max_rounds` is the primary controller.
-2. **Control nodes receive a single input per activation.** `ControlNode::process`
-   forwards only the first input to the subprocess (preserving the legacy
-   single-envelope protocol). Multi-input control nodes that want all inputs
-   together need a protocol extension. LLM agents, by contrast, now receive
-   all joined inputs in one `process()` call.
-3. **`graph::control` re-exports `config::Budget`/`parse_duration`**, which
-   breaks the "graph has no I/O, no domain" promise documented in
-   `graph/mod.rs`. Historical; move to `config` or a neutral module.
-4. **Cost estimate is a flat per-model rate.** rig has no pricing abstraction,
+1. **Cost estimate is a flat per-model rate.** rig has no pricing abstraction,
    so `ProviderConfig::cost_per_million_tokens` (optional) is a single-rate
    approximation that lets `max_cost_usd` fire. Real per-input/per-output
    pricing differs and is provider-specific. When the rate is `None`, only
@@ -166,6 +158,17 @@ on the affected behavior:
 
 ## Previously fixed (were gotchas, now resolved)
 
+- ~~Round model was fuzzy~~ — fixed; the scheduler now tracks a synchronized
+  `current_round` with per-round pending counts. Forward edges stay in the
+  same round, feedback edges deliver to `round + 1`, and a round completes
+  only when its pending count hits zero — so `rounds_completed` counts fully
+  drained cycles, not per-emit feedback crossings.
+- ~~Control nodes received only the first input~~ — fixed; the call envelope
+  now carries an `inputs` array of every populated input port (plus the
+  backward-compatible top-level `port`/`artifact` for legacy scripts).
+- ~~`graph::control` re-exported `config::Budget`/`parse_duration`~~ — fixed;
+  `RunStats`/`ControlSignal` now live in `config`, the `graph` module has zero
+  production references to `config`, and the re-exports were dropped.
 - ~~Control-node `command[0]` mis-resolved to `graph_dir/python3`~~ — fixed;
   commands are used verbatim and the node spawns with `current_dir = graph_dir`.
 - ~~Agent tools ran with the eureka process cwd~~ — fixed; tool subprocesses

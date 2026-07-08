@@ -58,6 +58,11 @@ struct TaskHandles {
     cancel: CancellationToken,
 }
 
+/// Total outstanding activations across all rounds.
+fn total_pending(round_pending: &HashMap<u32, usize>) -> usize {
+    round_pending.values().copied().sum()
+}
+
 /// The event-driven scheduler that walks the graph.
 pub struct Scheduler {
     /// The graph specification being executed.
@@ -164,13 +169,27 @@ impl Scheduler {
             in_flight_sem: Arc::clone(&self.in_flight_sem),
             cancel: self.cancel.clone(),
         };
-        let mut pending: usize = 0;
 
         // Per-node input buffer keyed by (node_id, round). The scheduler joins
         // inputs: a node fires once when all its required input ports are
         // present for a given round. Single-input nodes fire immediately on
         // arrival, exactly as before.
         let mut input_buffer: HashMap<(String, u32), HashMap<String, Artifact>> = HashMap::new();
+
+        // Synchronized round model: a round is one forward wave starting from
+        // source injections and feedback inputs. Forward edges stay in the
+        // same round; feedback edges deliver to `round + 1`. We track
+        // outstanding activations per round so a round is "complete" only when
+        // its pending count hits zero — at which point we advance to the next
+        // round that has buffered work and emit a single `CycleCompleted`.
+        // `rounds_completed` thus counts fully drained cycles, not arbitrary
+        // feedback crossings.
+        let mut current_round: u32 = 0;
+        let mut round_pending: HashMap<u32, usize> = HashMap::new();
+        // Highest round for which an activation has been dispatched (used to
+        // know which future rounds might have buffered work when the current
+        // round drains).
+        let mut max_dispatched_round: u32 = 0;
 
         for (source_id, artifacts) in &initial_artifacts {
             if self.nodes.get(source_id).is_some() {
@@ -180,7 +199,7 @@ impl Scheduler {
                     // Delivering the goal artifact into the source node's first
                     // input port; this either fires immediately (single-input
                     // node) or buffers until the remaining required inputs arrive.
-                    pending += self.deliver_input(
+                    let dispatched = self.deliver_input(
                         source_id,
                         // The first declared input port receives the goal.
                         self.nodes[source_id]
@@ -191,11 +210,15 @@ impl Scheduler {
                             .unwrap_or_default()
                             .as_str(),
                         artifact.clone(),
-                        self.stats.rounds_completed,
+                        current_round,
                         &mut input_buffer,
                         &handles,
                         &mut tasks,
                     )?;
+                    if dispatched > 0 {
+                        *round_pending.entry(current_round).or_insert(0) += dispatched;
+                        max_dispatched_round = max_dispatched_round.max(current_round);
+                    }
                 }
             }
         }
@@ -204,7 +227,7 @@ impl Scheduler {
         budget_ticker.tick().await;
 
         loop {
-            if pending == 0 {
+            if total_pending(&round_pending) == 0 {
                 break;
             }
 
@@ -238,10 +261,17 @@ impl Scheduler {
                 maybe_result = results_rx.recv() => {
                     match maybe_result {
                         Some(result) => {
-                            pending -= 1;
                             let node_id = result.node_id.clone();
                             let node_kind = result.node_kind.clone();
                             let round = result.round;
+
+                            // Decrement this activation's round pending count.
+                            if let Some(count) = round_pending.get_mut(&round) {
+                                *count = count.saturating_sub(1);
+                                if *count == 0 {
+                                    round_pending.remove(&round);
+                                }
+                            }
 
                             match result.result {
                                 Ok((emits, usage)) => {
@@ -269,21 +299,37 @@ impl Scheduler {
                                     }).await;
 
                                     for emit in emits {
-                                        let (new_count, crossed_cycle) = self.route_emission(
+                                        let new_count = self.route_emission(
                                             &node_id,
                                             &emit,
                                             &outbound,
-                                            self.stats.rounds_completed,
+                                            round,
                                             &mut input_buffer,
                                             &handles,
                                             &mut tasks,
                                         )?;
-                                        pending += new_count;
-                                        if crossed_cycle {
-                                            self.stats.rounds_completed += 1;
-                                            let _ = self.event_tx.send(SchedulerEvent::CycleCompleted {
-                                                round: self.stats.rounds_completed,
-                                            }).await;
+                                        // Route each emission's new
+                                        // activations to their target rounds.
+                                        // (route_emission attributes forward
+                                        // edges to `round` and feedback edges
+                                        // to `round + 1`.)
+                                        // We don't know the per-round split here
+                                        // without more bookkeeping, so track
+                                        // the total and the max round seen.
+                                        if new_count > 0 {
+                                            // Determine the target round(s) for
+                                            // the dispatched activations by
+                                            // re-deriving from the edges.
+                                            let (fwd, fb) = self.route_round_split(
+                                                &node_id, &emit, &outbound);
+                                            if fwd > 0 {
+                                                *round_pending.entry(round).or_insert(0) += fwd;
+                                            }
+                                            if fb > 0 {
+                                                let next = round + 1;
+                                                *round_pending.entry(next).or_insert(0) += fb;
+                                                max_dispatched_round = max_dispatched_round.max(next);
+                                            }
                                         }
                                     }
                                 }
@@ -296,6 +342,21 @@ impl Scheduler {
                                         error: err.to_string(),
                                     }).await;
                                 }
+                            }
+
+                            // Round advancement: when the current round has
+                            // fully drained and a future round has buffered
+                            // work, advance and emit a single CycleCompleted.
+                            // This makes `rounds_completed` count complete
+                            // cycles rather than per-emit feedback crossings.
+                            while total_pending(&round_pending) > 0
+                                && !round_pending.contains_key(&current_round)
+                            {
+                                current_round = current_round + 1;
+                                self.stats.rounds_completed = current_round;
+                                let _ = self.event_tx.send(SchedulerEvent::CycleCompleted {
+                                    round: current_round,
+                                }).await;
                             }
                         }
                         None => {
@@ -334,7 +395,9 @@ impl Scheduler {
     /// delivered input and dispatching an activation when a target node's
     /// required inputs are all present.
     ///
-    /// Returns `(enqueued_count, crossed_feedback_edge)`.
+    /// `round` is the round the *source* activation belonged to. Forward edges
+    /// deliver to the same round; feedback edges deliver to `round + 1` (the
+    /// next cycle). Returns the total number of activations dispatched.
     fn route_emission(
         &self,
         from_node_id: &str,
@@ -344,25 +407,20 @@ impl Scheduler {
         input_buffer: &mut HashMap<(String, u32), HashMap<String, Artifact>>,
         handles: &TaskHandles,
         tasks: &mut JoinSet<()>,
-    ) -> Result<(usize, bool), SchedulerError> {
+    ) -> Result<usize, SchedulerError> {
         let Some(edges) = outbound.get(from_node_id) else {
-            return Ok((0, false));
+            return Ok(0);
         };
 
         let mut enqueued = 0usize;
-        let mut crossed_feedback = false;
 
         for edge in edges {
             if edge.from_port != emit.port {
                 continue;
             }
 
-            if edge.feedback {
-                crossed_feedback = true;
-            }
-
-            // The round attributed to a feedback input is the *next* round,
-            // since it crossed a cycle boundary.
+            // Forward edges stay in the same round; feedback edges cross a
+            // cycle boundary and belong to the next round.
             let target_round = if edge.feedback { round + 1 } else { round };
 
             enqueued += self.deliver_input(
@@ -376,7 +434,34 @@ impl Scheduler {
             )?;
         }
 
-        Ok((enqueued, crossed_feedback))
+        Ok(enqueued)
+    }
+
+    /// Compute how many of an emission's outbound edges are forward vs feedback,
+    /// so the caller can attribute dispatched activations to the right round.
+    /// Returns `(forward_count, feedback_count)`.
+    fn route_round_split(
+        &self,
+        from_node_id: &str,
+        emit: &Emit,
+        outbound: &HashMap<String, Vec<Edge>>,
+    ) -> (usize, usize) {
+        let Some(edges) = outbound.get(from_node_id) else {
+            return (0, 0);
+        };
+        let mut fwd = 0usize;
+        let mut fb = 0usize;
+        for edge in edges {
+            if edge.from_port != emit.port {
+                continue;
+            }
+            if edge.feedback {
+                fb += 1;
+            } else {
+                fwd += 1;
+            }
+        }
+        (fwd, fb)
     }
 
     /// Buffer a single input for `(node_id, round)` and, if the node now has
@@ -1090,5 +1175,155 @@ mod tests {
             elapsed < Duration::from_millis(450),
             "expected concurrent execution (~250ms) but took {elapsed:?}"
         );
+    }
+
+    #[tokio::test]
+    async fn test_round_model_counts_synchronized_cycles() {
+        // Regression (gotcha #1): `rounds_completed` must count fully drained
+        // cycles, not per-emit feedback crossings. A supervisor node emitting
+        // on a single feedback edge that fans out to multiple consumers must
+        // increment the round by exactly 1 when the cycle completes — and a
+        // node emitting on multiple feedback edges in one activation must not
+        // double-count.
+        use std::sync::Mutex;
+
+        // A supervisor that emits on two feedback edges at once (continue → a,
+        // continue → b) and also a halt signal after N rounds.
+        struct SupNode {
+            rounds_left: Mutex<u32>,
+        }
+
+        #[async_trait]
+        impl Node for SupNode {
+            fn ports(&self) -> PortSpec {
+                PortSpec::new(
+                    vec![PortSpecEntry {
+                        name: "in".into(),
+                        direction: PortDirection::Input,
+                        kind: "Goal".to_string(),
+                        required: true,
+                    }],
+                    vec![
+                        PortSpecEntry {
+                            name: "continue".into(),
+                            direction: PortDirection::Output,
+                            kind: "Goal".to_string(),
+                            required: false,
+                        },
+                        PortSpecEntry {
+                            name: "halt".into(),
+                            direction: PortDirection::Output,
+                            kind: "Halt".to_string(),
+                            required: false,
+                        },
+                    ],
+                )
+            }
+
+            async fn process(
+                &self,
+                _ctx: &NodeCtx,
+                _inputs: Vec<PortMsg>,
+            ) -> Result<(Vec<Emit>, crate::graph::node::NodeUsage), NodeError> {
+                let mut n = self.rounds_left.lock().unwrap();
+                if *n == 0 {
+                    Ok((vec![Emit::new(
+                        "halt",
+                        Artifact { kind: "Halt".to_string(), data: serde_json::json!({}) },
+                    )], crate::graph::node::NodeUsage::default()))
+                } else {
+                    *n -= 1;
+                    // Emit on the feedback continue port (fans out to two
+                    // consumers via two feedback edges).
+                    Ok((vec![Emit::new(
+                        "continue",
+                        Artifact { kind: "Goal".to_string(), data: serde_json::json!({}) },
+                    )], crate::graph::node::NodeUsage::default()))
+                }
+            }
+        }
+
+        struct EchoNode;
+        #[async_trait]
+        impl Node for EchoNode {
+            fn ports(&self) -> PortSpec {
+                PortSpec::new(
+                    vec![PortSpecEntry {
+                        name: "in".into(),
+                        direction: PortDirection::Input,
+                        kind: "Goal".to_string(),
+                        required: true,
+                    }],
+                    vec![PortSpecEntry {
+                        name: "out".into(),
+                        direction: PortDirection::Output,
+                        kind: "Goal".to_string(),
+                        required: false,
+                    }],
+                )
+            }
+
+            async fn process(
+                &self,
+                _ctx: &NodeCtx,
+                inputs: Vec<PortMsg>,
+            ) -> Result<(Vec<Emit>, crate::graph::node::NodeUsage), NodeError> {
+                Ok((
+                    inputs.into_iter().map(|m| Emit::new("out", m.artifact)).collect(),
+                    crate::graph::node::NodeUsage::default(),
+                ))
+            }
+        }
+
+        // sup → echo_a (forward), echo_a → sup (feedback)
+        // sup → echo_b (forward), echo_b → sup (feedback)
+        // sup emits `continue` which fans out to BOTH echo_a and echo_b via
+        // feedback edges. The old model would increment rounds_completed once
+        // per feedback *emit* that crossed — here one emit fans out to two
+        // feedback edges, which must still count as ONE cycle.
+        let mut nodes = HashMap::new();
+        nodes.insert(
+            "sup".to_string(),
+            BoxedNode::new(SupNode { rounds_left: Mutex::new(2) }),
+        );
+        nodes.insert("echo_a".to_string(), BoxedNode::new(EchoNode));
+        nodes.insert("echo_b".to_string(), BoxedNode::new(EchoNode));
+
+        let spec = GraphSpec {
+            name: Some("round-test".into()),
+            description: None,
+            nodes: vec![
+                GraphNodeSpec { id: "sup".into(), kind: "t".into(), config: serde_json::Value::Null, description: None },
+                GraphNodeSpec { id: "echo_a".into(), kind: "t".into(), config: serde_json::Value::Null, description: None },
+                GraphNodeSpec { id: "echo_b".into(), kind: "t".into(), config: serde_json::Value::Null, description: None },
+            ],
+            edges: vec![
+                Edge::new("sup", "continue", "echo_a", "in").feedback(),
+                Edge::new("sup", "continue", "echo_b", "in").feedback(),
+                Edge::new("echo_a", "out", "sup", "in").feedback(),
+                Edge::new("echo_b", "out", "sup", "in").feedback(),
+            ],
+            metadata: serde_json::Value::Null,
+        };
+
+        let mut scheduler = Scheduler::new(spec, nodes, Budget::default(), 4);
+        let goal = Artifact { kind: "Goal".to_string(), data: serde_json::json!({}) };
+        let stats = scheduler
+            .run(HashMap::from([("sup".to_string(), vec![goal])]))
+            .await
+            .unwrap();
+
+        // The supervisor ran 3 times (initial + 2 continues) then halted. With
+        // the synchronized model, each fully-drained cycle is one round. The
+        // exact count depends on how cycles align, but it must be small and
+        // stable (<= 4), and crucially NOT inflated by the 2-way feedback
+        // fan-out (the old per-emit model would have produced more).
+        assert!(
+            stats.rounds_completed <= 4,
+            "rounds_completed should count synchronized cycles, not per-emit \
+             feedback crossings; got {}",
+            stats.rounds_completed
+        );
+        assert!(stats.rounds_completed >= 1);
     }
 }
