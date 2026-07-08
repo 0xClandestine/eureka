@@ -75,11 +75,7 @@ impl Session {
         db_path: Option<PathBuf>,
     ) -> Result<Self, EngineError> {
         let graph_path = Path::new(&config.graph);
-        let manifest = GraphManifest::load(graph_path).map_err(|e| {
-            EngineError::Graph(GraphError::ParseError(format!(
-                "Failed to load graph manifest: {e}"
-            )))
-        })?;
+        let manifest = GraphManifest::load(graph_path)?;
 
         let spec = manifest.to_graph_spec();
 
@@ -93,9 +89,13 @@ impl Session {
                 error!("Graph validation error: {err}");
             }
             return Err(EngineError::Graph(GraphError::ParseError(format!(
-                "Graph validation failed with {} errors: {:?}",
+                "Graph validation failed with {} errors: {}",
                 result.errors.len(),
                 result.errors
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("; ")
             ))));
         }
 
@@ -179,19 +179,23 @@ impl Session {
                 error!("Graph validation error: {err}");
             }
             return Err(EngineError::Graph(GraphError::ParseError(format!(
-                "Graph validation failed with {} errors: {:?}",
+                "Graph validation failed with {} errors: {}",
                 result.errors.len(),
                 result.errors
+                    .iter()
+                    .map(std::string::ToString::to_string)
+                    .collect::<Vec<_>>()
+                    .join("; ")
             ))));
         }
 
         // Verify every node in the spec has a corresponding node in the map.
         for node_spec in &spec.nodes {
             if !nodes.contains_key(&node_spec.id) {
-                return Err(EngineError::Graph(GraphError::ParseError(format!(
+                return Err(EngineError::NodeCreation(format!(
                     "Missing node '{}' in provided node map",
                     node_spec.id
-                ))));
+                )));
             }
         }
 
@@ -407,10 +411,10 @@ impl Session {
     /// Build an LLM agent node from an `AgentSpec`.
     fn build_agent_node(&mut self, agent_spec: &AgentSpec) -> Result<BoxedNode, EngineError> {
         let prompt_content = agent_spec.prompt.read().map_err(|e| {
-            EngineError::Graph(GraphError::ParseError(format!(
+            EngineError::NodeCreation(format!(
                 "Failed to read prompt '{}': {e}",
                 agent_spec.prompt.as_str()
-            )))
+            ))
         })?;
 
         let agent_def = AgentDef {
@@ -471,10 +475,10 @@ impl Session {
             .to_string();
 
         let client_arc = self.get_or_create_client(&model_id).map_err(|e| {
-            EngineError::Graph(GraphError::ParseError(format!(
+            EngineError::NodeCreation(format!(
                 "Failed to build LLM client for model '{model_id}' (agent '{}'): {e}",
                 agent_spec.id
-            )))
+            ))
         })?;
 
         Ok(BoxedNode::new(LlmAgentNode::new(

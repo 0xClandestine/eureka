@@ -110,8 +110,8 @@ impl GraphSpec {
 /// Errors related to graph specification loading and validation.
 #[derive(Debug, Clone, thiserror::Error)]
 pub enum GraphError {
-    /// The graph specification could not be parsed.
-    #[error("Failed to parse graph specification: {0}")]
+    /// The graph specification could not be parsed or loaded.
+    #[error("{0}")]
     ParseError(String),
     /// A port kind mismatch was detected.
     #[error("Port kind mismatch: {0}")]
