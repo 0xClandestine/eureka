@@ -121,7 +121,11 @@ impl Scheduler {
             map
         };
 
-        let (activation_tx, mut activation_rx) = mpsc::channel::<Activation>(256);
+        // Unbounded so that `route_emission` never blocks waiting for the
+        // single consumer loop to drain a large fan-out (which would deadlock
+        // when one activation routes >256 new activations). Memory is bounded
+        // in practice by the graph topology and budget backstops.
+        let (activation_tx, mut activation_rx) = mpsc::unbounded_channel::<Activation>();
         let mut pending: usize = 0;
 
         for (source_id, artifacts) in &initial_artifacts {
@@ -156,7 +160,7 @@ impl Scheduler {
                         msg,
                     };
 
-                    if activation_tx.send(act).await.is_err() {
+                    if activation_tx.send(act).is_err() {
                         return Err(SchedulerError::Internal("Activation channel closed".into()));
                     }
                     pending += 1;
@@ -310,7 +314,7 @@ impl Scheduler {
         from_node_id: &str,
         emit: &Emit,
         outbound: &HashMap<String, Vec<Edge>>,
-        activation_tx: &mpsc::Sender<Activation>,
+        activation_tx: &mpsc::UnboundedSender<Activation>,
     ) -> Result<(usize, bool), SchedulerError> {
         let Some(edges) = outbound.get(from_node_id) else {
             return Ok((0, false));
@@ -356,7 +360,7 @@ impl Scheduler {
                 msg,
             };
 
-            if activation_tx.send(act).await.is_err() {
+            if activation_tx.send(act).is_err() {
                 return Err(SchedulerError::Internal("Activation channel closed".into()));
             }
             enqueued += 1;
@@ -462,6 +466,92 @@ mod tests {
         };
         let mut scheduler = Scheduler::new(spec, HashMap::new(), Budget::default(), 4);
         let stats = scheduler.run(HashMap::new()).await.unwrap();
+        assert_eq!(stats.rounds_completed, 0);
+    }
+
+    #[tokio::test]
+    async fn test_run_handles_large_fanout_without_deadlock() {
+        // Regression (H3): a single source routing >256 new activations must
+        // not block the single consumer loop on a bounded activation channel.
+        const N: usize = 300;
+        let goal = Artifact {
+            kind: "Goal".to_string(),
+            data: serde_json::json!({}),
+        };
+        let source = BoxedNode::new(TestNode {
+            ports: PortSpec::new(
+                vec![PortSpecEntry {
+                    name: "in".into(),
+                    direction: PortDirection::Input,
+                    kind: "Goal".to_string(),
+                    required: true,
+                }],
+                vec![PortSpecEntry {
+                    name: "out".into(),
+                    direction: PortDirection::Output,
+                    kind: "Goal".to_string(),
+                    required: false,
+                }],
+            ),
+            output: Some(goal.clone()),
+        });
+        let sink = BoxedNode::new(TestNode {
+            ports: PortSpec::new(
+                vec![PortSpecEntry {
+                    name: "in".into(),
+                    direction: PortDirection::Input,
+                    kind: "Goal".to_string(),
+                    required: false,
+                }],
+                vec![],
+            ),
+            output: None,
+        });
+
+        let mut nodes = HashMap::new();
+        nodes.insert("src".to_string(), source);
+        for i in 0..N {
+            let id = format!("sink{i}");
+            nodes.insert(id, sink.clone());
+        }
+
+        let mut node_specs = vec![GraphNodeSpec {
+            id: "src".into(),
+            kind: "test.node".into(),
+            config: serde_json::Value::Null,
+            description: None,
+        }];
+        for i in 0..N {
+            node_specs.push(GraphNodeSpec {
+                id: format!("sink{i}"),
+                kind: "test.node".into(),
+                config: serde_json::Value::Null,
+                description: None,
+            });
+        }
+        let mut edges = vec![Edge::new("src", "out", "sink0", "in")];
+        for i in 0..N {
+            edges.push(Edge::new("src", "out", &format!("sink{i}"), "in"));
+        }
+
+        let spec = GraphSpec {
+            name: Some("fanout".into()),
+            description: None,
+            nodes: node_specs,
+            edges,
+            metadata: serde_json::Value::Null,
+        };
+        let mut scheduler = Scheduler::new(spec, nodes, Budget::default(), 4);
+        // Inject a goal into the source. If the activation channel were
+        // bounded at 256, this would deadlock and time out.
+        let initial = HashMap::from([("src".to_string(), vec![goal])]);
+        let stats = tokio::time::timeout(
+            std::time::Duration::from_secs(5),
+            scheduler.run(initial),
+        )
+        .await
+        .expect("run must not deadlock on large fan-out")
+        .unwrap();
         assert_eq!(stats.rounds_completed, 0);
     }
 }
