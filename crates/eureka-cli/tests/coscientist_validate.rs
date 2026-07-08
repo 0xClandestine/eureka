@@ -61,7 +61,7 @@ impl Node for MockSup {
 struct DummyClient;
 #[async_trait]
 impl LlmClient for DummyClient {
-    async fn run_agent_loop(&self,_:&str,_:&Value,_:&[ToolDef],_:&str,_:u32,_:f64,_:&str,_:&str,_:u32,_:Option<tokio::sync::mpsc::Sender<SchedulerEvent>>)->Result<Value,AgentError>{Ok(json!({}))}
+    async fn run_agent_loop(&self,_:&str,_:&Value,_:&[ToolDef],_:&str,_:u32,_:f64,_:&str,_:&str,_:u32,_:&str,_:Option<tokio::sync::mpsc::Sender<SchedulerEvent>>)->Result<Value,AgentError>{Ok(json!({}))}
 }
 
 #[test]
@@ -88,7 +88,7 @@ fn test_coscientist_validates() {
                 command:t.command.clone(),args_schema:t.args_schema.clone(),timeout_secs:t.timeout_secs,
             }).collect(),
         };
-        nodes.insert(agent_spec.id.clone(), BoxedNode::new(LlmAgentNode::new(Arc::new(def), Arc::clone(&client))));
+        nodes.insert(agent_spec.id.clone(), BoxedNode::new(LlmAgentNode::new(Arc::new(def), Arc::clone(&client), std::path::PathBuf::from("."))));
     }
     nodes.insert("ranking".to_string(), BoxedNode::new(MockRanker));
     nodes.insert("proximity".to_string(), BoxedNode::new(MockProx));

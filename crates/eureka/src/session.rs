@@ -480,6 +480,7 @@ impl Session {
         Ok(BoxedNode::new(LlmAgentNode::new(
             Arc::new(agent_def),
             client_arc,
+            self.graph_dir.clone(),
         )))
     }
 

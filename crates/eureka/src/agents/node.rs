@@ -5,6 +5,7 @@
 //! 2. Runs the agentic loop: the LLM reasons freely, then calls `submit(json)`.
 //! 3. Splits the returned JSON across the declared output ports.
 
+use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::graph::artifact::Artifact;
@@ -21,13 +22,20 @@ pub struct LlmAgentNode {
     def: Arc<AgentDef>,
     /// The LLM client used to run the agentic loop.
     client: Arc<dyn LlmClient>,
+    /// Working directory for tool subprocesses (the graph directory).
+    work_dir: PathBuf,
 }
 
 impl LlmAgentNode {
-    /// Create a new node from an agent definition and an LLM client.
+    /// Create a new node from an agent definition, an LLM client, and the
+    /// working directory used when spawning tool subprocesses.
     #[must_use]
-    pub fn new(def: Arc<AgentDef>, client: Arc<dyn LlmClient>) -> Self {
-        Self { def, client }
+    pub fn new(def: Arc<AgentDef>, client: Arc<dyn LlmClient>, work_dir: PathBuf) -> Self {
+        Self {
+            def,
+            client,
+            work_dir,
+        }
     }
 
     /// The agent name (used as the `kind` string in the node registry).
@@ -65,6 +73,7 @@ impl Node for LlmAgentNode {
                 &ctx.node_id,
                 &ctx.node_kind,
                 ctx.round,
+                &self.work_dir.to_string_lossy(),
                 ctx.event_tx.clone(),
             )
             .await
@@ -120,6 +129,7 @@ mod tests {
             _node_id: &str,
             _node_kind: &str,
             _round: u32,
+            _work_dir: &str,
             _event_tx: Option<tokio::sync::mpsc::Sender<crate::scheduler::SchedulerEvent>>,
         ) -> Result<serde_json::Value, AgentError> {
             Ok(serde_json::json!({ "echo": initial_message }))
@@ -148,7 +158,7 @@ mod tests {
     #[tokio::test]
     async fn test_single_output_node() {
         let def = make_def("generation", "Goal", "Hypotheses");
-        let node = LlmAgentNode::new(def, Arc::new(EchoClient));
+        let node = LlmAgentNode::new(def, Arc::new(EchoClient), std::path::PathBuf::from("."));
 
         let cancel = tokio_util::sync::CancellationToken::new();
         let ctx = crate::graph::node::NodeCtx::new("generation", "generation", 0, cancel);
@@ -183,6 +193,7 @@ mod tests {
                 _node_id: &str,
                 _node_kind: &str,
                 _round: u32,
+                _work_dir: &str,
                 _event_tx: Option<tokio::sync::mpsc::Sender<crate::scheduler::SchedulerEvent>>,
             ) -> Result<serde_json::Value, AgentError> {
                 Ok(serde_json::json!({
@@ -215,7 +226,7 @@ mod tests {
             tools: vec![],
         });
 
-        let node = LlmAgentNode::new(def, Arc::new(SplitClient));
+        let node = LlmAgentNode::new(def, Arc::new(SplitClient), std::path::PathBuf::from("."));
         let cancel = tokio_util::sync::CancellationToken::new();
         let ctx = crate::graph::node::NodeCtx::new("meta_review", "meta_review", 1, cancel);
         let msg = PortMsg {
@@ -276,6 +287,7 @@ mod tests {
                 _node_id: &str,
                 _node_kind: &str,
                 _round: u32,
+                _work_dir: &str,
                 _event_tx: Option<tokio::sync::mpsc::Sender<crate::scheduler::SchedulerEvent>>,
             ) -> Result<serde_json::Value, AgentError> {
                 *self.captured.lock().unwrap() = Some(initial_message.to_string());
@@ -286,7 +298,7 @@ mod tests {
         let client = Arc::new(CaptureClient {
             captured: std::sync::Mutex::new(None),
         });
-        let node = LlmAgentNode::new(def, Arc::clone(&client) as Arc<dyn LlmClient>);
+        let node = LlmAgentNode::new(def, Arc::clone(&client) as Arc<dyn LlmClient>, std::path::PathBuf::from("."));
 
         let cancel = tokio_util::sync::CancellationToken::new();
         let ctx = crate::graph::node::NodeCtx::new("generation", "generation", 0, cancel);

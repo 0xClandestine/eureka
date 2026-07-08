@@ -25,6 +25,8 @@ pub struct CommandTool {
     node_kind: String,
     /// Scheduler round when this tool is being called.
     round: u32,
+    /// Working directory for the subprocess (the graph directory).
+    work_dir: std::path::PathBuf,
     /// Optional channel for emitting `ToolCalled` events.
     event_tx: Option<mpsc::Sender<SchedulerEvent>>,
 }
@@ -32,11 +34,12 @@ pub struct CommandTool {
 impl CommandTool {
     /// Create a new command tool from a definition.
     #[must_use]
-    pub const fn new(
+    pub fn new(
         def: Arc<ToolDef>,
         node_id: String,
         node_kind: String,
         round: u32,
+        work_dir: std::path::PathBuf,
         event_tx: Option<mpsc::Sender<SchedulerEvent>>,
     ) -> Self {
         Self {
@@ -44,6 +47,7 @@ impl CommandTool {
             node_id,
             node_kind,
             round,
+            work_dir,
             event_tx,
         }
     }
@@ -70,9 +74,16 @@ impl CommandTool {
             return Err(ToolError::ToolCallError("command array is empty".into()));
         };
 
-        let result = run_subprocess(binary, rest, None, &[], &args_json, self.def.timeout_secs)
-            .await
-            .map_err(|e| ToolError::ToolCallError(e.to_string().into()))?;
+        let result = run_subprocess(
+            binary,
+            rest,
+            Some(&self.work_dir),
+            &[],
+            &args_json,
+            self.def.timeout_secs,
+        )
+        .await
+        .map_err(|e| ToolError::ToolCallError(e.to_string().into()))?;
 
         if result.success {
             Ok(result.stdout)
@@ -202,7 +213,7 @@ mod tests {
             args_schema: serde_json::json!({ "type": "object" }),
             timeout_secs: 5,
         });
-        let tool = CommandTool::new(def, "test".into(), "test".into(), 0, None);
+        let tool = CommandTool::new(def, "test".into(), "test".into(), 0, std::path::PathBuf::from("."), None);
         let result = tool.execute("{}".to_string()).await.unwrap();
         assert_eq!(result, "hello");
     }
@@ -216,7 +227,7 @@ mod tests {
             args_schema: serde_json::json!({ "type": "object" }),
             timeout_secs: 5,
         });
-        let tool = CommandTool::new(def, "test".into(), "test".into(), 0, None);
+        let tool = CommandTool::new(def, "test".into(), "test".into(), 0, std::path::PathBuf::from("."), None);
         let result = tool.execute("{}".to_string()).await.unwrap();
         assert!(result.starts_with("Error (exit 1)"));
     }
@@ -230,11 +241,51 @@ mod tests {
             args_schema: serde_json::json!({ "type": "object" }),
             timeout_secs: 5,
         });
-        let tool = CommandTool::new(def, "test".into(), "test".into(), 0, None);
+        let tool = CommandTool::new(def, "test".into(), "test".into(), 0, std::path::PathBuf::from("."), None);
         let result = tool
             .execute(r#"{"key":"value"}"#.to_string())
             .await
             .unwrap();
         assert_eq!(result, r#"{"key":"value"}"#);
+    }
+
+    #[tokio::test]
+    async fn test_execute_uses_work_dir() {
+        // Regression: tool subprocesses must run with `current_dir = work_dir`
+        // so relative script paths resolve against the graph directory.
+        if std::process::Command::new("python3").arg("--version").output().is_err() {
+            return; // python3 not installed
+        }
+        let dir = tempfile::TempDir::new().unwrap();
+        // Write a script into the temp dir that prints its own cwd.
+        std::fs::write(
+            dir.path().join("pwd_script.py"),
+            "import os, json; print(json.dumps({\"cwd\": os.getcwd()}))",
+        )
+        .unwrap();
+
+        let def = Arc::new(ToolDef {
+            name: "pwd".to_string(),
+            description: "print cwd".to_string(),
+            command: vec!["python3".to_string(), "pwd_script.py".to_string()],
+            args_schema: serde_json::json!({ "type": "object" }),
+            timeout_secs: 5,
+        });
+        let tool = CommandTool::new(
+            def,
+            "test".into(),
+            "test".into(),
+            0,
+            dir.path().to_path_buf(),
+            None,
+        );
+        let result = tool.execute("{}".to_string()).await.unwrap();
+        let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
+        let actual_cwd = std::path::PathBuf::from(parsed["cwd"].as_str().unwrap());
+        let expected = std::fs::canonicalize(dir.path()).unwrap();
+        assert_eq!(
+            std::fs::canonicalize(&actual_cwd).unwrap_or(actual_cwd),
+            expected
+        );
     }
 }

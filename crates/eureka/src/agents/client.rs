@@ -23,6 +23,11 @@ use super::tools::CommandTool;
 pub trait LlmClient: Send + Sync {
     /// Run the agent loop until the agent calls `submit(json)`.
     ///
+    /// `work_dir` is passed to spawned tool subprocesses as their working
+    /// directory, so relative script paths (e.g. `tools/arxiv_search.py`)
+    /// resolve against the graph directory rather than the eureka process's
+    /// cwd.
+    ///
     /// # Errors
     ///
     /// Returns `AgentError` if the provider call fails or `max_iterations`
@@ -38,6 +43,7 @@ pub trait LlmClient: Send + Sync {
         node_id: &str,
         node_kind: &str,
         round: u32,
+        work_dir: &str,
         event_tx: Option<mpsc::Sender<SchedulerEvent>>,
     ) -> Result<serde_json::Value, AgentError>;
 }
@@ -68,6 +74,7 @@ impl<M: CompletionModel + Clone + Send + Sync + 'static> LlmClient for RigClient
         node_id: &str,
         node_kind: &str,
         round: u32,
+        work_dir: &str,
         event_tx: Option<mpsc::Sender<SchedulerEvent>>,
     ) -> Result<serde_json::Value, AgentError> {
         let result: Arc<Mutex<Option<serde_json::Value>>> = Arc::new(Mutex::new(None));
@@ -88,6 +95,7 @@ impl<M: CompletionModel + Clone + Send + Sync + 'static> LlmClient for RigClient
                     node_id.to_string(),
                     node_kind.to_string(),
                     round,
+                    std::path::PathBuf::from(work_dir),
                     event_tx.clone(),
                 ))
             })
