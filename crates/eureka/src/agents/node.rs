@@ -162,11 +162,11 @@ mod tests {
             preamble: "test preamble".to_string(),
             inputs: vec![AgentPort {
                 kind: input_kind.to_string(),
-                port: "in".to_string(),
+                port: "in".to_string(), ..Default::default()
             }],
             outputs: vec![AgentPort {
                 kind: output_kind.to_string(),
-                port: "out".to_string(),
+                port: "out".to_string(), ..Default::default()
             }],
             config: AgentConfig::default(),
             output_schema: serde_json::json!({ "type": "object" }),
@@ -228,16 +228,16 @@ mod tests {
             preamble: "preamble".to_string(),
             inputs: vec![AgentPort {
                 kind: "Ranking".to_string(),
-                port: "in".to_string(),
+                port: "in".to_string(), ..Default::default()
             }],
             outputs: vec![
                 AgentPort {
                     kind: "Insights".to_string(),
-                    port: "insights".to_string(),
+                    port: "insights".to_string(), ..Default::default()
                 },
                 AgentPort {
                     kind: "Overview".to_string(),
-                    port: "overview".to_string(),
+                    port: "overview".to_string(), ..Default::default()
                 },
             ],
             config: AgentConfig::default(),
@@ -273,16 +273,16 @@ mod tests {
             inputs: vec![
                 AgentPort {
                     kind: "Goal".to_string(),
-                    port: "in".to_string(),
+                    port: "in".to_string(), ..Default::default()
                 },
                 AgentPort {
                     kind: "Insights".to_string(),
-                    port: "context".to_string(),
+                    port: "context".to_string(), ..Default::default()
                 },
             ],
             outputs: vec![AgentPort {
                 kind: "Hypotheses".to_string(),
-                port: "out".to_string(),
+                port: "out".to_string(), ..Default::default()
             }],
             config: AgentConfig::default(),
             output_schema: serde_json::json!({ "type": "object" }),

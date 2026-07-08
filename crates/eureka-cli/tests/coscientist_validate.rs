@@ -83,8 +83,8 @@ fn test_coscientist_validates() {
             name: agent_spec.id.clone(),
             description: agent_spec.description.clone(),
             preamble: pc,
-            inputs: agent_spec.inputs.iter().map(|p| AgentPort{kind:p.kind.clone(),port:p.port.clone()}).collect(),
-            outputs: agent_spec.outputs.iter().map(|p| AgentPort{kind:p.kind.clone(),port:p.port.clone()}).collect(),
+            inputs: agent_spec.inputs.iter().map(|p| AgentPort{kind:p.kind.clone(),port:p.port.clone(),..Default::default()}).collect(),
+            outputs: agent_spec.outputs.iter().map(|p| AgentPort{kind:p.kind.clone(),port:p.port.clone(),..Default::default()}).collect(),
             config: Default::default(),
             output_schema: agent_spec.output_schema.clone(),
             tools: agent_spec.tools.iter().map(|t| ToolDef{

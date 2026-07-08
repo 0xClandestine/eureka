@@ -212,10 +212,12 @@ mod tests {
             inputs: vec![PortDef {
                 port: "in".into(),
                 kind: "Test".into(),
+                required: None,
             }],
             outputs: vec![PortDef {
                 port: "out".into(),
                 kind: "Test".into(),
+                required: None,
             }],
             timeout_secs: 10,
         }

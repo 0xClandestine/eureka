@@ -7,25 +7,34 @@ use super::artifact::ArtifactKind;
 
 /// A lightweight port declaration used in YAML manifest and agent definitions.
 ///
-/// Fields match the YAML schema (`port` + `kind`). Converts to [`PortSpecEntry`]
-/// for use in the node registry.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
+/// Fields match the YAML schema (`port` + `kind`, with an optional
+/// `required` for inputs). Converts to [`PortSpecEntry`] for use in the
+/// node registry.
+#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, Default)]
 pub struct PortDef {
     /// The port name used in graph edges (e.g. `"in"`, `"out"`, `"top"`).
     pub port: String,
     /// The artifact kind accepted/emitted on this port (e.g. `"Hypotheses"`).
     pub kind: ArtifactKind,
+    /// Whether this input port is required. Only meaningful for inputs;
+    /// outputs are always optional. Defaults to `true` for inputs when
+    /// omitted, preserving backward compatibility. Set `required: false`
+    /// to declare an optional secondary input that need not be wired for
+    /// every activation.
+    #[serde(default)]
+    pub required: Option<bool>,
 }
 
 impl PortDef {
-    /// Convert this port declaration to an input `PortSpecEntry` (required by default).
+    /// Convert this port declaration to an input `PortSpecEntry`. The port is
+    /// required unless `required: false` is explicitly set in the manifest.
     #[must_use]
     pub fn to_input_spec(&self) -> PortSpecEntry {
         PortSpecEntry {
             name: self.port.clone(),
             direction: PortDirection::Input,
             kind: self.kind.clone(),
-            required: true,
+            required: self.required.unwrap_or(true),
         }
     }
 
@@ -168,5 +177,27 @@ mod tests {
         let spec = test_spec();
         let required = spec.required_inputs();
         assert!(required.contains(&"in".to_string()));
+    }
+
+    #[test]
+    fn test_optional_input_via_manifest() {
+        // Regression (F): a PortDef with `required: false` must produce an
+        // optional input port spec (previously every input was forced required).
+        let optional = PortDef {
+            port: "graph".to_string(),
+            kind: "ProximityGraph".to_string(),
+            required: Some(false),
+        };
+        let entry = optional.to_input_spec();
+        assert!(!entry.required);
+        assert!(!PortSpec::new(vec![entry], vec![]).is_input_required("graph"));
+
+        // And the default (None) is still required for backward compat.
+        let default = PortDef {
+            port: "in".to_string(),
+            kind: "Goal".to_string(),
+            required: None,
+        };
+        assert!(default.to_input_spec().required);
     }
 }

@@ -175,10 +175,12 @@ edges:
                 inputs: vec![PortDef {
                     port: "in".into(),
                     kind: "Goal".into(),
+                    required: None,
                 }],
                 outputs: vec![PortDef {
                     port: "out".into(),
                     kind: "Hypotheses".into(),
+                    required: None,
                 }],
                 config: serde_json::json!({}),
                 tools: vec![],
@@ -209,10 +211,12 @@ edges:
                 inputs: vec![PortDef {
                     port: "in".into(),
                     kind: "Goal".into(),
+                    required: None,
                 }],
                 outputs: vec![PortDef {
                     port: "out".into(),
                     kind: "Hypotheses".into(),
+                    required: None,
                 }],
                 config: serde_json::json!({}),
                 tools: vec![],
@@ -226,15 +230,18 @@ edges:
                 inputs: vec![PortDef {
                     port: "in".into(),
                     kind: "Hypotheses".into(),
+                    required: None,
                 }],
                 outputs: vec![
                     PortDef {
                         port: "continue".into(),
                         kind: "Hypotheses".into(),
+                        required: None,
                     },
                     PortDef {
                         port: "halt".into(),
                         kind: "Control".into(),
+                        required: None,
                     },
                 ],
                 config: serde_json::json!({}),

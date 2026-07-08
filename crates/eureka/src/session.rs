@@ -427,6 +427,7 @@ impl Session {
                 .map(|p| AgentPort {
                     kind: p.kind.clone(),
                     port: p.port.clone(),
+                    required: p.required,
                 })
                 .collect(),
             outputs: agent_spec
@@ -435,6 +436,7 @@ impl Session {
                 .map(|p| AgentPort {
                     kind: p.kind.clone(),
                     port: p.port.clone(),
+                    required: p.required,
                 })
                 .collect(),
             config: AgentConfig {
@@ -525,6 +527,7 @@ impl Session {
                 .map(|p| PortDef {
                     port: p.port.clone(),
                     kind: p.kind.clone(),
+                    required: None,
                 })
                 .collect(),
             outputs: ctrl_spec
@@ -533,6 +536,7 @@ impl Session {
                 .map(|p| PortDef {
                     port: p.port.clone(),
                     kind: p.kind.clone(),
+                    required: None,
                 })
                 .collect(),
             timeout_secs: ctrl_spec.timeout_secs,
