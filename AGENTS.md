@@ -117,9 +117,15 @@ allowing `unwrap_used` in `#[cfg(test)]` modules or switching tests to
 - **Round counting**: the scheduler increments `rounds_completed` whenever an
   emission crosses a feedback edge. "Round" ≈ "feedback crossing count", not a
   clean cycle index.
-- **Budget**: `RunStats` has `total_cost_usd`/`total_tokens` fields but the
-  scheduler never populates them — only `elapsed_secs` and `rounds_completed`
-  are tracked. Cost/token backstops are currently non-functional.
+- **Budget**: `RunStats` aggregates `total_cost_usd`/`total_tokens`/
+  `total_input_tokens`/`total_output_tokens` from each `Node::process`'s
+  `NodeUsage` return. The cost/token backstops (`max_cost_usd`/
+  `max_tokens`) now fire. Cost is a best-effort flat per-model rate
+  (`ProviderConfig::cost_per_million_tokens`); tokens come from rig's
+  normalized `Usage`.
+- **Concurrency**: activations run as concurrent tokio tasks in a `JoinSet`,
+  capped by `scheduler.max_in_flight`. `abort_all` on cancel/drop cancels
+  in-flight `process()` calls (dropping in-flight LLM HTTP requests).
 - **Provider switching**: `ProviderKind` enum + `build_llm_client` map to
   `rig-core` provider clients. Set the matching `*_API_KEY` env var.
 
@@ -138,28 +144,25 @@ allowing `unwrap_used` in `#[cfg(test)]` modules or switching tests to
 These are known limitations or surprising behaviors — verify before relying
 on the affected behavior:
 
-1. **Cost/token budget backstops are not enforced.** `RunStats.total_cost_usd`
-   and `total_tokens` are never populated — only `elapsed_secs` (via a 100ms
-   ticker) and `rounds_completed` are tracked. So `max_cost_usd`/`max_tokens`
-   backstops never fire. The agent loop does not report usage back; wiring
-   this requires `Node::process` to return usage, which is a trait change.
-2. **The scheduler is sequential.** Despite `max_in_flight`/`Semaphore`, the
-   loop awaits one node at a time; true concurrency is never realized. The
-   semaphore and its cancellation-aware acquire are in place for when
-   activations are spawned as tasks.
-3. **Round model is fuzzy.** `rounds_completed` is incremented per emission
+1. **Round model is fuzzy.** `rounds_completed` is incremented per emission
    that crosses a feedback edge, and feedback inputs are attributed to
    `round + 1`. There is no synchronized cycle/barrier, so `round` is really
    a "feedback-crossing count". `max_rounds` is a loose backstop; the
    supervisor control node's own `max_rounds` is the primary controller.
-4. **Control nodes receive a single input per activation.** `ControlNode::process`
+2. **Control nodes receive a single input per activation.** `ControlNode::process`
    forwards only the first input to the subprocess (preserving the legacy
    single-envelope protocol). Multi-input control nodes that want all inputs
    together need a protocol extension. LLM agents, by contrast, now receive
    all joined inputs in one `process()` call.
-5. **`graph::control` re-exports `config::Budget`/`parse_duration`**, which
+3. **`graph::control` re-exports `config::Budget`/`parse_duration`**, which
    breaks the "graph has no I/O, no domain" promise documented in
    `graph/mod.rs`. Historical; move to `config` or a neutral module.
+4. **Cost estimate is a flat per-model rate.** rig has no pricing abstraction,
+   so `ProviderConfig::cost_per_million_tokens` (optional) is a single-rate
+   approximation that lets `max_cost_usd` fire. Real per-input/per-output
+   pricing differs and is provider-specific. When the rate is `None`, only
+   the token budget is enforced. Token counts themselves come from rig's
+   normalized `Usage` (providers that don't report usage report 0).
 
 ## Previously fixed (were gotchas, now resolved)
 
@@ -187,6 +190,14 @@ on the affected behavior:
   longer prepends a prefix, and validation errors render as a joined list.
 - ~~`max_wallclock` unsettable via env var~~ — fixed; underscore-free aliases
   `maxwallclock`/`maxwallclocksecs`.
+- ~~Cost/token budget backstops not enforced~~ — fixed; `Node::process`
+  now returns a `NodeUsage` (tokens + best-effort cost), the scheduler
+  aggregates it into `RunStats`, and `max_cost_usd`/`max_tokens` now fire.
+  rig's extended prompt path supplies token usage; `cost_per_million_tokens`
+  is an optional flat rate.
+- ~~The scheduler was sequential~~ — fixed; activations run as concurrent
+  tokio tasks in a `JoinSet` capped by `max_in_flight`, with `abort_all` on
+  cancel/drop so in-flight LLM calls are cancelled cleanly.
 - ~~Cancellation ignored during permit wait~~ — fixed; biased `select!`.
 - ~~Optional inputs impossible to declare~~ — fixed; `required: false` in the
   manifest's `PortDef`.
