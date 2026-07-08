@@ -848,7 +848,6 @@ edges: []
         ];
         let boxed = session.build_control_node(&ctrl_spec, &serde_json::Value::Null);
 
-        use crate::graph::node::Node;
         let cancel = tokio_util::sync::CancellationToken::new();
         let ctx = NodeCtx::new("echo", "echo-ctrl", 0, cancel);
         let msg = PortMsg {
@@ -909,7 +908,6 @@ edges: []
 
         let ctrl_spec = session.manifest.control.first().unwrap().clone();
         let boxed = session.build_control_node(&ctrl_spec, &serde_json::Value::Null);
-        use crate::graph::node::Node;
         let cancel = tokio_util::sync::CancellationToken::new();
         let ctx = NodeCtx::new("probe", "probe-ctrl", 0, cancel);
         let msg = PortMsg {

@@ -298,7 +298,8 @@ mod tests {
         let client = Arc::new(CaptureClient {
             captured: std::sync::Mutex::new(None),
         });
-        let node = LlmAgentNode::new(def, Arc::clone(&client) as Arc<dyn LlmClient>, std::path::PathBuf::from("."));
+        let client_dyn: Arc<dyn LlmClient> = client.clone();
+        let node = LlmAgentNode::new(def, client_dyn, std::path::PathBuf::from("."));
 
         let cancel = tokio_util::sync::CancellationToken::new();
         let ctx = crate::graph::node::NodeCtx::new("generation", "generation", 0, cancel);

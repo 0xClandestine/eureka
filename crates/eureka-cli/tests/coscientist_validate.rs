@@ -1,3 +1,7 @@
+// Integration tests use unwrap/expect liberally; the workspace deny policy
+// for unwrap_used/expect_used applies to production code, not tests.
+#![allow(clippy::unwrap_used, clippy::expect_used)]
+
 use std::collections::HashMap;
 use std::path::Path;
 use std::sync::Arc;

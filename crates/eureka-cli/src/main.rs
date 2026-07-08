@@ -3,6 +3,10 @@
 //! The `eureka` binary — command-line interface for the AI co-scientist.
 //! Uses `clap` for command parsing and `tracing-subscriber` for observability.
 
+// Tests use unwrap/expect liberally; allow them in test builds so the
+// workspace deny policy still applies to real CLI code paths.
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
+
 pub mod commands;
 pub mod server;
 

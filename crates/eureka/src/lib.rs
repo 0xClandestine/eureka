@@ -16,6 +16,12 @@
 //! | [`config`] | Typed, layered runtime configuration |
 //! | [`session`] | Assembles all of the above into a single runnable session |
 
+// The strict workspace lints deny unwrap/expect in production code. Tests,
+// however, use unwrap/expect liberally for ergonomics; allow them in test
+// builds so `cargo clippy --all-targets` stays green without sacrificing
+// the deny policy for real code paths.
+#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
+
 pub mod agents;
 pub mod config;
 pub mod control;
