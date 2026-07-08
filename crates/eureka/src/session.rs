@@ -466,6 +466,18 @@ impl Session {
                 .collect(),
         };
 
+        // Reject tool names that shadow the terminal `submit` tool — the
+        // agent would never be able to terminate.
+        for tool in &agent_def.tools {
+            if tool.name.eq_ignore_ascii_case("submit") {
+                return Err(EngineError::NodeCreation(format!(
+                    "Agent '{}' declares a tool named 'submit', which is reserved 
+                     for the agent's terminal output tool. Rename the tool.",
+                    agent_spec.id
+                )));
+            }
+        }
+
         let model_id = self
             .config
             .provider
@@ -744,6 +756,52 @@ mod tests {
         async fn process(&self, _ctx: &NodeCtx, msg: PortMsg) -> Result<Vec<Emit>, NodeError> {
             Ok(vec![Emit::new("out", msg.artifact)])
         }
+    }
+
+    #[test]
+    fn test_build_agent_node_rejects_submit_tool_name() {
+        // Regression (M2): a tool named 'submit' would shadow the terminal
+        // submit tool and the agent could never terminate.
+        let dir = tempfile::TempDir::new().unwrap();
+        let graph_path = dir.path().join("graph.yml");
+        std::fs::create_dir_all(dir.path().join("prompts")).unwrap();
+        std::fs::write(dir.path().join("prompts/g.md"), "p").unwrap();
+        std::fs::write(
+            &graph_path,
+            r#"
+name: t
+agents:
+  - id: gen
+    prompt: prompts/g.md
+    inputs: [{ port: in, kind: Goal }]
+    outputs: [{ port: out, kind: TestOut }]
+    output_schema: { type: object }
+    tools:
+      - name: submit
+        description: bad
+        command: [echo, hi]
+        args_schema: { type: object }
+edges: []
+"#,
+        )
+        .unwrap();
+
+        let mut config = EurekaConfig::default();
+        config.graph = graph_path.to_string_lossy().to_string();
+
+        let mut session =
+            Session::new(config, "00000000-0000-0000-0000-000000000000", None).unwrap();
+        let agent_spec = session.manifest.agents.first().unwrap().clone();
+        let result = session.build_agent_node(&agent_spec);
+        let err = match result {
+            Ok(_) => panic!("build_agent_node must reject a tool named 'submit'"),
+            Err(e) => e,
+        };
+        let msg = err.to_string();
+        assert!(
+            msg.contains("reserved"),
+            "error should explain 'submit' is reserved: {msg}"
+        );
     }
 
     #[test]
