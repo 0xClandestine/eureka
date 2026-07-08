@@ -484,6 +484,15 @@ impl Session {
     }
 
     /// Build a control plugin node from a `ControlSpec`.
+    ///
+    /// The command is used verbatim: the manifest's path resolver
+    /// (`ControlSpec::resolve_paths`) already rewrites relative `command[0]`
+    /// to an absolute path when the resolved binary exists on disk; for bare
+    /// interpreter names like `python3` it leaves them alone so the OS PATH
+    /// lookup is used. The control node spawns with `current_dir = graph_dir`,
+    /// so relative script arguments (e.g. `control/ranker.py`) resolve against
+    /// the graph directory automatically. Rewriting `command[0]` here would
+    /// turn bare `python3` into `<graph_dir>/python3`, which does not exist.
     fn build_control_node(
         &self,
         ctrl_spec: &ControlSpec,
@@ -492,7 +501,7 @@ impl Session {
         let def = ControlNodeDef {
             name: format!("{}.{}", ctrl_spec.kind, ctrl_spec.id),
             work_dir: self.graph_dir.clone(),
-            command: ctrl_spec.command.iter().enumerate().map(|(i, arg)| if i == 0 { let p = std::path::Path::new(arg); if p.is_relative() { self.graph_dir.join(arg).to_string_lossy().to_string() } else { arg.clone() } } else { arg.clone() }).collect(),
+            command: ctrl_spec.command.clone(),
             inputs: ctrl_spec
                 .inputs
                 .iter()
@@ -730,6 +739,73 @@ mod tests {
         async fn process(&self, _ctx: &NodeCtx, msg: PortMsg) -> Result<Vec<Emit>, NodeError> {
             Ok(vec![Emit::new("out", msg.artifact)])
         }
+    }
+
+    #[test]
+    fn test_build_control_node_preserves_bare_interpreter() {
+        // Regression: `build_control_node` must NOT rewrite a bare relative
+        // `command[0]` (e.g. "python3") to `graph_dir/python3`. The control
+        // node spawns with `current_dir = graph_dir`, so PATH lookup handles
+        // bare interpreters and relative script args resolve against work_dir.
+        if std::process::Command::new("python3").arg("--version").output().is_err() {
+            return; // python3 not installed; cannot exercise spawn path
+        }
+        let dir = tempfile::TempDir::new().unwrap();
+        let graph_path = dir.path().join("graph.yml");
+        std::fs::write(
+            &graph_path,
+            r#"
+name: ctrl-test
+control:
+  - id: echo
+    kind: echo-ctrl
+    command: [python3, -c, "print('hi')"]
+    inputs: [{ port: in, kind: Goal }]
+    outputs: [{ port: out, kind: TestOut }]
+edges: []
+"#,
+        )
+        .unwrap();
+
+        let mut config = EurekaConfig::default();
+        config.graph = graph_path.to_string_lossy().to_string();
+
+        let session = Session::new(config, "00000000-0000-0000-0000-000000000000", None)
+            .expect("session should construct");
+
+        // Use a command that reads stdin and emits a valid emit envelope, so a
+        // successful spawn yields `Ok`. With the bug, `command[0]` became
+        // `graph_dir/python3` (NotFound) and this would fail.
+        let ctrl_spec = session.manifest.control.first().unwrap();
+        let mut ctrl_spec = ctrl_spec.clone();
+        ctrl_spec.command = vec![
+            "python3".to_string(),
+            "-c".to_string(),
+            "import sys,json; sys.stdin.read(); print(json.dumps({\"port\":\"out\",\"artifact\":{\"kind\":\"TestOut\",\"data\":{}}}))".to_string(),
+        ];
+        let boxed = session.build_control_node(&ctrl_spec, &serde_json::Value::Null);
+
+        use crate::graph::node::Node;
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let ctx = NodeCtx::new("echo", "echo-ctrl", 0, cancel);
+        let msg = PortMsg {
+            port: "in".into(),
+            artifact: Artifact {
+                kind: "Goal".to_string(),
+                data: serde_json::json!({}),
+            },
+        };
+        let rt = tokio::runtime::Runtime::new().unwrap();
+        let result = rt.block_on(boxed.process(&ctx, msg));
+        assert!(
+            result.is_ok(),
+            "control node should spawn successfully with bare `python3`; got: {:?}",
+            result.err()
+        );
+        let emits = result.unwrap();
+        assert_eq!(emits.len(), 1);
+        assert_eq!(emits[0].port, "out");
+        assert_eq!(emits[0].artifact.kind, "TestOut");
     }
 
     #[test]
