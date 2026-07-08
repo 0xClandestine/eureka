@@ -13,7 +13,7 @@ use eureka::scheduler::SchedulerEvent;
 use serde_json::{json, Value};
 
 fn graph_dir() -> std::path::PathBuf {
-    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../coscientist")
+    Path::new(env!("CARGO_MANIFEST_DIR")).join("../../example")
 }
 
 struct MockRanker;

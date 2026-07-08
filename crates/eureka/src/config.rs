@@ -244,7 +244,7 @@ pub struct SchedulerConfig {
 /// are written in the same format users write their own `eureka.toml`, so
 /// there's no mystery about what the defaults are.
 const DEFAULT_TOML: &str = r#"
-graph = "coscientist/coscientist.yml"
+graph = "example/coscientist.yml"
 
 [provider]
 kind = "openrouter"
@@ -371,7 +371,7 @@ mod tests {
     #[test]
     fn test_default_config() {
         let config = EurekaConfig::default();
-        assert_eq!(config.graph, "coscientist/coscientist.yml");
+        assert_eq!(config.graph, "example/coscientist.yml");
         assert_eq!(config.provider.kind, ProviderKind::OpenRouter);
         assert_eq!(config.scheduler.max_in_flight, 8);
     }
@@ -460,7 +460,7 @@ max_rounds = 6
         // When no file path is given and no default eureka.toml exists,
         // figment falls back to the DEFAULT_TOML base layer.
         let config = EurekaConfig::load(None).unwrap();
-        assert_eq!(config.graph, "coscientist/coscientist.yml");
+        assert_eq!(config.graph, "example/coscientist.yml");
         assert_eq!(config.provider.kind, ProviderKind::OpenRouter);
     }
 

@@ -4,7 +4,7 @@
 # Set OPENROUTER_API_KEY to run. Switch kind/model to use any other provider.
 
 # Which graph specification to run — the topology IS config
-graph = "coscientist/coscientist.yml"
+graph = "example/coscientist.yml"
 
 [provider]
 kind = "openrouter"

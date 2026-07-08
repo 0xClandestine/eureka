@@ -70,7 +70,7 @@ pub fn execute() -> Result<()> {
 
     println!("── Shipped Graph Specs ──");
     println!();
-    println!("  coscientist/coscientist.yml  — Google's co-scientist topology (default)");
+    println!("  example/coscientist.yml  — Google's co-scientist topology (default)");
     println!();
 
     Ok(())
