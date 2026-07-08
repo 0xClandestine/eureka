@@ -53,18 +53,15 @@ pub trait LlmClient: Send + Sync {
 pub struct RigClient<M> {
     /// The underlying rig completion model.
     model: M,
-    /// Optional flat cost rate (USD per million tokens) for the cost backstop.
-    cost_per_million_tokens: Option<f64>,
+    /// Optional per-input/per-output pricing for the cost backstop.
+    pricing: Option<crate::config::Pricing>,
 }
 
 impl<M: CompletionModel + Clone + Send + Sync + 'static> RigClient<M> {
-    /// Wrap a rig completion model with an optional cost-per-million-tokens
-    /// rate used to populate [`NodeUsage::cost_usd`].
-    pub const fn new(model: M, cost_per_million_tokens: Option<f64>) -> Self {
-        Self {
-            model,
-            cost_per_million_tokens,
-        }
+    /// Wrap a rig completion model with optional per-input/per-output pricing
+    /// used to populate [`NodeUsage::cost_usd`].
+    pub fn new(model: M, pricing: Option<crate::config::Pricing>) -> Self {
+        Self { model, pricing }
     }
 }
 
@@ -128,7 +125,7 @@ impl<M: CompletionModel + Clone + Send + Sync + 'static> LlmClient for RigClient
             response.usage.input_tokens,
             response.usage.output_tokens,
             response.usage.total_tokens,
-            self.cost_per_million_tokens,
+            self.pricing.as_ref(),
         );
 
         let submitted = result

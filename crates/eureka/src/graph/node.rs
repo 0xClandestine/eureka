@@ -137,14 +137,14 @@ pub struct NodeUsage {
 }
 
 impl NodeUsage {
-    /// Create a usage report from rig's normalized token counts and an
-    /// optional cost-per-million-tokens rate.
+    /// Create a usage report from rig's normalized token counts and optional
+    /// per-input/per-output pricing.
     #[must_use]
     pub fn from_rig_usage(
         input_tokens: u64,
         output_tokens: u64,
         total_tokens: u64,
-        cost_per_million_tokens: Option<f64>,
+        pricing: Option<&crate::config::Pricing>,
     ) -> Self {
         // Fall back to input+output when the provider omits an aggregate.
         let total = if total_tokens == 0 {
@@ -152,8 +152,8 @@ impl NodeUsage {
         } else {
             total_tokens
         };
-        let cost_usd = cost_per_million_tokens
-            .map(|rate| (total as f64 / 1_000_000.0) * rate)
+        let cost_usd = pricing
+            .map(|p| p.cost(input_tokens, output_tokens))
             .unwrap_or(0.0);
         Self {
             input_tokens,
@@ -292,5 +292,27 @@ mod tests {
         };
         let (emits, _usage) = node.process(&ctx, vec![msg]).await.unwrap();
         assert_eq!(emits.len(), 1);
+    }
+
+    #[test]
+    fn test_node_usage_from_rig_usage_with_pricing() {
+        // Gotcha #4: cost must be computed from separate input/output rates.
+        let pricing = crate::config::Pricing {
+            input_per_million: 0.27,
+            output_per_million: 1.10,
+        };
+        // 1M input, 0.5M output, no aggregate total reported.
+        let usage =
+            NodeUsage::from_rig_usage(1_000_000, 500_000, 0, Some(&pricing));
+        assert_eq!(usage.input_tokens, 1_000_000);
+        assert_eq!(usage.output_tokens, 500_000);
+        // total falls back to input + output when the provider omits it.
+        assert_eq!(usage.total_tokens, 1_500_000);
+        assert!((usage.cost_usd - 0.82).abs() < 1e-9);
+
+        // Without pricing, cost is zero but tokens are still tracked.
+        let no_pricing = NodeUsage::from_rig_usage(100, 50, 150, None);
+        assert_eq!(no_pricing.total_tokens, 150);
+        assert!(no_pricing.cost_usd == 0.0);
     }
 }

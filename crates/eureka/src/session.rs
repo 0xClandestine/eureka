@@ -640,62 +640,62 @@ fn build_llm_client(
         ProviderKind::Anthropic => {
             let client = anthropic::Client::from_env()
                 .context("ANTHROPIC_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.cost_per_million_tokens)))
+            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.pricing.clone())))
         }
         ProviderKind::OpenAI => {
             let client = openai::Client::from_env()
                 .context("OPENAI_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.cost_per_million_tokens)))
+            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.pricing.clone())))
         }
         ProviderKind::OpenRouter => {
             let client = openrouter::Client::from_env()
                 .context("OPENROUTER_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.cost_per_million_tokens)))
+            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.pricing.clone())))
         }
         ProviderKind::Gemini => {
             let client = gemini::Client::from_env()
                 .context("GEMINI_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.cost_per_million_tokens)))
+            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.pricing.clone())))
         }
         ProviderKind::Groq => {
             let client =
                 groq::Client::from_env().context("GROQ_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.cost_per_million_tokens)))
+            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.pricing.clone())))
         }
         ProviderKind::Mistral => {
             let client = mistral::Client::from_env()
                 .context("MISTRAL_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.cost_per_million_tokens)))
+            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.pricing.clone())))
         }
         ProviderKind::Cohere => {
             let client = cohere::Client::from_env()
                 .context("COHERE_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.cost_per_million_tokens)))
+            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.pricing.clone())))
         }
         ProviderKind::DeepSeek => {
             let client = deepseek::Client::from_env()
                 .context("DEEPSEEK_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.cost_per_million_tokens)))
+            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.pricing.clone())))
         }
         ProviderKind::Perplexity => {
             let client = perplexity::Client::from_env()
                 .context("PERPLEXITY_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.cost_per_million_tokens)))
+            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.pricing.clone())))
         }
         ProviderKind::Together => {
             let client = together::Client::from_env()
                 .context("TOGETHER_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.cost_per_million_tokens)))
+            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.pricing.clone())))
         }
         ProviderKind::XAI => {
             let client =
                 xai::Client::from_env().context("XAI_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.cost_per_million_tokens)))
+            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.pricing.clone())))
         }
         ProviderKind::Ollama => {
             let client = ollama::Client::from_env()
                 .context("Failed to initialise Ollama client (check OLLAMA_API_BASE_URL)")?;
-            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.cost_per_million_tokens)))
+            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.pricing.clone())))
         }
     }
 }

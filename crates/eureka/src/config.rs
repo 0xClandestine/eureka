@@ -135,8 +135,8 @@ impl Default for Budget {
 /// [`Budget`] each cycle.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RunStats {
-    /// Total cost accumulated so far (best-effort; `0.0` if no per-model rate
-    /// is configured — see [`ProviderConfig::cost_per_million_tokens`]).
+    /// Total cost accumulated so far (best-effort; `0.0` if no pricing is
+    /// configured — see [`ProviderConfig::pricing`]).
     pub total_cost_usd: f64,
     /// Total tokens consumed so far (input + output, or the provider's
     /// aggregate when it does not split them).
@@ -309,6 +309,37 @@ impl std::fmt::Display for ProviderKind {
     }
 }
 
+/// Per-model token pricing (USD per million tokens) used by the cost
+/// budget backstop. Most providers charge different rates for input
+/// (prompt) vs output (completion) tokens; set both for an accurate
+/// estimate. As a convenience, a single flat `cost_per_million_tokens`
+/// rate on [`ProviderConfig`] sets both to the same value when `pricing`
+/// is absent.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+pub struct Pricing {
+    /// USD per million input (prompt) tokens.
+    #[serde(default)]
+    pub input_per_million: f64,
+    /// USD per million output (completion) tokens.
+    #[serde(default)]
+    pub output_per_million: f64,
+}
+
+impl Pricing {
+    /// Compute the USD cost for the given token counts.
+    #[must_use]
+    pub fn cost(&self, input_tokens: u64, output_tokens: u64) -> f64 {
+        (input_tokens as f64 / 1_000_000.0) * self.input_per_million
+            + (output_tokens as f64 / 1_000_000.0) * self.output_per_million
+    }
+
+    /// Whether any non-zero rate is configured.
+    #[must_use]
+    pub fn is_configured(&self) -> bool {
+        self.input_per_million > 0.0 || self.output_per_million > 0.0
+    }
+}
+
 /// Configuration for a model provider.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ProviderConfig {
@@ -320,13 +351,12 @@ pub struct ProviderConfig {
     /// values are model IDs. Falls back to `generation_model` when absent.
     #[serde(default)]
     pub agent_models: std::collections::HashMap<String, String>,
-    /// Optional flat cost rate (USD per million tokens) used to estimate the
-    /// cost backstop. Real per-input/per-output pricing differs and is
-    /// provider-specific; this is a rough, single-rate approximation so the
-    /// `budget.max_cost_usd` backstop can fire. When `None`, cost is not
-    /// tracked and only the token budget is enforced.
+    /// Per-input/per-output pricing (USD per million tokens) for the cost
+    /// budget backstop. Most providers charge different rates for input
+    /// (prompt) vs output (completion) tokens, so set both fields. When
+    /// `None`, cost is not tracked and only the token budget is enforced.
     #[serde(default)]
-    pub cost_per_million_tokens: Option<f64>,
+    pub pricing: Option<Pricing>,
 }
 
 // ---------------------------------------------------------------------------
@@ -611,5 +641,41 @@ max_rounds = 6
         });
         let budget: Budget = serde_json::from_value(json).unwrap();
         assert!((budget.max_wallclock - 120.0).abs() < f64::EPSILON);
+    }
+
+    #[test]
+    fn test_pricing_cost_splits_input_and_output() {
+        // Gotcha #4: cost must use separate input/output rates, not a flat
+        // per-model rate. 1M input @ $0.27 + 0.5M output @ $1.10 = $0.82.
+        let pricing = Pricing {
+            input_per_million: 0.27,
+            output_per_million: 1.10,
+        };
+        let cost = pricing.cost(1_000_000, 500_000);
+        assert!((cost - 0.82).abs() < 1e-9, "expected 0.82, got {cost}");
+        assert!(pricing.is_configured());
+        assert!(!Pricing::default().is_configured());
+    }
+
+    #[test]
+    fn test_provider_config_pricing_from_toml() {
+        let dir = tempfile::TempDir::new().unwrap();
+        let toml_path = dir.path().join("p.toml");
+        std::fs::write(
+            &toml_path,
+            r#"
+[provider]
+kind = "openrouter"
+generation_model = "x"
+[provider.pricing]
+input_per_million = 0.27
+output_per_million = 1.10
+"#,
+        )
+        .unwrap();
+        let config = EurekaConfig::load(Some(&toml_path)).unwrap();
+        let pricing = config.provider.pricing.expect("pricing should parse");
+        assert!((pricing.input_per_million - 0.27).abs() < f64::EPSILON);
+        assert!((pricing.output_per_million - 1.10).abs() < f64::EPSILON);
     }
 }

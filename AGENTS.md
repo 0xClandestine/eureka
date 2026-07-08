@@ -125,9 +125,10 @@ allowing `unwrap_used` in `#[cfg(test)]` modules or switching tests to
 - **Budget**: `RunStats` aggregates `total_cost_usd`/`total_tokens`/
   `total_input_tokens`/`total_output_tokens` from each `Node::process`'s
   `NodeUsage` return. The cost/token backstops (`max_cost_usd`/
-  `max_tokens`) now fire. Cost is a best-effort flat per-model rate
-  (`ProviderConfig::cost_per_million_tokens`); tokens come from rig's
-  normalized `Usage`.
+  `max_tokens`) now fire. Cost uses per-input/per-output rates from
+  `ProviderConfig::pricing` (`input_per_million` / `output_per_million`);
+  tokens come from rig's normalized `Usage` (providers that don't report
+  usage report 0, in which case only the wall-clock/round backstops fire).
 - **Concurrency**: activations run as concurrent tokio tasks in a `JoinSet`,
   capped by `scheduler.max_in_flight`. `abort_all` on cancel/drop cancels
   in-flight `process()` calls (dropping in-flight LLM HTTP requests).
@@ -146,15 +147,11 @@ allowing `unwrap_used` in `#[cfg(test)]` modules or switching tests to
 
 ## Gotchas
 
-These are known limitations or surprising behaviors — verify before relying
-on the affected behavior:
-
-1. **Cost estimate is a flat per-model rate.** rig has no pricing abstraction,
-   so `ProviderConfig::cost_per_million_tokens` (optional) is a single-rate
-   approximation that lets `max_cost_usd` fire. Real per-input/per-output
-   pricing differs and is provider-specific. When the rate is `None`, only
-   the token budget is enforced. Token counts themselves come from rig's
-   normalized `Usage` (providers that don't report usage report 0).
+No outstanding known limitations at this time. The items below that were
+previously tracked as gotchas have all been resolved; see the
+"Previously fixed" section. Token counts still depend on the provider
+reporting usage via rig's normalized `Usage` — providers that don't report
+usage report 0, in which case only the wall-clock and round backstops fire.
 
 ## Previously fixed (were gotchas, now resolved)
 
@@ -169,6 +166,11 @@ on the affected behavior:
 - ~~`graph::control` re-exported `config::Budget`/`parse_duration`~~ — fixed;
   `RunStats`/`ControlSignal` now live in `config`, the `graph` module has zero
   production references to `config`, and the re-exports were dropped.
+- ~~Cost estimate was a flat per-model rate~~ — fixed; replaced the single
+  `cost_per_million_tokens` rate with a proper `ProviderConfig::pricing`
+  (`input_per_million` / `output_per_million`), so cost reflects the real
+  split. `NodeUsage::from_rig_usage` takes `Option<&Pricing>` and computes
+  `input*in_rate + output*out_rate`.
 - ~~Control-node `command[0]` mis-resolved to `graph_dir/python3`~~ — fixed;
   commands are used verbatim and the node spawns with `current_dir = graph_dir`.
 - ~~Agent tools ran with the eureka process cwd~~ — fixed; tool subprocesses
@@ -194,10 +196,9 @@ on the affected behavior:
 - ~~`max_wallclock` unsettable via env var~~ — fixed; underscore-free aliases
   `maxwallclock`/`maxwallclocksecs`.
 - ~~Cost/token budget backstops not enforced~~ — fixed; `Node::process`
-  now returns a `NodeUsage` (tokens + best-effort cost), the scheduler
-  aggregates it into `RunStats`, and `max_cost_usd`/`max_tokens` now fire.
-  rig's extended prompt path supplies token usage; `cost_per_million_tokens`
-  is an optional flat rate.
+  now returns a `NodeUsage` (tokens + cost), the scheduler aggregates it into
+  `RunStats`, and `max_cost_usd`/`max_tokens` now fire. rig's extended prompt
+  path supplies token usage; cost uses per-input/per-output `pricing`.
 - ~~The scheduler was sequential~~ — fixed; activations run as concurrent
   tokio tasks in a `JoinSet` capped by `max_in_flight`, with `abort_all` on
   cancel/drop so in-flight LLM calls are cancelled cleanly.

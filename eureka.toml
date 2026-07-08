@@ -19,10 +19,13 @@ generation_model = "deepseek/deepseek-v4-flash"
 # meta_review = "anthropic/claude-opus-4-5"
 # evolution   = "deepseek/deepseek-v4-flash"
 #
-# Optional flat cost rate (USD per million tokens) so the budget.max_cost_usd
-# backstop can fire. A rough single-rate approximation; real per-input/per-
-# output pricing differs and is provider-specific.
-# cost_per_million_tokens = 0.27
+# Per-input/per-output pricing (USD per million tokens) so the
+# budget.max_cost_usd backstop can fire. Most providers charge different
+# rates for prompt vs completion tokens; set both. When omitted, cost is not
+# tracked and only the token budget is enforced.
+# [provider.pricing]
+# input_per_million  = 0.27   # e.g. $0.27 / 1M input tokens
+# output_per_million = 1.10   # e.g. $1.10 / 1M output tokens
 
 # Other providers — swap kind + model + set the matching env var:
 #
