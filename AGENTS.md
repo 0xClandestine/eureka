@@ -133,45 +133,64 @@ allowing `unwrap_used` in `#[cfg(test)]` modules or switching tests to
 - Re-exports live in each module's `mod.rs` and the top-level `lib.rs`.
 - Tests are inline (`#[cfg(test)] mod tests`) per file.
 
-## Gotchas (things that are currently broken or surprising)
+## Gotchas
 
-These are known issues — verify before relying on the affected behavior:
+These are known limitations or surprising behaviors — verify before relying
+on the affected behavior:
 
-1. **Default graph path is wrong.** `eureka.toml` and `config.rs::DEFAULT_TOML`
-   both point to `coscientist/coscientist.yml`, but the shipped graph is at
-   `example/coscientist.yml`. `eureka run` from the repo root fails to find the
-   manifest. Workaround: `--config` pointing at a corrected file, or run from
-   `example/` with an adjusted config.
-2. **Integration test path is wrong.**
-   `crates/eureka-cli/tests/coscientist_validate.rs` looks for
-   `<repo>/coscientist/coscientist.yml` (via `CARGO_MANIFEST_DIR/../../coscientist`),
-   which does not exist. The test fails. It should point at `example/`.
-3. **Control-node command[0] is mis-resolved.** `Session::build_control_node`
-   rewrites *any* relative `command[0]` to `graph_dir/<arg>`, so `[python3, …]`
-   becomes `<graph_dir>/python3`, which does not exist and fails to spawn.
-   Control nodes already spawn with `current_dir = graph_dir`, so this rewrite
-   is unnecessary and harmful and should be removed.
-4. **Agent-tool subprocess cwd is not set.** `CommandTool` calls
-   `run_subprocess` with `current_dir = None`, so relative script paths in tool
-   commands (e.g. `tools/arxiv_search.py`) resolve against the *eureka process*
-   cwd, not the graph dir. Tools fail unless you `cd` into the graph dir first.
-5. **No cross-round persistence is wired.** `run.rs` passes `db_path = None`
-   to `Session::new`, so `EUREKA_DB_PATH` is never set. The Python control
-   nodes (supervisor context memory, Elo rating persistence, proximity graph
-   cache) all no-op without it. The `db` module referenced in `lib.rs` does not
-   exist.
-6. **No input joining.** `Node::process` handles one `PortMsg` at a time.
-   Multi-input agents (e.g. `generation` with `in` + `context`) run a fresh LLM
-   call per input arrival — they never see both inputs together. Optional
-   secondary inputs (e.g. `ranking.graph`) re-trigger the node and cause
-   spurious re-emits. There is no barrier/join primitive in the runtime.
-7. **Scheduler is sequential.** Despite `max_in_flight`/`Semaphore`, the loop
-   awaits one node at a time; true concurrency is never realized. The semaphore
-   is decorative.
-8. **`cargo clippy --all-targets` fails** due to `unwrap_used` deny + test
-   `unwrap()`s.
-9. **`list` command advertises non-existent nodes** (`control.router`,
-   `control.merge`, `control.broadcast`) that are not implemented anywhere.
-10. **String-byte slicing panic risk**: `process.rs` slices stdout at a fixed
-    byte offset (`&stdout[..MAX_OUTPUT_BYTES]`), which can panic on non-ASCII
-    output that splits a multi-byte char.
+1. **Cost/token budget backstops are not enforced.** `RunStats.total_cost_usd`
+   and `total_tokens` are never populated — only `elapsed_secs` (via a 100ms
+   ticker) and `rounds_completed` are tracked. So `max_cost_usd`/`max_tokens`
+   backstops never fire. The agent loop does not report usage back; wiring
+   this requires `Node::process` to return usage, which is a trait change.
+2. **The scheduler is sequential.** Despite `max_in_flight`/`Semaphore`, the
+   loop awaits one node at a time; true concurrency is never realized. The
+   semaphore and its cancellation-aware acquire are in place for when
+   activations are spawned as tasks.
+3. **Round model is fuzzy.** `rounds_completed` is incremented per emission
+   that crosses a feedback edge, and feedback inputs are attributed to
+   `round + 1`. There is no synchronized cycle/barrier, so `round` is really
+   a "feedback-crossing count". `max_rounds` is a loose backstop; the
+   supervisor control node's own `max_rounds` is the primary controller.
+4. **Control nodes receive a single input per activation.** `ControlNode::process`
+   forwards only the first input to the subprocess (preserving the legacy
+   single-envelope protocol). Multi-input control nodes that want all inputs
+   together need a protocol extension. LLM agents, by contrast, now receive
+   all joined inputs in one `process()` call.
+5. **`graph::control` re-exports `config::Budget`/`parse_duration`**, which
+   breaks the "graph has no I/O, no domain" promise documented in
+   `graph/mod.rs`. Historical; move to `config` or a neutral module.
+
+## Previously fixed (were gotchas, now resolved)
+
+- ~~Control-node `command[0]` mis-resolved to `graph_dir/python3`~~ — fixed;
+  commands are used verbatim and the node spawns with `current_dir = graph_dir`.
+- ~~Agent tools ran with the eureka process cwd~~ — fixed; tool subprocesses
+  now run with `current_dir = graph_dir`.
+- ~~Default graph path `coscientist/coscientist.yml` didn't exist~~ — fixed;
+  defaults point at `example/coscientist.yml`.
+- ~~Integration test path pointed at a non-existent directory~~ — fixed.
+- ~~No cross-round persistence wired~~ — fixed; `run.rs` computes a per-session
+  SQLite path under `<graph_dir>/.eureka/sessions/<id>.sqlite` and passes it
+  as `EUREKA_DB_PATH` to control nodes.
+- ~~No input joining~~ — fixed; the scheduler buffers inputs per
+  `(node, round)` and fires a node once with all required (plus available
+  optional) inputs.
+- ~~Timed-out subprocesses leaked orphans~~ — fixed; `kill_on_drop(true)` +
+  explicit kill on timeout, and stdin/stdout/stderr are driven concurrently
+  to avoid pipe deadlocks. Output truncation is now char-safe.
+- ~~Tool named 'submit' could shadow the terminal tool~~ — fixed; rejected at
+  `build_agent_node`.
+- ~~Scheduler could deadlock on >256-way fan-out~~ — fixed; unbounded
+  activation channel.
+- ~~Redundant error nesting~~ — fixed; `GraphError::ParseError` Display no
+  longer prepends a prefix, and validation errors render as a joined list.
+- ~~`max_wallclock` unsettable via env var~~ — fixed; underscore-free aliases
+  `maxwallclock`/`maxwallclocksecs`.
+- ~~Cancellation ignored during permit wait~~ — fixed; biased `select!`.
+- ~~Optional inputs impossible to declare~~ — fixed; `required: false` in the
+  manifest's `PortDef`.
+- ~~`eureka list` advertised non-existent control nodes~~ — fixed; `list` now
+  introspects the actual graph manifest.
+- ~~`cargo clippy --all-targets` failed~~ — fixed; `unwrap_used`/`expect_used`
+  are allowed in `#[cfg(test)]` builds.
