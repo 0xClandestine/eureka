@@ -2,6 +2,7 @@ use std::collections::HashMap;
 use std::sync::Arc;
 
 use tokio::sync::{mpsc, Semaphore};
+use tokio::task::JoinSet;
 use tokio_util::sync::CancellationToken;
 use tracing::{info, span, warn, Level};
 
@@ -9,21 +10,53 @@ use crate::config::Budget;
 use crate::graph::artifact::Artifact;
 use crate::graph::control::RunStats;
 use crate::graph::edge::Edge;
-use crate::graph::node::{BoxedNode, Emit, NodeCtx, PortMsg};
+use crate::graph::node::{BoxedNode, Emit, NodeCtx, NodeError, NodeUsage, PortMsg};
 use crate::graph::spec::GraphSpec;
 
 use super::error::SchedulerError;
 use super::event::{SchedulerEvent, SchedulerSignal};
 
-/// A pending activation ready to be dispatched to a node.
+/// A ready activation: a node plus its joined inputs, about to run.
 #[derive(Debug)]
 struct Activation {
     /// The node ID to activate.
     node_id: String,
+    /// The kind of the node being activated.
+    node_kind: String,
+    /// The round this activation belongs to.
+    round: u32,
     /// The context for this activation.
     ctx: NodeCtx,
     /// The joined input messages (one per populated input port).
     inputs: Vec<PortMsg>,
+}
+
+/// The result of running an activation, sent back from a worker task to the
+/// main scheduler loop.
+struct ActivationResult {
+    /// The node ID that ran.
+    node_id: String,
+    /// The kind of the node that ran.
+    node_kind: String,
+    /// The round this activation belonged to.
+    round: u32,
+    /// The outcome: emitted artifacts plus a usage report, or an error.
+    result: Result<(Vec<Emit>, NodeUsage), NodeError>,
+}
+
+/// Per-task handles cloned into every spawned activation so worker tasks can
+/// acquire permits, emit events, and report results without holding a borrow
+/// on the scheduler.
+#[derive(Clone)]
+struct TaskHandles {
+    /// Channel back to the main loop carrying activation results.
+    results_tx: mpsc::UnboundedSender<ActivationResult>,
+    /// Channel for scheduler observability events.
+    event_tx: mpsc::Sender<SchedulerEvent>,
+    /// Semaphore capping concurrent in-flight `process` calls.
+    in_flight_sem: Arc<Semaphore>,
+    /// Cancellation token for graceful shutdown.
+    cancel: CancellationToken,
 }
 
 /// The event-driven scheduler that walks the graph.
@@ -121,10 +154,17 @@ impl Scheduler {
             map
         };
 
-        // Unbounded so that a large fan-out never blocks the single consumer
-        // loop. Memory is bounded in practice by the graph topology and budget
-        // backstops.
-        let (activation_tx, mut activation_rx) = mpsc::unbounded_channel::<Activation>();
+        // Results channel: worker tasks send their outcome back here. Unbounded
+        // so a large fan-out never blocks the workers. The JoinSet owns task
+        // lifecycles and aborts in-flight tasks when dropped (e.g. on cancel).
+        let (results_tx, mut results_rx) = mpsc::unbounded_channel::<ActivationResult>();
+        let mut tasks: JoinSet<()> = JoinSet::new();
+        let handles = TaskHandles {
+            results_tx,
+            event_tx: self.event_tx.clone(),
+            in_flight_sem: Arc::clone(&self.in_flight_sem),
+            cancel: self.cancel.clone(),
+        };
         let mut pending: usize = 0;
 
         // Per-node input buffer keyed by (node_id, round). The scheduler joins
@@ -154,7 +194,8 @@ impl Scheduler {
                         artifact.clone(),
                         self.stats.rounds_completed,
                         &mut input_buffer,
-                        &activation_tx,
+                        &handles,
+                        &mut tasks,
                     )?;
                 }
             }
@@ -171,6 +212,7 @@ impl Scheduler {
             tokio::select! {
                 () = self.cancel.cancelled() => {
                     info!("Run cancelled");
+                    tasks.abort_all();
                     self.stats.elapsed_secs = start.elapsed().as_secs_f64();
                     return Ok(self.stats.clone());
                 }
@@ -194,46 +236,15 @@ impl Scheduler {
                     }
                 }
 
-                maybe_act = activation_rx.recv() => {
-                    match maybe_act {
-                        Some(activation) => {
+                maybe_result = results_rx.recv() => {
+                    match maybe_result {
+                        Some(result) => {
                             pending -= 1;
+                            let node_id = result.node_id.clone();
+                            let node_kind = result.node_kind.clone();
+                            let round = result.round;
 
-                            let node_id = activation.node_id.clone();
-                            let node_kind = activation.ctx.node_kind.clone();
-                            let round = activation.ctx.round;
-
-                            let _ = self.event_tx.send(SchedulerEvent::ActivationStarted {
-                                node_id: node_id.clone(),
-                                node_kind: node_kind.clone(),
-                                round,
-                            }).await;
-
-                            // Acquire a permit, but bail out promptly if the run is
-                            // cancelled while waiting for a free slot.
-                            let permit = tokio::select! {
-                                biased;
-                                () = self.cancel.cancelled() => {
-                                    self.stats.elapsed_secs = start.elapsed().as_secs_f64();
-                                    return Ok(self.stats.clone());
-                                }
-                                p = self.in_flight_sem.clone().acquire_owned() => {
-                                    p.map_err(|_| SchedulerError::Internal("Semaphore closed".into()))?
-                                }
-                            };
-
-                            let node = self.nodes.get(&node_id).ok_or_else(|| {
-                                SchedulerError::NodeNotFound(node_id.clone())
-                            })?;
-
-                            let ctx = activation.ctx;
-                            let inputs = activation.inputs;
-
-                            let result = node.process(&ctx, inputs).await;
-
-                            drop(permit);
-
-                            match result {
+                            match result.result {
                                 Ok((emits, usage)) => {
                                     // Aggregate resource usage into the run stats
                                     // so the cost/token budget backstops fire.
@@ -265,8 +276,9 @@ impl Scheduler {
                                             &outbound,
                                             self.stats.rounds_completed,
                                             &mut input_buffer,
-                                            &activation_tx,
-                                        ).await?;
+                                            &handles,
+                                            &mut tasks,
+                                        )?;
                                         pending += new_count;
                                         if crossed_cycle {
                                             self.stats.rounds_completed += 1;
@@ -288,6 +300,8 @@ impl Scheduler {
                             }
                         }
                         None => {
+                            // results_tx dropped: all worker handles gone. The
+                            // remaining `pending` work can never complete.
                             break;
                         }
                     }
@@ -322,14 +336,15 @@ impl Scheduler {
     /// required inputs are all present.
     ///
     /// Returns `(enqueued_count, crossed_feedback_edge)`.
-    async fn route_emission(
+    fn route_emission(
         &self,
         from_node_id: &str,
         emit: &Emit,
         outbound: &HashMap<String, Vec<Edge>>,
         round: u32,
         input_buffer: &mut HashMap<(String, u32), HashMap<String, Artifact>>,
-        activation_tx: &mpsc::UnboundedSender<Activation>,
+        handles: &TaskHandles,
+        tasks: &mut JoinSet<()>,
     ) -> Result<(usize, bool), SchedulerError> {
         let Some(edges) = outbound.get(from_node_id) else {
             return Ok((0, false));
@@ -357,7 +372,8 @@ impl Scheduler {
                 emit.artifact.clone(),
                 target_round,
                 input_buffer,
-                activation_tx,
+                handles,
+                tasks,
             )?;
         }
 
@@ -366,7 +382,8 @@ impl Scheduler {
 
     /// Buffer a single input for `(node_id, round)` and, if the node now has
     /// all required inputs present, drain the buffer into an `Activation` and
-    /// dispatch it. Returns the number of activations dispatched (0 or 1).
+    /// spawn it as a worker task. Returns the number of activations dispatched
+    /// (0 or 1).
     fn deliver_input(
         &self,
         node_id: &str,
@@ -374,7 +391,8 @@ impl Scheduler {
         artifact: Artifact,
         round: u32,
         input_buffer: &mut HashMap<(String, u32), HashMap<String, Artifact>>,
-        activation_tx: &mpsc::UnboundedSender<Activation>,
+        handles: &TaskHandles,
+        tasks: &mut JoinSet<()>,
     ) -> Result<usize, SchedulerError> {
         let bucket = input_buffer.entry((node_id.to_string(), round)).or_default();
         bucket.insert(port.to_string(), artifact);
@@ -418,17 +436,69 @@ impl Scheduler {
         );
         ctx.event_tx = Some(self.event_tx.clone());
 
-        let act = Activation {
+        let activation = Activation {
             node_id: node_id.to_string(),
+            node_kind: ctx.node_kind.clone(),
+            round,
             ctx,
             inputs,
         };
-
-        if activation_tx.send(act).is_err() {
-            return Err(SchedulerError::Internal("Activation channel closed".into()));
-        }
+        spawn_activation(activation, node.clone(), handles, tasks);
         Ok(1)
     }
+}
+
+/// Spawn a single activation as a worker task. The task emits an
+/// `ActivationStarted` event, acquires an in-flight permit (cancelling
+/// promptly if the run is cancelled), runs the node, and sends the result
+/// back to the main loop via `handles.results_tx`. Aborting the JoinSet
+/// (on cancel or drop) cancels in-flight `process` calls.
+fn spawn_activation(
+    activation: Activation,
+    node: BoxedNode,
+    handles: &TaskHandles,
+    tasks: &mut JoinSet<()>,
+) {
+        let node_id = activation.node_id.clone();
+        let node_kind = activation.node_kind.clone();
+        let round = activation.round;
+        let event_tx = handles.event_tx.clone();
+        let results_tx = handles.results_tx.clone();
+        let sem = Arc::clone(&handles.in_flight_sem);
+        let cancel = handles.cancel.clone();
+        let ctx = activation.ctx;
+        let inputs = activation.inputs;
+
+        tasks.spawn(async move {
+            let _ = event_tx
+                .send(SchedulerEvent::ActivationStarted {
+                    node_id: node_id.clone(),
+                    node_kind: node_kind.clone(),
+                    round,
+                })
+                .await;
+
+            // Acquire a permit, bailing out promptly if cancelled while
+            // waiting for a free slot.
+            let permit = tokio::select! {
+                biased;
+                () = cancel.cancelled() => return,
+                p = sem.acquire_owned() => match p {
+                    Ok(p) => p,
+                    Err(_) => return,
+                }
+            };
+
+            let result = node.process(&ctx, inputs).await;
+            drop(permit);
+
+            let _ = results_tx.send(ActivationResult {
+                node_id,
+                node_kind,
+                round,
+                result,
+            });
+        });
 }
 
 #[cfg(test)]
@@ -891,5 +961,135 @@ mod tests {
         assert_eq!(stats.total_output_tokens, 500);
         assert_eq!(stats.total_tokens, 1500);
         assert!((stats.total_cost_usd - 0.42).abs() < f64::EPSILON);
+    }
+
+    #[tokio::test]
+    async fn test_activations_run_concurrently_not_sequentially() {
+        // Regression (B): with max_in_flight >= 2, two independent slow nodes
+        // activated in the same round must run in parallel, so their combined
+        // wall-clock is ~max(t1, t2) rather than t1 + t2.
+        use std::time::{Duration, Instant};
+
+        struct SlowNode {
+            delay: Duration,
+            ports: PortSpec,
+        }
+
+        #[async_trait]
+        impl Node for SlowNode {
+            fn ports(&self) -> PortSpec {
+                self.ports.clone()
+            }
+
+            async fn process(
+                &self,
+                _ctx: &NodeCtx,
+                inputs: Vec<PortMsg>,
+            ) -> Result<(Vec<Emit>, crate::graph::node::NodeUsage), NodeError> {
+                tokio::time::sleep(self.delay).await;
+                Ok((
+                    inputs
+                        .into_iter()
+                        .map(|m| Emit::new("out", m.artifact))
+                        .collect(),
+                    crate::graph::node::NodeUsage::default(),
+                ))
+            }
+        }
+
+        let slow_ports = PortSpec::new(
+            vec![PortSpecEntry {
+                name: "in".into(),
+                direction: PortDirection::Input,
+                kind: "Goal".to_string(),
+                required: true,
+            }],
+            vec![PortSpecEntry {
+                name: "out".into(),
+                direction: PortDirection::Output,
+                kind: "Goal".to_string(),
+                required: false,
+            }],
+        );
+        let delay = Duration::from_millis(250);
+        let mut nodes = HashMap::new();
+        nodes.insert(
+            "a".to_string(),
+            BoxedNode::new(SlowNode {
+                delay,
+                ports: slow_ports.clone(),
+            }),
+        );
+        nodes.insert(
+            "b".to_string(),
+            BoxedNode::new(SlowNode {
+                delay,
+                ports: slow_ports.clone(),
+            }),
+        );
+        nodes.insert(
+            "sink".to_string(),
+            BoxedNode::new(TestNode {
+                ports: PortSpec::new(
+                    vec![PortSpecEntry {
+                        name: "in".into(),
+                        direction: PortDirection::Input,
+                        kind: "Goal".to_string(),
+                        required: false,
+                    }],
+                    vec![],
+                ),
+                output: None,
+            }),
+        );
+
+        let spec = GraphSpec {
+            name: Some("concurrency-test".into()),
+            description: None,
+            nodes: vec![
+                GraphNodeSpec {
+                    id: "a".into(),
+                    kind: "test.node".into(),
+                    config: serde_json::Value::Null,
+                    description: None,
+                },
+                GraphNodeSpec {
+                    id: "b".into(),
+                    kind: "test.node".into(),
+                    config: serde_json::Value::Null,
+                    description: None,
+                },
+                GraphNodeSpec {
+                    id: "sink".into(),
+                    kind: "test.node".into(),
+                    config: serde_json::Value::Null,
+                    description: None,
+                },
+            ],
+            edges: vec![
+                Edge::new("a", "out", "sink", "in"),
+                Edge::new("b", "out", "sink", "in"),
+            ],
+            metadata: serde_json::Value::Null,
+        };
+        let mut scheduler = Scheduler::new(spec, nodes, Budget::default(), 4);
+        let goal = Artifact {
+            kind: "Goal".to_string(),
+            data: serde_json::json!({}),
+        };
+        let initial = HashMap::from([
+            ("a".to_string(), vec![goal.clone()]),
+            ("b".to_string(), vec![goal]),
+        ]);
+        let start = Instant::now();
+        scheduler.run(initial).await.unwrap();
+        let elapsed = start.elapsed();
+
+        // Two 250ms nodes in parallel should finish well under 2*250ms. Allow
+        // generous headroom for CI scheduling. Sequential would be >= 500ms.
+        assert!(
+            elapsed < Duration::from_millis(450),
+            "expected concurrent execution (~250ms) but took {elapsed:?}"
+        );
     }
 }
