@@ -33,7 +33,7 @@ impl Node for MockRanker {
             PortSpecEntry{name:"state".into(),direction:PortDirection::Output,kind:"Ranking".into(),required:false},
         ],
     )}
-    async fn process(&self,_:&NodeCtx,_:Vec<PortMsg>)->Result<Vec<Emit>,NodeError>{Ok(vec![])}
+    async fn process(&self,_:&NodeCtx,_:Vec<PortMsg>)->Result<(Vec<Emit>,eureka::graph::node::NodeUsage),NodeError>{Ok((vec![],eureka::graph::node::NodeUsage::default()))}
 }
 
 struct MockProx;
@@ -46,7 +46,7 @@ impl Node for MockProx {
             PortSpecEntry{name:"graph".into(),direction:PortDirection::Output,kind:"ProximityGraph".into(),required:false},
         ],
     )}
-    async fn process(&self,_:&NodeCtx,_:Vec<PortMsg>)->Result<Vec<Emit>,NodeError>{Ok(vec![])}
+    async fn process(&self,_:&NodeCtx,_:Vec<PortMsg>)->Result<(Vec<Emit>,eureka::graph::node::NodeUsage),NodeError>{Ok((vec![],eureka::graph::node::NodeUsage::default()))}
 }
 
 struct MockSup;
@@ -59,13 +59,13 @@ impl Node for MockSup {
             PortSpecEntry{name:"halt".into(),direction:PortDirection::Output,kind:"Control".into(),required:false},
         ],
     )}
-    async fn process(&self,_:&NodeCtx,_:Vec<PortMsg>)->Result<Vec<Emit>,NodeError>{Ok(vec![])}
+    async fn process(&self,_:&NodeCtx,_:Vec<PortMsg>)->Result<(Vec<Emit>,eureka::graph::node::NodeUsage),NodeError>{Ok((vec![],eureka::graph::node::NodeUsage::default()))}
 }
 
 struct DummyClient;
 #[async_trait]
 impl LlmClient for DummyClient {
-    async fn run_agent_loop(&self,_:&str,_:&Value,_:&[ToolDef],_:&str,_:u32,_:f64,_:&str,_:&str,_:u32,_:&str,_:Option<tokio::sync::mpsc::Sender<SchedulerEvent>>)->Result<Value,AgentError>{Ok(json!({}))}
+    async fn run_agent_loop(&self,_:&str,_:&Value,_:&[ToolDef],_:&str,_:u32,_:f64,_:&str,_:&str,_:u32,_:&str,_:Option<tokio::sync::mpsc::Sender<SchedulerEvent>>)->Result<(Value,eureka::graph::node::NodeUsage),AgentError>{Ok((json!({}),eureka::graph::node::NodeUsage::default()))}
 }
 
 #[test]

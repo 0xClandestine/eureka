@@ -6,6 +6,7 @@
 
 use std::sync::{Arc, Mutex};
 
+use crate::graph::node::NodeUsage;
 use crate::scheduler::SchedulerEvent;
 use async_trait::async_trait;
 use rig_core::agent::AgentBuilder;
@@ -45,19 +46,25 @@ pub trait LlmClient: Send + Sync {
         round: u32,
         work_dir: &str,
         event_tx: Option<mpsc::Sender<SchedulerEvent>>,
-    ) -> Result<serde_json::Value, AgentError>;
+    ) -> Result<(serde_json::Value, NodeUsage), AgentError>;
 }
 
 /// A `LlmClient` backed by any `rig` `CompletionModel`.
 pub struct RigClient<M> {
     /// The underlying rig completion model.
     model: M,
+    /// Optional flat cost rate (USD per million tokens) for the cost backstop.
+    cost_per_million_tokens: Option<f64>,
 }
 
 impl<M: CompletionModel + Clone + Send + Sync + 'static> RigClient<M> {
-    /// Wrap a rig completion model.
-    pub const fn new(model: M) -> Self {
-        Self { model }
+    /// Wrap a rig completion model with an optional cost-per-million-tokens
+    /// rate used to populate [`NodeUsage::cost_usd`].
+    pub const fn new(model: M, cost_per_million_tokens: Option<f64>) -> Self {
+        Self {
+            model,
+            cost_per_million_tokens,
+        }
     }
 }
 
@@ -76,7 +83,7 @@ impl<M: CompletionModel + Clone + Send + Sync + 'static> LlmClient for RigClient
         round: u32,
         work_dir: &str,
         event_tx: Option<mpsc::Sender<SchedulerEvent>>,
-    ) -> Result<serde_json::Value, AgentError> {
+    ) -> Result<(serde_json::Value, NodeUsage), AgentError> {
         let result: Arc<Mutex<Option<serde_json::Value>>> = Arc::new(Mutex::new(None));
 
         let submit = Submit {
@@ -108,22 +115,34 @@ impl<M: CompletionModel + Clone + Send + Sync + 'static> LlmClient for RigClient
             .tools(command_tools)
             .build();
 
-        agent
+        // Use the extended prompt path so we get a PromptResponse with
+        // aggregated token usage across all turns of the agent loop.
+        let response = agent
             .prompt(initial_message)
             .max_turns(max_iterations as usize)
+            .extended_details()
             .await
             .map_err(|e| AgentError::Provider(e.to_string()))?;
+
+        let usage = NodeUsage::from_rig_usage(
+            response.usage.input_tokens,
+            response.usage.output_tokens,
+            response.usage.total_tokens,
+            self.cost_per_million_tokens,
+        );
 
         let submitted = result
             .lock()
             .map_err(|e| AgentError::Provider(format!("lock poisoned: {e}")))?
             .take();
 
-        submitted.ok_or_else(|| {
+        let value = submitted.ok_or_else(|| {
             AgentError::ExtractionFailed(
                 "Agent exhausted iterations without calling submit".to_string(),
             )
-        })
+        })?;
+
+        Ok((value, usage))
     }
 }
 

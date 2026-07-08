@@ -18,6 +18,11 @@ generation_model = "deepseek/deepseek-v4-flash"
 # reflection  = "anthropic/claude-opus-4-5"
 # meta_review = "anthropic/claude-opus-4-5"
 # evolution   = "deepseek/deepseek-v4-flash"
+#
+# Optional flat cost rate (USD per million tokens) so the budget.max_cost_usd
+# backstop can fire. A rough single-rate approximation; real per-input/per-
+# output pricing differs and is provider-specific.
+# cost_per_million_tokens = 0.27
 
 # Other providers — swap kind + model + set the matching env var:
 #

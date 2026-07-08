@@ -38,10 +38,16 @@ impl std::fmt::Display for ControlSignal {
 /// Accumulated run statistics used by the governor.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct RunStats {
-    /// Total cost accumulated so far.
+    /// Total cost accumulated so far (best-effort; 0.0 if no per-model rate
+    /// is configured — see `ProviderConfig::cost_per_million_tokens`).
     pub total_cost_usd: f64,
-    /// Total tokens consumed so far.
+    /// Total tokens consumed so far (input + output, or the provider's
+    /// aggregate when it does not split them).
     pub total_tokens: u64,
+    /// Total prompt/input tokens consumed so far.
+    pub total_input_tokens: u64,
+    /// Total completion/output tokens consumed so far.
+    pub total_output_tokens: u64,
     /// Wall-clock seconds elapsed.
     pub elapsed_secs: f64,
     /// Rounds completed.
@@ -96,6 +102,19 @@ mod tests {
         };
         let stats = RunStats {
             total_cost_usd: 15.0,
+            ..RunStats::default()
+        };
+        assert!(stats.is_budget_exhausted(&budget).is_some());
+    }
+
+    #[test]
+    fn test_budget_exhaustion_tokens() {
+        let budget = Budget {
+            max_tokens: 1000,
+            ..Budget::default()
+        };
+        let stats = RunStats {
+            total_tokens: 1500,
             ..RunStats::default()
         };
         assert!(stats.is_budget_exhausted(&budget).is_some());

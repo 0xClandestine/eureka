@@ -641,62 +641,62 @@ fn build_llm_client(
         ProviderKind::Anthropic => {
             let client = anthropic::Client::from_env()
                 .context("ANTHROPIC_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(client.completion_model(model_id))))
+            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.cost_per_million_tokens)))
         }
         ProviderKind::OpenAI => {
             let client = openai::Client::from_env()
                 .context("OPENAI_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(client.completion_model(model_id))))
+            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.cost_per_million_tokens)))
         }
         ProviderKind::OpenRouter => {
             let client = openrouter::Client::from_env()
                 .context("OPENROUTER_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(client.completion_model(model_id))))
+            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.cost_per_million_tokens)))
         }
         ProviderKind::Gemini => {
             let client = gemini::Client::from_env()
                 .context("GEMINI_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(client.completion_model(model_id))))
+            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.cost_per_million_tokens)))
         }
         ProviderKind::Groq => {
             let client =
                 groq::Client::from_env().context("GROQ_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(client.completion_model(model_id))))
+            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.cost_per_million_tokens)))
         }
         ProviderKind::Mistral => {
             let client = mistral::Client::from_env()
                 .context("MISTRAL_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(client.completion_model(model_id))))
+            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.cost_per_million_tokens)))
         }
         ProviderKind::Cohere => {
             let client = cohere::Client::from_env()
                 .context("COHERE_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(client.completion_model(model_id))))
+            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.cost_per_million_tokens)))
         }
         ProviderKind::DeepSeek => {
             let client = deepseek::Client::from_env()
                 .context("DEEPSEEK_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(client.completion_model(model_id))))
+            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.cost_per_million_tokens)))
         }
         ProviderKind::Perplexity => {
             let client = perplexity::Client::from_env()
                 .context("PERPLEXITY_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(client.completion_model(model_id))))
+            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.cost_per_million_tokens)))
         }
         ProviderKind::Together => {
             let client = together::Client::from_env()
                 .context("TOGETHER_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(client.completion_model(model_id))))
+            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.cost_per_million_tokens)))
         }
         ProviderKind::XAI => {
             let client =
                 xai::Client::from_env().context("XAI_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(client.completion_model(model_id))))
+            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.cost_per_million_tokens)))
         }
         ProviderKind::Ollama => {
             let client = ollama::Client::from_env()
                 .context("Failed to initialise Ollama client (check OLLAMA_API_BASE_URL)")?;
-            Ok(Arc::new(RigClient::new(client.completion_model(model_id))))
+            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.cost_per_million_tokens)))
         }
     }
 }
@@ -735,11 +735,14 @@ mod tests {
             &self,
             _ctx: &NodeCtx,
             inputs: Vec<PortMsg>,
-        ) -> Result<Vec<Emit>, NodeError> {
-            Ok(inputs
-                .into_iter()
-                .map(|m| Emit::new("out", m.artifact))
-                .collect())
+        ) -> Result<(Vec<Emit>, crate::graph::node::NodeUsage), NodeError> {
+            Ok((
+                inputs
+                    .into_iter()
+                    .map(|m| Emit::new("out", m.artifact))
+                    .collect(),
+                crate::graph::node::NodeUsage::default(),
+            ))
         }
     }
 
@@ -768,11 +771,14 @@ mod tests {
             &self,
             _ctx: &NodeCtx,
             inputs: Vec<PortMsg>,
-        ) -> Result<Vec<Emit>, NodeError> {
-            Ok(inputs
-                .into_iter()
-                .map(|m| Emit::new("out", m.artifact))
-                .collect())
+        ) -> Result<(Vec<Emit>, crate::graph::node::NodeUsage), NodeError> {
+            Ok((
+                inputs
+                    .into_iter()
+                    .map(|m| Emit::new("out", m.artifact))
+                    .collect(),
+                crate::graph::node::NodeUsage::default(),
+            ))
         }
     }
 
@@ -882,7 +888,7 @@ edges: []
             "control node should spawn successfully with bare `python3`; got: {:?}",
             result.err()
         );
-        let emits = result.unwrap();
+        let (emits, _) = result.unwrap();
         assert_eq!(emits.len(), 1);
         assert_eq!(emits[0].port, "out");
         assert_eq!(emits[0].artifact.kind, "TestOut");
@@ -936,7 +942,7 @@ edges: []
             },
         };
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let emits = rt.block_on(boxed.process(&ctx, vec![msg])).expect("spawn ok");
+        let (emits, _) = rt.block_on(boxed.process(&ctx, vec![msg])).expect("spawn ok");
         assert_eq!(emits.len(), 1);
         let db = emits[0].artifact.data["db"].as_str().unwrap_or("");
         assert_eq!(db, db_path.to_string_lossy());

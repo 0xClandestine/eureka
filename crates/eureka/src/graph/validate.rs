@@ -462,8 +462,8 @@ mod tests {
             &self,
             _ctx: &NodeCtx,
             _inputs: Vec<PortMsg>,
-        ) -> Result<Vec<Emit>, NodeError> {
-            Ok(vec![])
+        ) -> Result<(Vec<Emit>, crate::graph::node::NodeUsage), NodeError> {
+            Ok((vec![], crate::graph::node::NodeUsage::default()))
         }
     }
 

@@ -55,7 +55,7 @@ impl Node for LlmAgentNode {
         &self,
         ctx: &NodeCtx,
         inputs: Vec<PortMsg>,
-    ) -> Result<Vec<Emit>, NodeError> {
+    ) -> Result<(Vec<Emit>, crate::graph::node::NodeUsage), NodeError> {
         // Build the initial loop message from all available inputs. For a
         // single-input agent, this is just the artifact payload. For a
         // multi-input agent, each input is labelled with its port name so the
@@ -80,7 +80,7 @@ impl Node for LlmAgentNode {
                 .map_err(|e| NodeError::Internal(e.to_string()))?
         };
 
-        let output_json = self
+        let (output_json, usage) = self
             .client
             .run_agent_loop(
                 &self.def.preamble,
@@ -98,15 +98,15 @@ impl Node for LlmAgentNode {
             .await
             .map_err(|e| NodeError::Agent(e.to_string()))?;
 
-        if self.def.outputs.len() == 1 {
+        let emits = if self.def.outputs.len() == 1 {
             let port = &self.def.outputs[0];
-            Ok(vec![Emit::new(
+            vec![Emit::new(
                 &port.port,
                 Artifact {
                     kind: port.kind.clone(),
                     data: output_json,
                 },
-            )])
+            )]
         } else {
             let mut emits = Vec::with_capacity(self.def.outputs.len());
             for port in &self.def.outputs {
@@ -122,8 +122,10 @@ impl Node for LlmAgentNode {
                     },
                 ));
             }
-            Ok(emits)
-        }
+            emits
+        };
+
+        Ok((emits, usage))
     }
 }
 
@@ -150,8 +152,8 @@ mod tests {
             _round: u32,
             _work_dir: &str,
             _event_tx: Option<tokio::sync::mpsc::Sender<crate::scheduler::SchedulerEvent>>,
-        ) -> Result<serde_json::Value, AgentError> {
-            Ok(serde_json::json!({ "echo": initial_message }))
+        ) -> Result<(serde_json::Value, crate::graph::node::NodeUsage), AgentError> {
+            Ok((serde_json::json!({ "echo": initial_message }), crate::graph::node::NodeUsage::default()))
         }
     }
 
@@ -189,7 +191,7 @@ mod tests {
             },
         };
 
-        let emits = node.process(&ctx, vec![msg]).await.unwrap();
+        let (emits, _) = node.process(&ctx, vec![msg]).await.unwrap();
         assert_eq!(emits.len(), 1);
         assert_eq!(emits[0].port, "out");
         assert_eq!(emits[0].artifact.kind, "Hypotheses");
@@ -214,11 +216,11 @@ mod tests {
                 _round: u32,
                 _work_dir: &str,
                 _event_tx: Option<tokio::sync::mpsc::Sender<crate::scheduler::SchedulerEvent>>,
-            ) -> Result<serde_json::Value, AgentError> {
-                Ok(serde_json::json!({
+            ) -> Result<(serde_json::Value, crate::graph::node::NodeUsage), AgentError> {
+                Ok((serde_json::json!({
                     "insights": { "recurring_patterns": [] },
                     "overview": { "summary": "Done" }
-                }))
+                }), crate::graph::node::NodeUsage::default()))
             }
         }
 
@@ -256,7 +258,7 @@ mod tests {
             },
         };
 
-        let emits = node.process(&ctx, vec![msg]).await.unwrap();
+        let (emits, _) = node.process(&ctx, vec![msg]).await.unwrap();
         assert_eq!(emits.len(), 2);
 
         let ports: Vec<&str> = emits.iter().map(|e| e.port.as_str()).collect();
@@ -308,9 +310,9 @@ mod tests {
                 _round: u32,
                 _work_dir: &str,
                 _event_tx: Option<tokio::sync::mpsc::Sender<crate::scheduler::SchedulerEvent>>,
-            ) -> Result<serde_json::Value, AgentError> {
+            ) -> Result<(serde_json::Value, crate::graph::node::NodeUsage), AgentError> {
                 *self.captured.lock().unwrap() = Some(initial_message.to_string());
-                Ok(serde_json::json!({ "hypotheses": [] }))
+                Ok((serde_json::json!({ "hypotheses": [] }), crate::graph::node::NodeUsage::default()))
             }
         }
 

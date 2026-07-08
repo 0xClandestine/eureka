@@ -15,7 +15,7 @@ pub mod validate;
 pub use artifact::{Artifact, ArtifactKind};
 pub use control::{parse_duration, Budget, ControlSignal, RunStats};
 pub use edge::Edge;
-pub use node::{BoxedNode, Emit, Node, NodeCtx, NodeError, PortMsg};
+pub use node::{BoxedNode, Emit, Node, NodeCtx, NodeError, NodeUsage, PortMsg};
 pub use port::{PortDef, PortDirection, PortId, PortSpec, PortSpecEntry};
 pub use spec::{GraphError, GraphNodeSpec, GraphSpec};
 pub use validate::{parse_port_ref, validate_graph, PortRegistry, ValidationResult};

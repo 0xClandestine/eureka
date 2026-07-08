@@ -227,6 +227,13 @@ pub struct ProviderConfig {
     /// values are model IDs. Falls back to `generation_model` when absent.
     #[serde(default)]
     pub agent_models: std::collections::HashMap<String, String>,
+    /// Optional flat cost rate (USD per million tokens) used to estimate the
+    /// cost backstop. Real per-input/per-output pricing differs and is
+    /// provider-specific; this is a rough, single-rate approximation so the
+    /// `budget.max_cost_usd` backstop can fire. When `None`, cost is not
+    /// tracked and only the token budget is enforced.
+    #[serde(default)]
+    pub cost_per_million_tokens: Option<f64>,
 }
 
 // ---------------------------------------------------------------------------

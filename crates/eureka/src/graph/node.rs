@@ -1,5 +1,6 @@
 //! The `Node` trait — the fundamental processing unit in the graph.
 
+use std::ops::{Add, AddAssign};
 use std::sync::Arc;
 
 use async_trait::async_trait;
@@ -114,6 +115,74 @@ pub enum NodeError {
     Internal(String),
 }
 
+/// Resource usage reported by a node for a single activation.
+///
+/// The scheduler accumulates these into [`crate::graph::control::RunStats`] so
+/// the cost/token budget backstops can fire. LLM-backed nodes populate token
+/// counts (and an optional best-effort cost when a per-model rate is
+/// configured); subprocess and mock nodes return the zero default.
+#[derive(Debug, Clone, Copy, Default, PartialEq)]
+pub struct NodeUsage {
+    /// Prompt/input tokens consumed by this activation.
+    pub input_tokens: u64,
+    /// Completion/output tokens consumed by this activation.
+    pub output_tokens: u64,
+    /// Total tokens consumed by this activation. Equal to
+    /// `input_tokens + output_tokens` when the provider reports both; may be
+    /// the only non-zero field for providers that report a single aggregate.
+    pub total_tokens: u64,
+    /// Best-effort cost in USD for this activation. `0.0` when no per-model
+    /// rate is configured (see `ProviderConfig::cost_per_million_tokens`).
+    pub cost_usd: f64,
+}
+
+impl NodeUsage {
+    /// Create a usage report from rig's normalized token counts and an
+    /// optional cost-per-million-tokens rate.
+    #[must_use]
+    pub fn from_rig_usage(
+        input_tokens: u64,
+        output_tokens: u64,
+        total_tokens: u64,
+        cost_per_million_tokens: Option<f64>,
+    ) -> Self {
+        // Fall back to input+output when the provider omits an aggregate.
+        let total = if total_tokens == 0 {
+            input_tokens + output_tokens
+        } else {
+            total_tokens
+        };
+        let cost_usd = cost_per_million_tokens
+            .map(|rate| (total as f64 / 1_000_000.0) * rate)
+            .unwrap_or(0.0);
+        Self {
+            input_tokens,
+            output_tokens,
+            total_tokens: total,
+            cost_usd,
+        }
+    }
+}
+
+impl Add for NodeUsage {
+    type Output = Self;
+
+    fn add(self, rhs: Self) -> Self::Output {
+        Self {
+            input_tokens: self.input_tokens + rhs.input_tokens,
+            output_tokens: self.output_tokens + rhs.output_tokens,
+            total_tokens: self.total_tokens + rhs.total_tokens,
+            cost_usd: self.cost_usd + rhs.cost_usd,
+        }
+    }
+}
+
+impl AddAssign for NodeUsage {
+    fn add_assign(&mut self, rhs: Self) {
+        *self = *self + rhs;
+    }
+}
+
 /// The fundamental processing unit in the graph.
 ///
 /// A `Node` reacts to artifacts on its input ports and emits artifacts
@@ -132,7 +201,15 @@ pub trait Node: Send + Sync {
     /// (required inputs plus any optional inputs that have arrived). For
     /// single-input nodes this is exactly one `PortMsg`; for multi-input
     /// nodes it is one per populated port.
-    async fn process(&self, ctx: &NodeCtx, inputs: Vec<PortMsg>) -> Result<Vec<Emit>, NodeError>;
+    ///
+    /// Returns the emitted artifacts alongside a [`NodeUsage`] report so the
+    /// scheduler can accumulate cost/token budget accounting. Non-LLM nodes
+    /// return [`NodeUsage::default`] (zero cost/tokens).
+    async fn process(
+        &self,
+        ctx: &NodeCtx,
+        inputs: Vec<PortMsg>,
+    ) -> Result<(Vec<Emit>, NodeUsage), NodeError>;
 }
 
 /// A type-erased boxed node that supports cloning via Arc.
@@ -168,7 +245,7 @@ impl BoxedNode {
         &self,
         ctx: &NodeCtx,
         inputs: Vec<PortMsg>,
-    ) -> Result<Vec<Emit>, NodeError> {
+    ) -> Result<(Vec<Emit>, NodeUsage), NodeError> {
         self.inner.process(ctx, inputs).await
     }
 }
@@ -190,11 +267,14 @@ mod tests {
             &self,
             _ctx: &NodeCtx,
             inputs: Vec<PortMsg>,
-        ) -> Result<Vec<Emit>, NodeError> {
-            Ok(inputs
-                .into_iter()
-                .map(|m| Emit::new(m.port, m.artifact))
-                .collect())
+        ) -> Result<(Vec<Emit>, NodeUsage), NodeError> {
+            Ok((
+                inputs
+                    .into_iter()
+                    .map(|m| Emit::new(m.port, m.artifact))
+                    .collect(),
+                NodeUsage::default(),
+            ))
         }
     }
 
@@ -210,7 +290,7 @@ mod tests {
                 data: serde_json::json!({ "goal": "Test" }),
             },
         };
-        let emits = node.process(&ctx, vec![msg]).await.unwrap();
+        let (emits, _usage) = node.process(&ctx, vec![msg]).await.unwrap();
         assert_eq!(emits.len(), 1);
     }
 }

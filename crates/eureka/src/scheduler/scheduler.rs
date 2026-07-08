@@ -234,7 +234,14 @@ impl Scheduler {
                             drop(permit);
 
                             match result {
-                                Ok(emits) => {
+                                Ok((emits, usage)) => {
+                                    // Aggregate resource usage into the run stats
+                                    // so the cost/token budget backstops fire.
+                                    self.stats.total_input_tokens += usage.input_tokens;
+                                    self.stats.total_output_tokens += usage.output_tokens;
+                                    self.stats.total_tokens += usage.total_tokens;
+                                    self.stats.total_cost_usd += usage.cost_usd;
+
                                     let outputs: Vec<serde_json::Value> = emits
                                         .iter()
                                         .map(|e| serde_json::json!({
@@ -453,12 +460,13 @@ mod tests {
             &self,
             _ctx: &NodeCtx,
             _inputs: Vec<PortMsg>,
-        ) -> Result<Vec<Emit>, NodeError> {
-            if let Some(artifact) = &self.output {
-                Ok(vec![Emit::new("out", artifact.clone())])
+        ) -> Result<(Vec<Emit>, crate::graph::node::NodeUsage), NodeError> {
+            let emits = if let Some(artifact) = &self.output {
+                vec![Emit::new("out", artifact.clone())]
             } else {
-                Ok(vec![])
-            }
+                vec![]
+            };
+            Ok((emits, crate::graph::node::NodeUsage::default()))
         }
     }
 
@@ -634,10 +642,10 @@ mod tests {
                 &self,
                 _ctx: &NodeCtx,
                 inputs: Vec<PortMsg>,
-            ) -> Result<Vec<Emit>, NodeError> {
+            ) -> Result<(Vec<Emit>, crate::graph::node::NodeUsage), NodeError> {
                 let ports: Vec<String> = inputs.iter().map(|m| m.port.clone()).collect();
                 self.received.lock().unwrap().push(ports);
-                Ok(vec![])
+                Ok((vec![], crate::graph::node::NodeUsage::default()))
             }
         }
 
@@ -764,5 +772,124 @@ mod tests {
         let mut ports = calls[0].clone();
         ports.sort();
         assert_eq!(ports, vec!["context".to_string(), "in".to_string()]);
+    }
+
+    #[tokio::test]
+    async fn test_node_usage_aggregated_into_run_stats() {
+        // Regression (D): a node that reports token usage must have it
+        // accumulated into RunStats so the cost/token budget backstops fire.
+        use crate::graph::node::NodeUsage;
+
+        struct UsageNode {
+            usage: NodeUsage,
+            ports: PortSpec,
+        }
+
+        #[async_trait]
+        impl Node for UsageNode {
+            fn ports(&self) -> PortSpec {
+                self.ports.clone()
+            }
+
+            async fn process(
+                &self,
+                _ctx: &NodeCtx,
+                _inputs: Vec<PortMsg>,
+            ) -> Result<(Vec<Emit>, NodeUsage), NodeError> {
+                Ok((
+                    vec![Emit::new(
+                        "out",
+                        Artifact {
+                            kind: "Goal".to_string(),
+                            data: serde_json::json!({}),
+                        },
+                    )],
+                    self.usage,
+                ))
+            }
+        }
+
+        let usage = NodeUsage {
+            input_tokens: 1000,
+            output_tokens: 500,
+            total_tokens: 1500,
+            cost_usd: 0.42,
+        };
+        let ports = PortSpec::new(
+            vec![PortSpecEntry {
+                name: "in".into(),
+                direction: PortDirection::Input,
+                kind: "Goal".to_string(),
+                required: true,
+            }],
+            vec![PortSpecEntry {
+                name: "out".into(),
+                direction: PortDirection::Output,
+                kind: "Goal".to_string(),
+                required: false,
+            }],
+        );
+
+        let mut nodes = HashMap::new();
+        nodes.insert(
+            "src".to_string(),
+            BoxedNode::new(UsageNode {
+                usage,
+                ports: ports.clone(),
+            }),
+        );
+        // A sink so the emit has somewhere to go and the run terminates.
+        nodes.insert(
+            "sink".to_string(),
+            BoxedNode::new(TestNode {
+                ports: PortSpec::new(
+                    vec![PortSpecEntry {
+                        name: "in".into(),
+                        direction: PortDirection::Input,
+                        kind: "Goal".to_string(),
+                        required: false,
+                    }],
+                    vec![],
+                ),
+                output: None,
+            }),
+        );
+
+        let spec = GraphSpec {
+            name: Some("usage-test".into()),
+            description: None,
+            nodes: vec![
+                GraphNodeSpec {
+                    id: "src".into(),
+                    kind: "test.node".into(),
+                    config: serde_json::Value::Null,
+                    description: None,
+                },
+                GraphNodeSpec {
+                    id: "sink".into(),
+                    kind: "test.node".into(),
+                    config: serde_json::Value::Null,
+                    description: None,
+                },
+            ],
+            edges: vec![Edge::new("src", "out", "sink", "in")],
+            metadata: serde_json::Value::Null,
+        };
+        let mut scheduler = Scheduler::new(spec, nodes, Budget::default(), 4);
+        let stats = scheduler
+            .run(HashMap::from([(
+                "src".to_string(),
+                vec![Artifact {
+                    kind: "Goal".to_string(),
+                    data: serde_json::json!({}),
+                }],
+            )]))
+            .await
+            .unwrap();
+
+        assert_eq!(stats.total_input_tokens, 1000);
+        assert_eq!(stats.total_output_tokens, 500);
+        assert_eq!(stats.total_tokens, 1500);
+        assert!((stats.total_cost_usd - 0.42).abs() < f64::EPSILON);
     }
 }
