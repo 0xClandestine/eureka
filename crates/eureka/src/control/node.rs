@@ -66,13 +66,36 @@ impl ControlNode {
     }
 
     /// Invoke the subprocess and collect emit envelopes from stdout.
-    async fn invoke(&self, ctx: &NodeCtx, msg: &PortMsg) -> Result<Vec<Emit>, NodeError> {
+    ///
+    /// The call envelope written to stdin carries every available input:
+    /// - `inputs`: array of `{port, artifact}` objects, one per populated input port.
+    /// - `port` / `artifact`: the first input, for backward compatibility with
+    ///   scripts that read a single envelope via `json.load(sys.stdin)`.
+    async fn invoke(&self, ctx: &NodeCtx, inputs: &[PortMsg]) -> Result<Vec<Emit>, NodeError> {
+        let input_arr: Vec<serde_json::Value> = inputs
+            .iter()
+            .map(|m| serde_json::json!({
+                "port": m.port,
+                "artifact": {
+                    "kind": m.artifact.kind,
+                    "data": m.artifact.data,
+                },
+            }))
+            .collect();
+
+        // Backward-compatible primary envelope: the first input's port/artifact,
+        // plus the full `inputs` array for multi-input-aware scripts.
+        let (primary_port, primary_artifact) = inputs
+            .first()
+            .map(|m| (m.port.clone(), m.artifact.clone()))
+            .unwrap_or_else(|| (String::new(), Artifact { kind: String::new(), data: serde_json::Value::Null }));
         let envelope = serde_json::json!({
-            "port": msg.port,
+            "port": primary_port,
             "artifact": {
-                "kind": msg.artifact.kind,
-                "data": msg.artifact.data,
-            }
+                "kind": primary_artifact.kind,
+                "data": primary_artifact.data,
+            },
+            "inputs": input_arr,
         });
         let envelope_str = serde_json::to_string(&envelope)
             .map_err(|e| NodeError::Internal(format!("Failed to serialize call envelope: {e}")))?;
@@ -165,15 +188,12 @@ impl Node for ControlNode {
         ctx: &NodeCtx,
         inputs: Vec<PortMsg>,
     ) -> Result<(Vec<Emit>, crate::graph::node::NodeUsage), NodeError> {
-        // Control nodes currently consume a single call envelope per
-        // invocation. When multiple inputs arrive together, forward the first
-        // (primary) input; the subprocess protocol for multi-input control
-        // nodes can be extended later.
-        let msg = inputs
-            .into_iter()
-            .next()
-            .ok_or_else(|| NodeError::Internal("control node activated with no inputs".into()))?;
-        let emits = self.invoke(ctx, &msg).await?;
+        // Forward every available input to the subprocess. The call envelope
+        // includes both a backward-compatible single `port`/`artifact` (the
+        // first input) and a full `inputs` array, so legacy scripts that read
+        // `envelope["artifact"]` keep working while multi-input-aware scripts
+        // can read `envelope["inputs"]`.
+        let emits = self.invoke(ctx, &inputs).await?;
         Ok((emits, crate::graph::node::NodeUsage::default()))
     }
 }
@@ -255,5 +275,58 @@ mod tests {
         assert_eq!(emits.len(), 1);
         assert_eq!(emits[0].port, "out");
         assert_eq!(emits[0].artifact.data["value"], 42);
+    }
+
+    #[tokio::test]
+    async fn test_multi_input_control_node_receives_inputs_array() {
+        // Regression (gotcha #2): a multi-input control node must receive ALL
+        // its inputs. The call envelope now includes an `inputs` array; legacy
+        // scripts reading `envelope["artifact"]` keep working via the
+        // backward-compatible primary fields.
+        if std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
+            return;
+        }
+        let def = ControlNodeDef {
+            name: "multi-input-node".to_string(),
+            work_dir: std::env::temp_dir(),
+            command: vec![
+                "python3".to_string(),
+                "-c".to_string(),
+                // Echo back the inputs array so the test can assert it.
+                r#"import sys,json; d=json.load(sys.stdin); print(json.dumps({"port":"out","artifact":{"kind":"Test","data":{"ports":[i["port"] for i in d["inputs"]]}}}))"#.to_string(),
+            ],
+            inputs: vec![
+                PortDef { port: "in".into(), kind: "Goal".into(), required: None },
+                PortDef { port: "context".into(), kind: "Insights".into(), required: None },
+            ],
+            outputs: vec![PortDef { port: "out".into(), kind: "Test".into(), required: None }],
+            timeout_secs: 10,
+        };
+        let node = ControlNode::new(def, "s".to_string(), None, serde_json::Value::Null);
+        let cancel = CancellationToken::new();
+        let ctx = NodeCtx::new("multi-input-node", "multi-input-node", 0, cancel);
+        let inputs = vec![
+            PortMsg {
+                port: "in".into(),
+                artifact: Artifact { kind: "Goal".to_string(), data: serde_json::json!({}) },
+            },
+            PortMsg {
+                port: "context".into(),
+                artifact: Artifact { kind: "Insights".to_string(), data: serde_json::json!({}) },
+            },
+        ];
+        let (emits, _) = node.process(&ctx, inputs).await.unwrap();
+        assert_eq!(emits.len(), 1);
+        let ports: Vec<&str> = emits[0].artifact.data["ports"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|v| v.as_str().unwrap())
+            .collect();
+        assert_eq!(ports, vec!["in", "context"]);
     }
 }

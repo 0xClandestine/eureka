@@ -8,8 +8,16 @@
 //!
 //! ## Invocation protocol
 //!
-//! - **Call**: the scheduler writes one JSON envelope to stdin:
-//!   `{"port": "in", "artifact": {"kind": "...", "data": {...}}}`
+//! - **Call**: the scheduler writes one JSON envelope to stdin. For a
+//!   single-input node this is `{"port": "in", "artifact": {"kind": "...", "data": {...}}}`.
+//!   For a multi-input node the envelope additionally carries an `inputs` array
+//!   of `{port, artifact}` objects, one per populated input port, so scripts
+//!   that need all inputs can read `envelope["inputs"]` while legacy scripts
+//!   reading `envelope["artifact"]` keep working:
+//!   ```json
+//!   {"port": "in", "artifact": {"kind": "...", "data": {...}},
+//!    "inputs": [{"port": "in", "artifact": {...}}, {"port": "context", "artifact": {...}}]}
+//!   ```
 //! - **Emit**: the subprocess writes zero or more envelopes to stdout, one
 //!   per line: `{"port": "out", "artifact": {"kind": "...", "data": {...}}}`
 //!
