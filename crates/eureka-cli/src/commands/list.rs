@@ -39,15 +39,9 @@ pub fn execute(args: ListArgs) -> Result<()> {
     let manifest = GraphManifest::load(Path::new(&config.graph))
         .with_context(|| format!("Failed to load graph manifest from '{}'", config.graph))?;
 
-    println!(
-        "╔══════════════════════════════════════════════════════════╗"
-    );
-    println!(
-        "║                 Eureka — Graph Manifest                 ║"
-    );
-    println!(
-        "╚══════════════════════════════════════════════════════════╝"
-    );
+    println!("╔══════════════════════════════════════════════════════════╗");
+    println!("║                 Eureka — Graph Manifest                 ║");
+    println!("╚══════════════════════════════════════════════════════════╝");
     println!();
     println!(
         "  graph:  {}",

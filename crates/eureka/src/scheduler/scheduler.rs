@@ -478,7 +478,9 @@ impl Scheduler {
         handles: &TaskHandles,
         tasks: &mut JoinSet<()>,
     ) -> Result<usize, SchedulerError> {
-        let bucket = input_buffer.entry((node_id.to_string(), round)).or_default();
+        let bucket = input_buffer
+            .entry((node_id.to_string(), round))
+            .or_default();
         bucket.insert(port.to_string(), artifact);
 
         // Determine readiness: are all required input ports present?
@@ -488,10 +490,7 @@ impl Scheduler {
         let ports = node.ports();
         let required: Vec<String> = ports.required_inputs();
 
-        let ready = !required.is_empty()
-            && required
-                .iter()
-                .all(|p| bucket.contains_key(p));
+        let ready = !required.is_empty() && required.iter().all(|p| bucket.contains_key(p));
 
         if !ready {
             return Ok(0);
@@ -543,46 +542,46 @@ fn spawn_activation(
     handles: &TaskHandles,
     tasks: &mut JoinSet<()>,
 ) {
-        let node_id = activation.node_id.clone();
-        let node_kind = activation.node_kind.clone();
-        let round = activation.round;
-        let event_tx = handles.event_tx.clone();
-        let results_tx = handles.results_tx.clone();
-        let sem = Arc::clone(&handles.in_flight_sem);
-        let cancel = handles.cancel.clone();
-        let ctx = activation.ctx;
-        let inputs = activation.inputs;
+    let node_id = activation.node_id.clone();
+    let node_kind = activation.node_kind.clone();
+    let round = activation.round;
+    let event_tx = handles.event_tx.clone();
+    let results_tx = handles.results_tx.clone();
+    let sem = Arc::clone(&handles.in_flight_sem);
+    let cancel = handles.cancel.clone();
+    let ctx = activation.ctx;
+    let inputs = activation.inputs;
 
-        tasks.spawn(async move {
-            let _ = event_tx
-                .send(SchedulerEvent::ActivationStarted {
-                    node_id: node_id.clone(),
-                    node_kind: node_kind.clone(),
-                    round,
-                })
-                .await;
-
-            // Acquire a permit, bailing out promptly if cancelled while
-            // waiting for a free slot.
-            let permit = tokio::select! {
-                biased;
-                () = cancel.cancelled() => return,
-                p = sem.acquire_owned() => match p {
-                    Ok(p) => p,
-                    Err(_) => return,
-                }
-            };
-
-            let result = node.process(&ctx, inputs).await;
-            drop(permit);
-
-            let _ = results_tx.send(ActivationResult {
-                node_id,
-                node_kind,
+    tasks.spawn(async move {
+        let _ = event_tx
+            .send(SchedulerEvent::ActivationStarted {
+                node_id: node_id.clone(),
+                node_kind: node_kind.clone(),
                 round,
-                result,
-            });
+            })
+            .await;
+
+        // Acquire a permit, bailing out promptly if cancelled while
+        // waiting for a free slot.
+        let permit = tokio::select! {
+            biased;
+            () = cancel.cancelled() => return,
+            p = sem.acquire_owned() => match p {
+                Ok(p) => p,
+                Err(_) => return,
+            }
+        };
+
+        let result = node.process(&ctx, inputs).await;
+        drop(permit);
+
+        let _ = results_tx.send(ActivationResult {
+            node_id,
+            node_kind,
+            round,
+            result,
         });
+    });
 }
 
 #[cfg(test)]
@@ -765,13 +764,10 @@ mod tests {
         // Inject a goal into the source. If the activation channel were
         // bounded at 256, this would deadlock and time out.
         let initial = HashMap::from([("src".to_string(), vec![goal])]);
-        let stats = tokio::time::timeout(
-            std::time::Duration::from_secs(5),
-            scheduler.run(initial),
-        )
-        .await
-        .expect("run must not deadlock on large fan-out")
-        .unwrap();
+        let stats = tokio::time::timeout(std::time::Duration::from_secs(5), scheduler.run(initial))
+            .await
+            .expect("run must not deadlock on large fan-out")
+            .unwrap();
         assert_eq!(stats.rounds_completed, 0);
     }
 
@@ -1227,18 +1223,30 @@ mod tests {
             ) -> Result<(Vec<Emit>, crate::graph::node::NodeUsage), NodeError> {
                 let mut n = self.rounds_left.lock().unwrap();
                 if *n == 0 {
-                    Ok((vec![Emit::new(
-                        "halt",
-                        Artifact { kind: "Halt".to_string(), data: serde_json::json!({}) },
-                    )], crate::graph::node::NodeUsage::default()))
+                    Ok((
+                        vec![Emit::new(
+                            "halt",
+                            Artifact {
+                                kind: "Halt".to_string(),
+                                data: serde_json::json!({}),
+                            },
+                        )],
+                        crate::graph::node::NodeUsage::default(),
+                    ))
                 } else {
                     *n -= 1;
                     // Emit on the feedback continue port (fans out to two
                     // consumers via two feedback edges).
-                    Ok((vec![Emit::new(
-                        "continue",
-                        Artifact { kind: "Goal".to_string(), data: serde_json::json!({}) },
-                    )], crate::graph::node::NodeUsage::default()))
+                    Ok((
+                        vec![Emit::new(
+                            "continue",
+                            Artifact {
+                                kind: "Goal".to_string(),
+                                data: serde_json::json!({}),
+                            },
+                        )],
+                        crate::graph::node::NodeUsage::default(),
+                    ))
                 }
             }
         }
@@ -1269,7 +1277,10 @@ mod tests {
                 inputs: Vec<PortMsg>,
             ) -> Result<(Vec<Emit>, crate::graph::node::NodeUsage), NodeError> {
                 Ok((
-                    inputs.into_iter().map(|m| Emit::new("out", m.artifact)).collect(),
+                    inputs
+                        .into_iter()
+                        .map(|m| Emit::new("out", m.artifact))
+                        .collect(),
                     crate::graph::node::NodeUsage::default(),
                 ))
             }
@@ -1284,7 +1295,9 @@ mod tests {
         let mut nodes = HashMap::new();
         nodes.insert(
             "sup".to_string(),
-            BoxedNode::new(SupNode { rounds_left: Mutex::new(2) }),
+            BoxedNode::new(SupNode {
+                rounds_left: Mutex::new(2),
+            }),
         );
         nodes.insert("echo_a".to_string(), BoxedNode::new(EchoNode));
         nodes.insert("echo_b".to_string(), BoxedNode::new(EchoNode));
@@ -1293,9 +1306,24 @@ mod tests {
             name: Some("round-test".into()),
             description: None,
             nodes: vec![
-                GraphNodeSpec { id: "sup".into(), kind: "t".into(), config: serde_json::Value::Null, description: None },
-                GraphNodeSpec { id: "echo_a".into(), kind: "t".into(), config: serde_json::Value::Null, description: None },
-                GraphNodeSpec { id: "echo_b".into(), kind: "t".into(), config: serde_json::Value::Null, description: None },
+                GraphNodeSpec {
+                    id: "sup".into(),
+                    kind: "t".into(),
+                    config: serde_json::Value::Null,
+                    description: None,
+                },
+                GraphNodeSpec {
+                    id: "echo_a".into(),
+                    kind: "t".into(),
+                    config: serde_json::Value::Null,
+                    description: None,
+                },
+                GraphNodeSpec {
+                    id: "echo_b".into(),
+                    kind: "t".into(),
+                    config: serde_json::Value::Null,
+                    description: None,
+                },
             ],
             edges: vec![
                 Edge::new("sup", "continue", "echo_a", "in").feedback(),
@@ -1307,7 +1335,10 @@ mod tests {
         };
 
         let mut scheduler = Scheduler::new(spec, nodes, Budget::default(), 4);
-        let goal = Artifact { kind: "Goal".to_string(), data: serde_json::json!({}) };
+        let goal = Artifact {
+            kind: "Goal".to_string(),
+            data: serde_json::json!({}),
+        };
         let stats = scheduler
             .run(HashMap::from([("sup".to_string(), vec![goal])]))
             .await

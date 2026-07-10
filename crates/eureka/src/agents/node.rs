@@ -76,8 +76,7 @@ impl Node for LlmAgentNode {
                 .next()
                 .map(|m| m.artifact.data)
                 .unwrap_or(serde_json::Value::Null);
-            serde_json::to_string_pretty(&data)
-                .map_err(|e| NodeError::Internal(e.to_string()))?
+            serde_json::to_string_pretty(&data).map_err(|e| NodeError::Internal(e.to_string()))?
         };
 
         let (output_json, usage) = self
@@ -153,7 +152,10 @@ mod tests {
             _work_dir: &str,
             _event_tx: Option<tokio::sync::mpsc::Sender<crate::scheduler::SchedulerEvent>>,
         ) -> Result<(serde_json::Value, crate::graph::node::NodeUsage), AgentError> {
-            Ok((serde_json::json!({ "echo": initial_message }), crate::graph::node::NodeUsage::default()))
+            Ok((
+                serde_json::json!({ "echo": initial_message }),
+                crate::graph::node::NodeUsage::default(),
+            ))
         }
     }
 
@@ -164,11 +166,13 @@ mod tests {
             preamble: "test preamble".to_string(),
             inputs: vec![AgentPort {
                 kind: input_kind.to_string(),
-                port: "in".to_string(), ..Default::default()
+                port: "in".to_string(),
+                ..Default::default()
             }],
             outputs: vec![AgentPort {
                 kind: output_kind.to_string(),
-                port: "out".to_string(), ..Default::default()
+                port: "out".to_string(),
+                ..Default::default()
             }],
             config: AgentConfig::default(),
             output_schema: serde_json::json!({ "type": "object" }),
@@ -216,11 +220,15 @@ mod tests {
                 _round: u32,
                 _work_dir: &str,
                 _event_tx: Option<tokio::sync::mpsc::Sender<crate::scheduler::SchedulerEvent>>,
-            ) -> Result<(serde_json::Value, crate::graph::node::NodeUsage), AgentError> {
-                Ok((serde_json::json!({
-                    "insights": { "recurring_patterns": [] },
-                    "overview": { "summary": "Done" }
-                }), crate::graph::node::NodeUsage::default()))
+            ) -> Result<(serde_json::Value, crate::graph::node::NodeUsage), AgentError>
+            {
+                Ok((
+                    serde_json::json!({
+                        "insights": { "recurring_patterns": [] },
+                        "overview": { "summary": "Done" }
+                    }),
+                    crate::graph::node::NodeUsage::default(),
+                ))
             }
         }
 
@@ -230,16 +238,19 @@ mod tests {
             preamble: "preamble".to_string(),
             inputs: vec![AgentPort {
                 kind: "Ranking".to_string(),
-                port: "in".to_string(), ..Default::default()
+                port: "in".to_string(),
+                ..Default::default()
             }],
             outputs: vec![
                 AgentPort {
                     kind: "Insights".to_string(),
-                    port: "insights".to_string(), ..Default::default()
+                    port: "insights".to_string(),
+                    ..Default::default()
                 },
                 AgentPort {
                     kind: "Overview".to_string(),
-                    port: "overview".to_string(), ..Default::default()
+                    port: "overview".to_string(),
+                    ..Default::default()
                 },
             ],
             config: AgentConfig::default(),
@@ -275,16 +286,19 @@ mod tests {
             inputs: vec![
                 AgentPort {
                     kind: "Goal".to_string(),
-                    port: "in".to_string(), ..Default::default()
+                    port: "in".to_string(),
+                    ..Default::default()
                 },
                 AgentPort {
                     kind: "Insights".to_string(),
-                    port: "context".to_string(), ..Default::default()
+                    port: "context".to_string(),
+                    ..Default::default()
                 },
             ],
             outputs: vec![AgentPort {
                 kind: "Hypotheses".to_string(),
-                port: "out".to_string(), ..Default::default()
+                port: "out".to_string(),
+                ..Default::default()
             }],
             config: AgentConfig::default(),
             output_schema: serde_json::json!({ "type": "object" }),
@@ -310,9 +324,13 @@ mod tests {
                 _round: u32,
                 _work_dir: &str,
                 _event_tx: Option<tokio::sync::mpsc::Sender<crate::scheduler::SchedulerEvent>>,
-            ) -> Result<(serde_json::Value, crate::graph::node::NodeUsage), AgentError> {
+            ) -> Result<(serde_json::Value, crate::graph::node::NodeUsage), AgentError>
+            {
                 *self.captured.lock().unwrap() = Some(initial_message.to_string());
-                Ok((serde_json::json!({ "hypotheses": [] }), crate::graph::node::NodeUsage::default()))
+                Ok((
+                    serde_json::json!({ "hypotheses": [] }),
+                    crate::graph::node::NodeUsage::default(),
+                ))
             }
         }
 

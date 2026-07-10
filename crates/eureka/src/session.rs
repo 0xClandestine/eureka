@@ -90,7 +90,8 @@ impl Session {
             return Err(EngineError::Graph(GraphError::ParseError(format!(
                 "Graph validation failed with {} errors: {}",
                 result.errors.len(),
-                result.errors
+                result
+                    .errors
                     .iter()
                     .map(std::string::ToString::to_string)
                     .collect::<Vec<_>>()
@@ -180,7 +181,8 @@ impl Session {
             return Err(EngineError::Graph(GraphError::ParseError(format!(
                 "Graph validation failed with {} errors: {}",
                 result.errors.len(),
-                result.errors
+                result
+                    .errors
                     .iter()
                     .map(std::string::ToString::to_string)
                     .collect::<Vec<_>>()
@@ -640,62 +642,98 @@ fn build_llm_client(
         ProviderKind::Anthropic => {
             let client = anthropic::Client::from_env()
                 .context("ANTHROPIC_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.pricing.clone())))
+            Ok(Arc::new(RigClient::new(
+                client.completion_model(model_id),
+                config.provider.pricing.clone(),
+            )))
         }
         ProviderKind::OpenAI => {
             let client = openai::Client::from_env()
                 .context("OPENAI_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.pricing.clone())))
+            Ok(Arc::new(RigClient::new(
+                client.completion_model(model_id),
+                config.provider.pricing.clone(),
+            )))
         }
         ProviderKind::OpenRouter => {
             let client = openrouter::Client::from_env()
                 .context("OPENROUTER_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.pricing.clone())))
+            Ok(Arc::new(RigClient::new(
+                client.completion_model(model_id),
+                config.provider.pricing.clone(),
+            )))
         }
         ProviderKind::Gemini => {
             let client = gemini::Client::from_env()
                 .context("GEMINI_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.pricing.clone())))
+            Ok(Arc::new(RigClient::new(
+                client.completion_model(model_id),
+                config.provider.pricing.clone(),
+            )))
         }
         ProviderKind::Groq => {
             let client =
                 groq::Client::from_env().context("GROQ_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.pricing.clone())))
+            Ok(Arc::new(RigClient::new(
+                client.completion_model(model_id),
+                config.provider.pricing.clone(),
+            )))
         }
         ProviderKind::Mistral => {
             let client = mistral::Client::from_env()
                 .context("MISTRAL_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.pricing.clone())))
+            Ok(Arc::new(RigClient::new(
+                client.completion_model(model_id),
+                config.provider.pricing.clone(),
+            )))
         }
         ProviderKind::Cohere => {
             let client = cohere::Client::from_env()
                 .context("COHERE_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.pricing.clone())))
+            Ok(Arc::new(RigClient::new(
+                client.completion_model(model_id),
+                config.provider.pricing.clone(),
+            )))
         }
         ProviderKind::DeepSeek => {
             let client = deepseek::Client::from_env()
                 .context("DEEPSEEK_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.pricing.clone())))
+            Ok(Arc::new(RigClient::new(
+                client.completion_model(model_id),
+                config.provider.pricing.clone(),
+            )))
         }
         ProviderKind::Perplexity => {
             let client = perplexity::Client::from_env()
                 .context("PERPLEXITY_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.pricing.clone())))
+            Ok(Arc::new(RigClient::new(
+                client.completion_model(model_id),
+                config.provider.pricing.clone(),
+            )))
         }
         ProviderKind::Together => {
             let client = together::Client::from_env()
                 .context("TOGETHER_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.pricing.clone())))
+            Ok(Arc::new(RigClient::new(
+                client.completion_model(model_id),
+                config.provider.pricing.clone(),
+            )))
         }
         ProviderKind::XAI => {
             let client =
                 xai::Client::from_env().context("XAI_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.pricing.clone())))
+            Ok(Arc::new(RigClient::new(
+                client.completion_model(model_id),
+                config.provider.pricing.clone(),
+            )))
         }
         ProviderKind::Ollama => {
             let client = ollama::Client::from_env()
                 .context("Failed to initialise Ollama client (check OLLAMA_API_BASE_URL)")?;
-            Ok(Arc::new(RigClient::new(client.completion_model(model_id), config.provider.pricing.clone())))
+            Ok(Arc::new(RigClient::new(
+                client.completion_model(model_id),
+                config.provider.pricing.clone(),
+            )))
         }
     }
 }
@@ -833,7 +871,11 @@ edges: []
         // `command[0]` (e.g. "python3") to `graph_dir/python3`. The control
         // node spawns with `current_dir = graph_dir`, so PATH lookup handles
         // bare interpreters and relative script args resolve against work_dir.
-        if std::process::Command::new("python3").arg("--version").output().is_err() {
+        if std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
             return; // python3 not installed; cannot exercise spawn path
         }
         let dir = tempfile::TempDir::new().unwrap();
@@ -898,7 +940,11 @@ edges: []
         // Regression (E): when a db_path is provided, the control node must
         // expose it to the subprocess as EUREKA_DB_PATH so the Python control
         // nodes can persist state across rounds.
-        if std::process::Command::new("python3").arg("--version").output().is_err() {
+        if std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
             return;
         }
         let dir = tempfile::TempDir::new().unwrap();
@@ -941,7 +987,9 @@ edges: []
             },
         };
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let (emits, _) = rt.block_on(boxed.process(&ctx, vec![msg])).expect("spawn ok");
+        let (emits, _) = rt
+            .block_on(boxed.process(&ctx, vec![msg]))
+            .expect("spawn ok");
         assert_eq!(emits.len(), 1);
         let db = emits[0].artifact.data["db"].as_str().unwrap_or("");
         assert_eq!(db, db_path.to_string_lossy());

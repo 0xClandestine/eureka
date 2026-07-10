@@ -74,13 +74,15 @@ impl ControlNode {
     async fn invoke(&self, ctx: &NodeCtx, inputs: &[PortMsg]) -> Result<Vec<Emit>, NodeError> {
         let input_arr: Vec<serde_json::Value> = inputs
             .iter()
-            .map(|m| serde_json::json!({
-                "port": m.port,
-                "artifact": {
-                    "kind": m.artifact.kind,
-                    "data": m.artifact.data,
-                },
-            }))
+            .map(|m| {
+                serde_json::json!({
+                    "port": m.port,
+                    "artifact": {
+                        "kind": m.artifact.kind,
+                        "data": m.artifact.data,
+                    },
+                })
+            })
             .collect();
 
         // Backward-compatible primary envelope: the first input's port/artifact,
@@ -88,7 +90,15 @@ impl ControlNode {
         let (primary_port, primary_artifact) = inputs
             .first()
             .map(|m| (m.port.clone(), m.artifact.clone()))
-            .unwrap_or_else(|| (String::new(), Artifact { kind: String::new(), data: serde_json::Value::Null }));
+            .unwrap_or_else(|| {
+                (
+                    String::new(),
+                    Artifact {
+                        kind: String::new(),
+                        data: serde_json::Value::Null,
+                    },
+                )
+            });
         let envelope = serde_json::json!({
             "port": primary_port,
             "artifact": {
@@ -312,11 +322,17 @@ mod tests {
         let inputs = vec![
             PortMsg {
                 port: "in".into(),
-                artifact: Artifact { kind: "Goal".to_string(), data: serde_json::json!({}) },
+                artifact: Artifact {
+                    kind: "Goal".to_string(),
+                    data: serde_json::json!({}),
+                },
             },
             PortMsg {
                 port: "context".into(),
-                artifact: Artifact { kind: "Insights".to_string(), data: serde_json::json!({}) },
+                artifact: Artifact {
+                    kind: "Insights".to_string(),
+                    data: serde_json::json!({}),
+                },
             },
         ];
         let (emits, _) = node.process(&ctx, inputs).await.unwrap();

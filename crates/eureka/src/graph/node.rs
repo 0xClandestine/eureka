@@ -302,8 +302,7 @@ mod tests {
             output_per_million: 1.10,
         };
         // 1M input, 0.5M output, no aggregate total reported.
-        let usage =
-            NodeUsage::from_rig_usage(1_000_000, 500_000, 0, Some(&pricing));
+        let usage = NodeUsage::from_rig_usage(1_000_000, 500_000, 0, Some(&pricing));
         assert_eq!(usage.input_tokens, 1_000_000);
         assert_eq!(usage.output_tokens, 500_000);
         // total falls back to input + output when the provider omits it.

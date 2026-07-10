@@ -45,10 +45,14 @@ impl GraphManifest {
     /// Returns a [`GraphError`] if the file cannot be read or parsed.
     pub fn load(path: &Path) -> Result<Self, GraphError> {
         let raw = std::fs::read_to_string(path).map_err(|e| {
-            GraphError::ParseError(format!("Failed to read graph manifest '{}': {e}", path.display()))
+            GraphError::ParseError(format!(
+                "Failed to read graph manifest '{}': {e}",
+                path.display()
+            ))
         })?;
-        let mut manifest: Self =
-            serde_yaml::from_str(&raw).map_err(|e| GraphError::ParseError(format!("Failed to parse graph manifest YAML: {e}")))?;
+        let mut manifest: Self = serde_yaml::from_str(&raw).map_err(|e| {
+            GraphError::ParseError(format!("Failed to parse graph manifest YAML: {e}"))
+        })?;
 
         let base = path.parent().unwrap_or_else(|| Path::new("."));
         for agent in &mut manifest.agents {

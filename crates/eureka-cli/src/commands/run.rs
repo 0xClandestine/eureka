@@ -61,9 +61,7 @@ pub async fn execute(args: RunArgs) -> Result<()> {
     // graph manifest under a `.eureka/` subdirectory so a graph's run state
     // lives alongside the graph.
     let graph_path = Path::new(&config.graph);
-    let graph_dir = graph_path
-        .parent()
-        .unwrap_or_else(|| Path::new("."));
+    let graph_dir = graph_path.parent().unwrap_or_else(|| Path::new("."));
     let sessions_dir = graph_dir.join(".eureka").join("sessions");
     let db_path = sessions_dir.join(format!("{session_id}.sqlite"));
     if let Err(e) = std::fs::create_dir_all(&sessions_dir) {
@@ -73,7 +71,11 @@ pub async fn execute(args: RunArgs) -> Result<()> {
             sessions_dir.display()
         );
     }
-    let db_path = if sessions_dir.exists() { Some(db_path) } else { None };
+    let db_path = if sessions_dir.exists() {
+        Some(db_path)
+    } else {
+        None
+    };
 
     let goal = serde_json::json!({
         "goal": args.goal,

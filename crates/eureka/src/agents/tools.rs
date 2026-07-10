@@ -213,7 +213,14 @@ mod tests {
             args_schema: serde_json::json!({ "type": "object" }),
             timeout_secs: 5,
         });
-        let tool = CommandTool::new(def, "test".into(), "test".into(), 0, std::path::PathBuf::from("."), None);
+        let tool = CommandTool::new(
+            def,
+            "test".into(),
+            "test".into(),
+            0,
+            std::path::PathBuf::from("."),
+            None,
+        );
         let result = tool.execute("{}".to_string()).await.unwrap();
         assert_eq!(result, "hello");
     }
@@ -227,7 +234,14 @@ mod tests {
             args_schema: serde_json::json!({ "type": "object" }),
             timeout_secs: 5,
         });
-        let tool = CommandTool::new(def, "test".into(), "test".into(), 0, std::path::PathBuf::from("."), None);
+        let tool = CommandTool::new(
+            def,
+            "test".into(),
+            "test".into(),
+            0,
+            std::path::PathBuf::from("."),
+            None,
+        );
         let result = tool.execute("{}".to_string()).await.unwrap();
         assert!(result.starts_with("Error (exit 1)"));
     }
@@ -241,7 +255,14 @@ mod tests {
             args_schema: serde_json::json!({ "type": "object" }),
             timeout_secs: 5,
         });
-        let tool = CommandTool::new(def, "test".into(), "test".into(), 0, std::path::PathBuf::from("."), None);
+        let tool = CommandTool::new(
+            def,
+            "test".into(),
+            "test".into(),
+            0,
+            std::path::PathBuf::from("."),
+            None,
+        );
         let result = tool
             .execute(r#"{"key":"value"}"#.to_string())
             .await
@@ -253,7 +274,11 @@ mod tests {
     async fn test_execute_uses_work_dir() {
         // Regression: tool subprocesses must run with `current_dir = work_dir`
         // so relative script paths resolve against the graph directory.
-        if std::process::Command::new("python3").arg("--version").output().is_err() {
+        if std::process::Command::new("python3")
+            .arg("--version")
+            .output()
+            .is_err()
+        {
             return; // python3 not installed
         }
         let dir = tempfile::TempDir::new().unwrap();
