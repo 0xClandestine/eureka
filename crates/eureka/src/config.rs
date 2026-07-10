@@ -400,7 +400,31 @@ max_rounds = 12
 [agent]
 temperature = 0.7
 max_iterations = 10
+
+[tracing]
+enabled = false
+max_file_bytes = 0
+include_artifacts = true
 "#;
+
+/// Configuration for durable JSONL tracing of scheduler events.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct TracingConfig {
+    /// Write scheduler events to `.eureka/sessions/{session_id}.traces.jsonl`.
+    #[serde(default)]
+    pub enabled: bool,
+    /// Maximum file size in bytes before rotation (0 = no rotation).
+    /// Reserved for future use.
+    #[serde(default)]
+    pub max_file_bytes: u64,
+    /// Whether to include artifact payloads in `ActivationCompleted` outputs.
+    #[serde(default = "default_true")]
+    pub include_artifacts: bool,
+}
+
+fn default_true() -> bool {
+    true
+}
 
 /// The top-level Eureka configuration.
 ///
@@ -421,6 +445,8 @@ pub struct EurekaConfig {
     pub budget: Budget,
     /// Global agent LLM defaults (overridable per-agent in the manifest).
     pub agent: AgentConfig,
+    /// Tracing configuration for durable JSONL event logs.
+    pub tracing: TracingConfig,
 }
 
 impl Default for EurekaConfig {

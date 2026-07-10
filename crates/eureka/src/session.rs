@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 
 use crate::agents::def::{AgentConfig, AgentDef, AgentPort, ToolDef};
 use crate::agents::{LlmAgentNode, LlmClient, RigClient};
@@ -29,6 +29,7 @@ use tracing::{error, info, warn};
 
 use crate::control::node::{ControlNode, ControlNodeDef};
 use crate::error::EngineError;
+use crate::tracing::JsonlTraceWriter;
 
 /// A session represents a single Eureka research run.
 pub struct Session {
@@ -295,7 +296,35 @@ impl Session {
 
         let mut events = scheduler.event_receiver();
 
+        // Optional durable trace writer (JSONL file co-located with the session DB).
+        let trace_writer = if self.config.tracing.enabled {
+            let sessions_dir = self.graph_dir.join(".eureka").join("sessions");
+            let provider = self.config.provider.kind.to_string();
+            let model = self
+                .config
+                .provider
+                .generation_model
+                .clone()
+                .unwrap_or_default();
+            JsonlTraceWriter::open(
+                &sessions_dir,
+                &self.session_id,
+                &self.config.tracing,
+                &self.config.graph,
+                &provider,
+                &model,
+                &self.config.budget,
+                self.config.scheduler.max_in_flight,
+            )
+        } else {
+            None
+        };
+
+        let trace_writer: Arc<Mutex<Option<JsonlTraceWriter>>> =
+            Arc::new(Mutex::new(trace_writer));
+
         let broadcaster = self.event_broadcaster.clone();
+        let tw = Arc::clone(&trace_writer);
         let event_handle = tokio::spawn(async move {
             while let Some(event) = events.recv().await {
                 if let Some(tx) = &broadcaster {
@@ -344,6 +373,13 @@ impl Session {
                         info!(%reason, total_rounds, "Run halted");
                     }
                 }
+
+                // Write to the durable trace file (best-effort).
+                if let Ok(mut guard) = tw.lock() {
+                    if let Some(ref mut w) = *guard {
+                        w.write_event(&event);
+                    }
+                }
             }
         });
 
@@ -365,6 +401,18 @@ impl Session {
 
         self.stats = Some(stats.clone());
         event_handle.abort();
+
+        // Close the trace writer with final stats (best-effort).
+        if let Ok(mut guard) = trace_writer.lock() {
+            if let Some(writer) = guard.take() {
+                if let Err(e) = writer.close(&stats) {
+                    warn!(
+                        error = %e,
+                        "Failed to close trace file"
+                    );
+                }
+            }
+        }
 
         info!(
             session_id = %self.session_id,

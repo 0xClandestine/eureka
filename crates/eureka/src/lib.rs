@@ -30,6 +30,7 @@ pub mod graph;
 pub mod manifest;
 pub mod scheduler;
 pub mod session;
+pub mod tracing;
 
 pub use error::EngineError;
 pub use session::Session;
