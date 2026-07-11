@@ -320,8 +320,7 @@ impl Session {
             None
         };
 
-        let trace_writer: Arc<Mutex<Option<JsonlTraceWriter>>> =
-            Arc::new(Mutex::new(trace_writer));
+        let trace_writer: Arc<Mutex<Option<JsonlTraceWriter>>> = Arc::new(Mutex::new(trace_writer));
 
         let broadcaster = self.event_broadcaster.clone();
         let tw = Arc::clone(&trace_writer);
@@ -371,6 +370,9 @@ impl Session {
                         total_rounds,
                     } => {
                         info!(%reason, total_rounds, "Run halted");
+                    }
+                    SchedulerEvent::RunPaused { round } => {
+                        info!(round, "Run paused");
                     }
                 }
 

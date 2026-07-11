@@ -1,5 +1,7 @@
 use thiserror::Error;
 
+use crate::config::RunStats;
+
 /// Errors that can occur during scheduling.
 #[derive(Debug, Error)]
 pub enum SchedulerError {
@@ -14,4 +16,19 @@ pub enum SchedulerError {
     /// The run was cancelled.
     #[error("Run cancelled")]
     Cancelled,
+
+    /// The run was paused and can be resumed by the caller.
+    #[error("Run paused after round {0:?}")]
+    Paused(RunStats),
+
+    /// A node activation failed and the run was aborted.
+    #[error("Node '{node_id}' failed in round {round}: {error}")]
+    NodeFailed {
+        /// The failed node ID.
+        node_id: String,
+        /// The round containing the failed activation.
+        round: u32,
+        /// The node error text.
+        error: String,
+    },
 }

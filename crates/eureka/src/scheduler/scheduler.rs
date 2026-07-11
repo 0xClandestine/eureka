@@ -146,6 +146,17 @@ impl Scheduler {
         &mut self,
         initial_artifacts: HashMap<String, Vec<Artifact>>,
     ) -> Result<RunStats, SchedulerError> {
+        self.run_until_signal(initial_artifacts).await
+    }
+
+    /// Run the graph and return `Ok` only when it drains normally.
+    ///
+    /// A pause signal returns [`SchedulerError::Paused`] so the caller can
+    /// persist the run and resume it later with a fresh scheduler instance.
+    async fn run_until_signal(
+        &mut self,
+        initial_artifacts: HashMap<String, Vec<Artifact>>,
+    ) -> Result<RunStats, SchedulerError> {
         let start = std::time::Instant::now();
 
         let outbound: HashMap<String, Vec<Edge>> = {
@@ -252,7 +263,14 @@ impl Scheduler {
                             self.cancel.cancel();
                         }
                         Some(SchedulerSignal::Pause) => {
-                            info!("Run paused");
+                            info!(round = current_round, "Run paused");
+                            let _ = self
+                                .event_tx
+                                .send(SchedulerEvent::RunPaused { round: current_round })
+                                .await;
+                            tasks.abort_all();
+                            self.stats.elapsed_secs = start.elapsed().as_secs_f64();
+                            return Err(SchedulerError::Paused(self.stats.clone()));
                         }
                         None => {}
                     }
@@ -335,12 +353,21 @@ impl Scheduler {
                                 }
                                 Err(err) => {
                                     warn!(%node_id, error = %err, "Node activation failed");
+                                    let error_text = err.to_string();
                                     let _ = self.event_tx.send(SchedulerEvent::ActivationFailed {
-                                        node_id,
-                                        node_kind,
+                                        node_id: node_id.clone(),
+                                        node_kind: node_kind.clone(),
                                         round,
-                                        error: err.to_string(),
+                                        error: error_text.clone(),
                                     }).await;
+                                    self.cancel.cancel();
+                                    tasks.abort_all();
+                                    self.stats.elapsed_secs = start.elapsed().as_secs_f64();
+                                    return Err(SchedulerError::NodeFailed {
+                                        node_id: node_id.clone(),
+                                        round,
+                                        error: error_text,
+                                    });
                                 }
                             }
 

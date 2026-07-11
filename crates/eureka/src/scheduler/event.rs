@@ -54,12 +54,17 @@ pub enum SchedulerEvent {
         /// A human-readable one-line summary of the arguments.
         args_summary: String,
     },
-    /// The run was halted.
+    /// The run was halted by a budget or graph control decision.
     RunHalted {
         /// The reason the run was halted.
         reason: String,
         /// The total number of rounds executed before halting.
         total_rounds: u32,
+    },
+    /// The run paused after an external pause signal.
+    RunPaused {
+        /// The round at which the run paused.
+        round: u32,
     },
 }
 

@@ -92,6 +92,10 @@ pub fn track_live_state(
                             s.rounds = *total_rounds;
                             s.finished = true;
                         }
+                        SchedulerEvent::RunPaused { round } => {
+                            s.rounds = *round;
+                            s.finished = false;
+                        }
                         SchedulerEvent::ToolCalled { .. } => {}
                     }
                 }
