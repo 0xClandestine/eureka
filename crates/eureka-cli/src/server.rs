@@ -25,6 +25,7 @@ use tokio_stream::{wrappers::BroadcastStream, Stream, StreamExt};
 use tower_http::cors::CorsLayer;
 
 use eureka::graph::GraphSpec;
+use eureka::run::{RunRecord, RunStore};
 use eureka::scheduler::SchedulerEvent;
 
 /// Shared state injected into every axum handler.
@@ -38,6 +39,10 @@ pub struct ServerState {
     live: Arc<Mutex<LiveState>>,
     /// Wall-clock start time for computing elapsed seconds.
     started_at: Instant,
+    /// Optional durable run-record store.
+    run_store: Option<Arc<dyn RunStore>>,
+    /// Run ID used by the durable status endpoint.
+    run_id: Option<uuid::Uuid>,
 }
 
 /// Live run state snapshot served at `GET /api/state`.
@@ -118,16 +123,35 @@ pub fn start_server(
     live: Arc<Mutex<LiveState>>,
     port: u16,
 ) -> tokio::task::JoinHandle<()> {
+    start_server_with_run_store(spec, event_tx, live, port, None, None)
+}
+
+/// Start the UI server with an optional durable run store.
+///
+/// When `run_store` and `run_id` are supplied, `GET /api/run` exposes the
+/// persisted lifecycle record for the run. This is the small integration seam
+/// application servers can use for polling status after a request returns.
+pub fn start_server_with_run_store(
+    spec: GraphSpec,
+    event_tx: broadcast::Sender<SchedulerEvent>,
+    live: Arc<Mutex<LiveState>>,
+    port: u16,
+    run_store: Option<Arc<dyn RunStore>>,
+    run_id: Option<uuid::Uuid>,
+) -> tokio::task::JoinHandle<()> {
     let state = ServerState {
         spec: Arc::new(spec),
         event_tx,
         live,
         started_at: Instant::now(),
+        run_store,
+        run_id,
     };
 
     let app = Router::new()
         .route("/api/graph", get(graph_handler))
         .route("/api/state", get(state_handler))
+        .route("/api/run", get(run_handler))
         .route("/api/events", get(events_handler))
         .layer(CorsLayer::permissive())
         .with_state(state);
@@ -164,6 +188,21 @@ async fn state_handler(State(s): State<ServerState>) -> Json<LiveState> {
         snapshot.elapsed_secs = s.started_at.elapsed().as_secs_f64();
     }
     Json(snapshot)
+}
+
+/// `GET /api/run` — return the durable lifecycle record, when configured.
+async fn run_handler(
+    State(s): State<ServerState>,
+) -> Result<Json<RunRecord>, axum::http::StatusCode> {
+    let (Some(store), Some(id)) = (s.run_store, s.run_id) else {
+        return Err(axum::http::StatusCode::NOT_FOUND);
+    };
+    store
+        .get(id)
+        .await
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?
+        .map(Json)
+        .ok_or(axum::http::StatusCode::NOT_FOUND)
 }
 
 /// `GET /api/events` — SSE stream that replays every `SchedulerEvent`.

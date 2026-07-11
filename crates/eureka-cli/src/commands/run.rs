@@ -5,6 +5,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use eureka::config::{Budget, EurekaConfig};
+use eureka::run::{FileRunStore, RunStore};
 use eureka::Session;
 use tokio::sync::broadcast;
 
@@ -76,6 +77,7 @@ pub async fn execute(args: RunArgs) -> Result<()> {
     } else {
         None
     };
+    let run_store: Arc<dyn RunStore> = Arc::new(FileRunStore::new(&sessions_dir));
 
     let goal = serde_json::json!({
         "goal": args.goal,
@@ -108,15 +110,24 @@ pub async fn execute(args: RunArgs) -> Result<()> {
         }));
         _tracker_handle =
             crate::server::track_live_state(event_tx.subscribe(), Arc::clone(&live_state));
-        _server_handle =
-            crate::server::start_server(session.spec().clone(), event_tx, live_state, args.port);
+        _server_handle = crate::server::start_server_with_run_store(
+            session.spec().clone(),
+            event_tx,
+            live_state,
+            args.port,
+            Some(Arc::clone(&run_store)),
+            Some(session_id),
+        );
     } else {
         drop(event_tx);
         _tracker_handle = tokio::spawn(async {});
         _server_handle = tokio::spawn(async {});
     }
 
-    let stats = session.run(goal).await.context("Failed to run session")?;
+    let stats = session
+        .run_with_store(goal, Some(run_store.as_ref()))
+        .await
+        .context("Failed to run session")?;
 
     tracing::info!(
         rounds = stats.rounds_completed,
