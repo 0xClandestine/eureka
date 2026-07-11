@@ -17,7 +17,8 @@ use crate::graph::port::{PortDef, PortDirection, PortSpec, PortSpecEntry};
 use crate::graph::spec::{GraphError, GraphNodeSpec, GraphSpec};
 use crate::graph::validate::{validate_graph, PortRegistry};
 use crate::manifest::{AgentSpec, ControlSpec, GraphManifest};
-use crate::scheduler::{Scheduler, SchedulerEvent};
+use crate::run::{RunRecord, RunStatus, RunStore};
+use crate::scheduler::{Scheduler, SchedulerError, SchedulerEvent};
 use anyhow::Context;
 use rig_core::client::{CompletionClient, ProviderClient};
 use rig_core::providers::{
@@ -265,11 +266,33 @@ impl Session {
     ///
     /// Returns an `EngineError` if node construction or scheduling fails.
     pub async fn run(&mut self, goal: serde_json::Value) -> Result<RunStats, EngineError> {
+        self.run_with_store(goal, None).await
+    }
+
+    /// Run the session while persisting lifecycle records to `store`.
+    ///
+    /// The store is updated before execution, after successful completion, and
+    /// when a pause or node failure is observed. This gives API callers a
+    /// durable record even when execution returns an error.
+    pub async fn run_with_store(
+        &mut self,
+        goal: serde_json::Value,
+        store: Option<&dyn RunStore>,
+    ) -> Result<RunStats, EngineError> {
         info!(
             session_id = %self.session_id,
             goal = %goal.get("goal").and_then(|v| v.as_str()).unwrap_or("(no goal)"),
             "Starting Eureka session"
         );
+
+        let mut record = RunRecord::new(self.session_id, self.config.graph.clone(), goal.clone());
+        record.status = RunStatus::Running;
+        if let Some(store) = store {
+            store
+                .save(record.clone())
+                .await
+                .map_err(|e| EngineError::Store(e.to_string()))?;
+        }
 
         // Construct all nodes from the spec — either from overrides or from manifest.
         // Clone the node specs to avoid holding an immutable borrow on self while
@@ -396,12 +419,45 @@ impl Session {
             initial_artifacts.insert(source_id.clone(), vec![artifact]);
         }
 
-        let stats = scheduler
-            .run(initial_artifacts)
-            .await
-            .map_err(|e| EngineError::Scheduler(e.to_string()))?;
+        let stats = match scheduler.run(initial_artifacts).await {
+            Ok(stats) => stats,
+            Err(error) => {
+                record.status = match &error {
+                    SchedulerError::Paused(stats) => {
+                        record.stats = Some(stats.clone());
+                        RunStatus::Paused
+                    }
+                    SchedulerError::NodeFailed { error, .. } => {
+                        record.error = Some(error.clone());
+                        RunStatus::Failed
+                    }
+                    _ => {
+                        record.error = Some(error.to_string());
+                        RunStatus::Cancelled
+                    }
+                };
+                if let SchedulerError::Paused(stats) = &error {
+                    record.stats = Some(stats.clone());
+                }
+                if let Some(store) = store {
+                    store
+                        .save(record)
+                        .await
+                        .map_err(|e| EngineError::Store(e.to_string()))?;
+                }
+                return Err(EngineError::Scheduler(error.to_string()));
+            }
+        };
 
         self.stats = Some(stats.clone());
+        record.status = RunStatus::Completed;
+        record.stats = Some(stats.clone());
+        if let Some(store) = store {
+            store
+                .save(record)
+                .await
+                .map_err(|e| EngineError::Store(e.to_string()))?;
+        }
         event_handle.abort();
 
         // Close the trace writer with final stats (best-effort).

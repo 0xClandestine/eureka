@@ -73,6 +73,8 @@ pub enum SchedulerEvent {
 pub enum SchedulerSignal {
     /// Cancel the run gracefully.
     Cancel,
-    /// Pause processing.
+    /// Pause processing at the next scheduler boundary.
     Pause,
+    /// Resume processing after a pause.
+    Resume,
 }

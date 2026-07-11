@@ -272,6 +272,9 @@ impl Scheduler {
                             self.stats.elapsed_secs = start.elapsed().as_secs_f64();
                             return Err(SchedulerError::Paused(self.stats.clone()));
                         }
+                        Some(SchedulerSignal::Resume) => {
+                            info!(round = current_round, "Run resume requested");
+                        }
                         None => {}
                     }
                 }
