@@ -300,10 +300,24 @@ impl Session {
         let node_specs = self.spec.nodes.clone();
         let mut nodes: HashMap<String, BoxedNode> = HashMap::new();
         for node_spec in &node_specs {
-            let node = if let Some(override_node) = self.node_overrides.get(&node_spec.id) {
-                override_node.clone()
+            let node_result = if let Some(override_node) = self.node_overrides.get(&node_spec.id) {
+                Ok(override_node.clone())
             } else {
-                self.construct_node(node_spec)?
+                self.construct_node(node_spec)
+            };
+            let node = match node_result {
+                Ok(node) => node,
+                Err(error) => {
+                    record.status = RunStatus::Failed;
+                    record.error = Some(error.to_string());
+                    if let Some(store) = store {
+                        store
+                            .save(record)
+                            .await
+                            .map_err(|e| EngineError::Store(e.to_string()))?;
+                    }
+                    return Err(error);
+                }
             };
             info!(
                 "Constructed node '{}' (kind: {})",
@@ -450,7 +464,11 @@ impl Session {
         };
 
         self.stats = Some(stats.clone());
-        record.status = RunStatus::Completed;
+        record.status = if stats.is_budget_exhausted(&self.config.budget).is_some() {
+            RunStatus::Cancelled
+        } else {
+            RunStatus::Completed
+        };
         record.stats = Some(stats.clone());
         if let Some(store) = store {
             store
