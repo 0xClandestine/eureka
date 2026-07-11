@@ -133,7 +133,7 @@ impl Default for Budget {
 /// Accumulated run statistics, aggregated by the scheduler from each node's
 /// [`NodeUsage`](crate::graph::node::NodeUsage) report and checked against a
 /// [`Budget`] each cycle.
-#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct RunStats {
     /// Total cost accumulated so far (best-effort; `0.0` if no pricing is
     /// configured — see [`ProviderConfig::pricing`]).

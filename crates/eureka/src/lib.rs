@@ -28,9 +28,11 @@ pub mod control;
 pub mod error;
 pub mod graph;
 pub mod manifest;
+pub mod run;
 pub mod scheduler;
 pub mod session;
 pub mod tracing;
 
 pub use error::EngineError;
+pub use run::{FileRunStore, RunRecord, RunStatus, RunStore};
 pub use session::Session;
