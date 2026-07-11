@@ -622,7 +622,7 @@ mod tests {
 
     use crate::config::Budget;
     use crate::graph::artifact::Artifact;
-    use crate::graph::node::{BoxedNode, Emit, Node, NodeCtx, NodeError, PortMsg};
+    use crate::graph::node::{BoxedNode, Emit, Node, NodeCtx, NodeError, NodeUsage, PortMsg};
     use crate::graph::port::{PortDirection, PortSpec, PortSpecEntry};
     use crate::graph::spec::{GraphNodeSpec, GraphSpec};
 
@@ -702,6 +702,120 @@ mod tests {
         let scheduler = Scheduler::new(spec, HashMap::new(), Budget::default(), 4);
         let tx = scheduler.signal_sender();
         assert!(tx.try_send(SchedulerSignal::Cancel).is_ok());
+    }
+
+    #[tokio::test]
+    async fn test_node_failure_aborts_run_and_reports_node() {
+        struct FailingNode;
+
+        #[async_trait]
+        impl Node for FailingNode {
+            fn ports(&self) -> PortSpec {
+                PortSpec::new(
+                    vec![PortSpecEntry {
+                        name: "in".into(),
+                        direction: PortDirection::Input,
+                        kind: "Goal".into(),
+                        required: true,
+                    }],
+                    vec![],
+                )
+            }
+
+            async fn process(
+                &self,
+                _ctx: &NodeCtx,
+                _inputs: Vec<PortMsg>,
+            ) -> Result<(Vec<Emit>, NodeUsage), NodeError> {
+                Err(NodeError::Internal("boom".into()))
+            }
+        }
+
+        let spec = GraphSpec {
+            name: Some("failure".into()),
+            description: None,
+            nodes: vec![GraphNodeSpec {
+                id: "failing".into(),
+                kind: "test.node".into(),
+                config: serde_json::Value::Null,
+                description: None,
+            }],
+            edges: vec![],
+            metadata: serde_json::Value::Null,
+        };
+        let mut nodes = HashMap::new();
+        nodes.insert("failing".into(), BoxedNode::new(FailingNode));
+        let mut scheduler = Scheduler::new(spec, nodes, Budget::default(), 1);
+        let result = scheduler
+            .run(HashMap::from([(
+                "failing".into(),
+                vec![Artifact {
+                    kind: "Goal".into(),
+                    data: serde_json::json!({}),
+                }],
+            )]))
+            .await;
+        assert!(matches!(
+            result,
+            Err(SchedulerError::NodeFailed { node_id, .. }) if node_id == "failing"
+        ));
+    }
+
+    #[tokio::test]
+    async fn test_pause_signal_returns_resumable_error() {
+        struct SlowPauseNode;
+
+        #[async_trait]
+        impl Node for SlowPauseNode {
+            fn ports(&self) -> PortSpec {
+                PortSpec::new(
+                    vec![PortSpecEntry {
+                        name: "in".into(),
+                        direction: PortDirection::Input,
+                        kind: "Goal".into(),
+                        required: true,
+                    }],
+                    vec![],
+                )
+            }
+
+            async fn process(
+                &self,
+                _ctx: &NodeCtx,
+                _inputs: Vec<PortMsg>,
+            ) -> Result<(Vec<Emit>, NodeUsage), NodeError> {
+                tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+                Ok((vec![], NodeUsage::default()))
+            }
+        }
+
+        let spec = GraphSpec {
+            name: Some("pause".into()),
+            description: None,
+            nodes: vec![GraphNodeSpec {
+                id: "source".into(),
+                kind: "test.node".into(),
+                config: serde_json::Value::Null,
+                description: None,
+            }],
+            edges: vec![],
+            metadata: serde_json::Value::Null,
+        };
+        let mut nodes = HashMap::new();
+        nodes.insert("source".into(), BoxedNode::new(SlowPauseNode));
+        let mut scheduler = Scheduler::new(spec, nodes, Budget::default(), 1);
+        let signal_tx = scheduler.signal_sender();
+        signal_tx.send(SchedulerSignal::Pause).await.unwrap();
+        let result = scheduler
+            .run(HashMap::from([(
+                "source".into(),
+                vec![Artifact {
+                    kind: "Goal".into(),
+                    data: serde_json::json!({}),
+                }],
+            )]))
+            .await;
+        assert!(matches!(result, Err(SchedulerError::Paused(_))));
     }
 
     #[tokio::test]
