@@ -578,7 +578,7 @@ impl Session {
                 .map(|p| PortDef {
                     port: p.port.clone(),
                     kind: p.kind.clone(),
-                    required: None,
+                    required: p.required,
                 })
                 .collect(),
             outputs: ctrl_spec
@@ -587,7 +587,7 @@ impl Session {
                 .map(|p| PortDef {
                     port: p.port.clone(),
                     kind: p.kind.clone(),
-                    required: None,
+                    required: p.required,
                 })
                 .collect(),
             timeout_secs: ctrl_spec.timeout_secs,
@@ -634,7 +634,7 @@ fn build_port_registry(manifest: &GraphManifest) -> PortRegistry {
                 name: p.port.clone(),
                 direction: PortDirection::Input,
                 kind: p.kind.clone(),
-                required: true,
+                required: p.required.unwrap_or(true),
             })
             .collect();
 
@@ -661,7 +661,7 @@ fn build_port_registry(manifest: &GraphManifest) -> PortRegistry {
                 name: p.port.clone(),
                 direction: PortDirection::Input,
                 kind: p.kind.clone(),
-                required: true,
+                required: p.required.unwrap_or(true),
             })
             .collect();
 

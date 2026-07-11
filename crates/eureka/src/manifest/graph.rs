@@ -201,6 +201,25 @@ edges:
     }
 
     #[test]
+    fn test_optional_ports_preserve_required_flag() {
+        let manifest: GraphManifest = serde_yaml::from_str(
+            r#"
+name: optional
+agents:
+  - id: gen
+    prompt: p.md
+    inputs:
+      - { port: in, kind: Goal }
+      - { port: context, kind: Insights, required: false }
+    outputs: [{ port: out, kind: Test }]
+    output_schema: { type: object }
+"#,
+        )
+        .unwrap();
+        assert_eq!(manifest.agents[0].inputs[1].required, Some(false));
+    }
+
+    #[test]
     fn test_control_and_agents_combined() {
         let manifest = GraphManifest {
             name: None,
