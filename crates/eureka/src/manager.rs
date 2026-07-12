@@ -85,6 +85,11 @@ impl RunManager {
     /// Start a new run in the background and return its ID immediately.
     pub async fn create_run(&self, request: CreateRunRequest) -> Result<uuid::Uuid, EngineError> {
         let run_id = uuid::Uuid::now_v7();
+        let record = RunRecord::new(run_id, self.config.graph.clone(), request.goal.clone());
+        self.run_store
+            .save(record)
+            .await
+            .map_err(|error| EngineError::Store(error.to_string()))?;
         self.spawn_run(run_id, request.goal, None).await?;
         Ok(run_id)
     }
