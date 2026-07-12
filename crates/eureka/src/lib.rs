@@ -35,7 +35,8 @@ pub mod tracing;
 
 pub use error::EngineError;
 pub use run::{
-    FileRunStore, PersistenceError, Revision, RunEnvironment, RunFilter, RunRecord, RunRepository,
-    RunStatus, RunStore, DATABASE_SCHEMA_VERSION,
+    ActivationSnapshot, CheckpointReason, CheckpointStore, FileRunStore, PendingInput,
+    PersistenceError, Revision, RunCheckpoint, RunEnvironment, RunFilter, RunPersistence,
+    RunRecord, RunRepository, RunStatus, RunStore, DATABASE_SCHEMA_VERSION,
 };
 pub use session::Session;

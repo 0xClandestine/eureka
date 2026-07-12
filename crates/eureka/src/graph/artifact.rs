@@ -22,7 +22,7 @@ pub type ArtifactKind = String;
 /// producer kind must match the consumer port's expected kind, proven by
 /// the validator before any model call is made. The `data` field is opaque
 /// JSON that each node deserializes according to its own schema.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct Artifact {
     /// The kind of this artifact, used for port type-checking.
     pub kind: ArtifactKind,

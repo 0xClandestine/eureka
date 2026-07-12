@@ -13,7 +13,7 @@ use super::port::{PortId, PortSpec};
 use crate::scheduler::SchedulerEvent;
 
 /// A message arriving on an input port of a node.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct PortMsg {
     /// The port on which this message arrived.
     pub port: PortId,

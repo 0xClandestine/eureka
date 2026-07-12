@@ -91,6 +91,8 @@ use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 
 use crate::config::RunStats;
+use crate::graph::artifact::Artifact;
+use crate::graph::node::PortMsg;
 
 /// Monotonically increasing revision for optimistic concurrency control.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -129,6 +131,113 @@ impl From<std::io::Error> for PersistenceError {
         Self::Io(error)
     }
 }
+
+/// Why a scheduler checkpoint was written.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum CheckpointReason {
+    /// Checkpoint written after a completed scheduler round.
+    RoundCompleted,
+    /// Checkpoint written after a requested pause.
+    Pause,
+    /// Checkpoint written after cancellation.
+    Cancellation,
+    /// Checkpoint written before terminal completion.
+    Completion,
+    /// Checkpoint written after accepting external input.
+    InputAccepted,
+}
+
+/// An input artifact waiting for a node activation.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct PendingInput {
+    /// Target node ID.
+    pub node_id: String,
+    /// Scheduler round containing the input.
+    pub round: u32,
+    /// Target input port.
+    pub port: String,
+    /// Artifact waiting at the port.
+    pub artifact: Artifact,
+}
+
+/// A ready activation captured at a scheduler boundary.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct ActivationSnapshot {
+    /// Node ID to activate.
+    pub node_id: String,
+    /// Scheduler round containing the activation.
+    pub round: u32,
+    /// Joined input messages.
+    pub inputs: Vec<PortMsg>,
+}
+
+/// Serializable scheduler state used for durable recovery.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RunCheckpoint {
+    /// Run this checkpoint belongs to.
+    pub run_id: uuid::Uuid,
+    /// Monotonic checkpoint revision.
+    pub revision: Revision,
+    /// Hash of the graph manifest/topology used to create the checkpoint.
+    pub graph_hash: String,
+    /// Hash of runtime configuration used to create the checkpoint.
+    pub config_hash: String,
+    /// Current synchronized scheduler round.
+    pub round: u32,
+    /// Outstanding activation count by round.
+    pub round_pending: std::collections::HashMap<u32, usize>,
+    /// Artifacts buffered for not-yet-ready nodes.
+    pub pending_inputs: Vec<PendingInput>,
+    /// Activations ready to dispatch at the checkpoint boundary.
+    pub ready_activations: Vec<ActivationSnapshot>,
+    /// Statistics accumulated through this boundary.
+    pub stats: RunStats,
+    /// Reason this checkpoint was written.
+    pub reason: CheckpointReason,
+}
+
+impl RunCheckpoint {
+    /// Create an empty checkpoint at revision zero.
+    #[must_use]
+    pub fn new(run_id: uuid::Uuid, graph_hash: String, config_hash: String) -> Self {
+        Self {
+            run_id,
+            revision: Revision::default(),
+            graph_hash,
+            config_hash,
+            round: 0,
+            round_pending: std::collections::HashMap::new(),
+            pending_inputs: Vec::new(),
+            ready_activations: Vec::new(),
+            stats: RunStats::default(),
+            reason: CheckpointReason::RoundCompleted,
+        }
+    }
+}
+
+/// Persistence interface for the latest durable scheduler checkpoint.
+#[async_trait]
+pub trait CheckpointStore: Send + Sync {
+    /// Save a checkpoint, optionally requiring the current revision to match.
+    async fn save_checkpoint(
+        &self,
+        checkpoint: RunCheckpoint,
+        expected: Option<Revision>,
+    ) -> Result<RunCheckpoint, PersistenceError>;
+    /// Load the latest complete checkpoint for a run.
+    async fn load_checkpoint(
+        &self,
+        run_id: uuid::Uuid,
+    ) -> Result<Option<RunCheckpoint>, PersistenceError>;
+    /// Delete the checkpoint for a run.
+    async fn delete_checkpoint(&self, run_id: uuid::Uuid) -> Result<(), PersistenceError>;
+}
+
+/// A persistence backend that supports both run metadata and checkpoints.
+pub trait RunPersistence: RunRepository + CheckpointStore {}
+
+impl<T: RunRepository + CheckpointStore> RunPersistence for T {}
 
 /// Lifecycle state persisted for a run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -225,7 +334,7 @@ pub trait RunStore: Send + Sync {
     async fn list(&self) -> std::io::Result<Vec<RunRecord>>;
 }
 
-/// JSON-file-backed [`RunStore`].
+/// JSON-file-backed [`RunStore`] and checkpoint store.
 #[derive(Debug, Clone)]
 pub struct FileRunStore {
     directory: Arc<PathBuf>,
@@ -250,6 +359,10 @@ impl FileRunStore {
 
     fn path_for(&self, id: uuid::Uuid) -> PathBuf {
         self.directory.join(format!("{id}.json"))
+    }
+
+    fn checkpoint_path_for(&self, id: uuid::Uuid) -> PathBuf {
+        self.directory.join(format!("{id}.checkpoint.json"))
     }
 
     async fn read_record(&self, id: uuid::Uuid) -> std::io::Result<Option<RunRecord>> {
@@ -385,6 +498,84 @@ impl RunRepository for FileRunStore {
 }
 
 #[async_trait]
+impl CheckpointStore for FileRunStore {
+    async fn save_checkpoint(
+        &self,
+        mut checkpoint: RunCheckpoint,
+        expected: Option<Revision>,
+    ) -> Result<RunCheckpoint, PersistenceError> {
+        let _guard = self.lock.lock().await;
+        let path = self.checkpoint_path_for(checkpoint.run_id);
+        let current = tokio::task::spawn_blocking({
+            let path = path.clone();
+            move || match std::fs::read(path) {
+                Ok(bytes) => serde_json::from_slice::<RunCheckpoint>(&bytes)
+                    .map(Some)
+                    .map_err(|error| std::io::Error::other(error.to_string())),
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                Err(error) => Err(error),
+            }
+        })
+        .await
+        .map_err(|error| PersistenceError::Io(std::io::Error::other(error.to_string())))??;
+        if let Some(expected) = expected {
+            let actual = current
+                .as_ref()
+                .map_or(Revision::default(), |item| item.revision);
+            if actual != expected {
+                return Err(PersistenceError::RevisionConflict {
+                    run_id: checkpoint.run_id,
+                    expected,
+                    actual,
+                });
+            }
+        }
+        checkpoint.revision = current.map_or(Revision(1), |item| Revision(item.revision.0 + 1));
+        let directory = self.directory.clone();
+        let bytes = serde_json::to_vec_pretty(&checkpoint)
+            .map_err(|error| PersistenceError::Serialization(error.to_string()))?;
+        tokio::task::spawn_blocking(move || {
+            std::fs::create_dir_all(directory.as_path())?;
+            let temp = path.with_extension("checkpoint.json.tmp");
+            std::fs::write(&temp, bytes)?;
+            std::fs::rename(temp, path)
+        })
+        .await
+        .map_err(|error| PersistenceError::Io(std::io::Error::other(error.to_string())))??;
+        Ok(checkpoint)
+    }
+
+    async fn load_checkpoint(
+        &self,
+        run_id: uuid::Uuid,
+    ) -> Result<Option<RunCheckpoint>, PersistenceError> {
+        let _guard = self.lock.lock().await;
+        let path = self.checkpoint_path_for(run_id);
+        tokio::task::spawn_blocking(move || match std::fs::read(path) {
+            Ok(bytes) => serde_json::from_slice(&bytes)
+                .map(Some)
+                .map_err(|error| PersistenceError::Serialization(error.to_string())),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+            Err(error) => Err(PersistenceError::Io(error)),
+        })
+        .await
+        .map_err(|error| PersistenceError::Io(std::io::Error::other(error.to_string())))?
+    }
+
+    async fn delete_checkpoint(&self, run_id: uuid::Uuid) -> Result<(), PersistenceError> {
+        let _guard = self.lock.lock().await;
+        let path = self.checkpoint_path_for(run_id);
+        tokio::task::spawn_blocking(move || match std::fs::remove_file(path) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+            Err(error) => Err(PersistenceError::Io(error)),
+        })
+        .await
+        .map_err(|error| PersistenceError::Io(std::io::Error::other(error.to_string())))?
+    }
+}
+
+#[async_trait]
 impl RunStore for FileRunStore {
     async fn save(&self, record: RunRecord) -> std::io::Result<()> {
         let _guard = self.lock.lock().await;
@@ -475,5 +666,35 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(records, vec![updated]);
+    }
+
+    #[tokio::test]
+    async fn file_store_round_trips_checkpoints_with_revisions() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = FileRunStore::new(directory.path());
+        let run_id = uuid::Uuid::now_v7();
+        let checkpoint = RunCheckpoint::new(run_id, "graph-v1".into(), "config-v1".into());
+        let saved = CheckpointStore::save_checkpoint(&store, checkpoint, None)
+            .await
+            .unwrap();
+        assert_eq!(saved.revision, Revision(1));
+        let loaded = CheckpointStore::load_checkpoint(&store, run_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(loaded, saved);
+
+        let mut next = saved.clone();
+        next.round = 2;
+        let next = CheckpointStore::save_checkpoint(&store, next, Some(saved.revision))
+            .await
+            .unwrap();
+        assert_eq!(next.revision, Revision(2));
+        let mut stale = next.clone();
+        stale.round = 1;
+        let error = CheckpointStore::save_checkpoint(&store, stale, Some(saved.revision))
+            .await
+            .unwrap_err();
+        assert!(matches!(error, PersistenceError::RevisionConflict { .. }));
     }
 }
