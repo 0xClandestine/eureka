@@ -541,6 +541,42 @@ impl RunRepository for SqliteRunPersistence {
 }
 
 #[async_trait]
+impl RunStore for SqliteRunPersistence {
+    async fn save(&self, record: RunRecord) -> std::io::Result<()> {
+        let current = self
+            .get_versioned(record.id)
+            .await
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        let result = match current {
+            Some(current) => self
+                .save_if_revision(record, current.revision)
+                .await
+                .map(|_| ()),
+            None => self.create(record).await.map(|_| ()),
+        };
+        result.map_err(|error| std::io::Error::other(error.to_string()))
+    }
+
+    async fn get(&self, id: uuid::Uuid) -> std::io::Result<Option<RunRecord>> {
+        self.get_versioned(id)
+            .await
+            .map_err(|error| std::io::Error::other(error.to_string()))
+    }
+
+    async fn delete(&self, id: uuid::Uuid) -> std::io::Result<()> {
+        self.delete_versioned(id)
+            .await
+            .map_err(|error| std::io::Error::other(error.to_string()))
+    }
+
+    async fn list(&self) -> std::io::Result<Vec<RunRecord>> {
+        RunRepository::list(self, RunFilter::default())
+            .await
+            .map_err(|error| std::io::Error::other(error.to_string()))
+    }
+}
+
+#[async_trait]
 impl CheckpointStore for SqliteRunPersistence {
     async fn save_checkpoint(
         &self,
