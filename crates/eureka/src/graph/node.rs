@@ -10,6 +10,7 @@ use tokio::sync::mpsc;
 
 use super::artifact::Artifact;
 use super::port::{PortId, PortSpec};
+use crate::run::RunEnvironment;
 use crate::scheduler::SchedulerEvent;
 
 /// A message arriving on an input port of a node.
@@ -57,6 +58,8 @@ pub struct NodeCtx {
     pub cancel: tokio_util::sync::CancellationToken,
     /// Optional sender for emitting observability events (e.g. tool calls).
     pub event_tx: Option<mpsc::Sender<SchedulerEvent>>,
+    /// Run-scoped identity and persistence capabilities.
+    pub run_environment: Option<RunEnvironment>,
 }
 
 impl NodeCtx {
@@ -74,6 +77,7 @@ impl NodeCtx {
             round,
             cancel,
             event_tx: None,
+            run_environment: None,
         }
     }
 

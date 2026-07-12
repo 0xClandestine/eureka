@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use eureka::config::{Budget, EurekaConfig};
-use eureka::run::{FileRunStore, RunStore};
+use eureka::run::{CheckpointStore, FileRunStore, RunStore};
 use eureka::Session;
 use tokio::sync::broadcast;
 
@@ -77,7 +77,9 @@ pub async fn execute(args: RunArgs) -> Result<()> {
     } else {
         None
     };
-    let run_store: Arc<dyn RunStore> = Arc::new(FileRunStore::new(&sessions_dir));
+    let file_store = Arc::new(FileRunStore::new(&sessions_dir));
+    let run_store: Arc<dyn RunStore> = file_store.clone();
+    let checkpoint_store: Arc<dyn CheckpointStore> = file_store.clone();
 
     let goal = serde_json::json!({
         "goal": args.goal,
@@ -88,6 +90,7 @@ pub async fn execute(args: RunArgs) -> Result<()> {
     // Create the session — loads the manifest, validates, preps for run
     let mut session = Session::new(config, &session_id.to_string(), db_path)
         .context("Failed to create session")?;
+    session.set_checkpoint_store(checkpoint_store);
 
     tracing::info!(
         goal = %args.goal,
