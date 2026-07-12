@@ -461,8 +461,6 @@ impl RunRepository for SqliteRunPersistence {
         let _guard = self.lock.lock().await;
         let id = record.id;
         let id_text = id.to_string();
-        let json = serde_json::to_string(&record)
-            .map_err(|error| PersistenceError::Serialization(error.to_string()))?;
         self.blocking(move |connection| {
             let actual: Option<u64> = connection
                 .query_row(
