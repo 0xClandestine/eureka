@@ -715,7 +715,8 @@ impl Session {
                 &self.config.agent,
                 &self.config.agent_overrides,
                 &agent_spec.id,
-            ).clone(),
+            )
+            .clone(),
             output_schema: agent_spec.output_schema.clone(),
             tools: agent_spec
                 .tools
