@@ -5,6 +5,7 @@
 //! provides a small persistence boundary so callers can inspect runs after a
 //! process exits and build resumable APIs without coupling them to a database.
 
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -332,6 +333,116 @@ pub trait RunStore: Send + Sync {
     async fn delete(&self, id: uuid::Uuid) -> std::io::Result<()>;
     /// List all run records.
     async fn list(&self) -> std::io::Result<Vec<RunRecord>>;
+}
+
+/// In-memory run and checkpoint persistence backend for tests and embedded use.
+#[derive(Debug, Clone, Default)]
+pub struct InMemoryRunPersistence {
+    runs: Arc<tokio::sync::RwLock<HashMap<uuid::Uuid, RunRecord>>>,
+    checkpoints: Arc<tokio::sync::RwLock<HashMap<uuid::Uuid, RunCheckpoint>>>,
+}
+
+impl InMemoryRunPersistence {
+    /// Create an empty in-memory persistence backend.
+    #[must_use]
+    pub fn new() -> Self {
+        Self::default()
+    }
+}
+
+#[async_trait]
+impl RunRepository for InMemoryRunPersistence {
+    async fn create(&self, mut record: RunRecord) -> Result<RunRecord, PersistenceError> {
+        let mut runs = self.runs.write().await;
+        if runs.contains_key(&record.id) {
+            return Err(PersistenceError::AlreadyExists(record.id));
+        }
+        record.revision = Revision::default();
+        runs.insert(record.id, record.clone());
+        Ok(record)
+    }
+
+    async fn get_versioned(&self, id: uuid::Uuid) -> Result<Option<RunRecord>, PersistenceError> {
+        Ok(self.runs.read().await.get(&id).cloned())
+    }
+
+    async fn save_if_revision(
+        &self,
+        mut record: RunRecord,
+        expected: Revision,
+    ) -> Result<RunRecord, PersistenceError> {
+        let mut runs = self.runs.write().await;
+        let current = runs
+            .get(&record.id)
+            .ok_or(PersistenceError::NotFound(record.id))?;
+        if current.revision != expected {
+            return Err(PersistenceError::RevisionConflict {
+                run_id: record.id,
+                expected,
+                actual: current.revision,
+            });
+        }
+        record.revision = Revision(expected.0.saturating_add(1));
+        runs.insert(record.id, record.clone());
+        Ok(record)
+    }
+
+    async fn list(&self, filter: RunFilter) -> Result<Vec<RunRecord>, PersistenceError> {
+        let runs = self.runs.read().await;
+        let mut records: Vec<_> = runs
+            .values()
+            .filter(|record| filter.status.is_none_or(|status| record.status == status))
+            .cloned()
+            .collect();
+        records.sort_by_key(|record| record.id);
+        if let Some(limit) = filter.limit {
+            records.truncate(limit);
+        }
+        Ok(records)
+    }
+
+    async fn delete_versioned(&self, id: uuid::Uuid) -> Result<(), PersistenceError> {
+        self.runs.write().await.remove(&id);
+        self.checkpoints.write().await.remove(&id);
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl CheckpointStore for InMemoryRunPersistence {
+    async fn save_checkpoint(
+        &self,
+        mut checkpoint: RunCheckpoint,
+        expected: Option<Revision>,
+    ) -> Result<RunCheckpoint, PersistenceError> {
+        let mut checkpoints = self.checkpoints.write().await;
+        let current = checkpoints.get(&checkpoint.run_id);
+        if let Some(expected) = expected {
+            let actual = current.map_or(Revision::default(), |item| item.revision);
+            if actual != expected {
+                return Err(PersistenceError::RevisionConflict {
+                    run_id: checkpoint.run_id,
+                    expected,
+                    actual,
+                });
+            }
+        }
+        checkpoint.revision = current.map_or(Revision(1), |item| Revision(item.revision.0 + 1));
+        checkpoints.insert(checkpoint.run_id, checkpoint.clone());
+        Ok(checkpoint)
+    }
+
+    async fn load_checkpoint(
+        &self,
+        run_id: uuid::Uuid,
+    ) -> Result<Option<RunCheckpoint>, PersistenceError> {
+        Ok(self.checkpoints.read().await.get(&run_id).cloned())
+    }
+
+    async fn delete_checkpoint(&self, run_id: uuid::Uuid) -> Result<(), PersistenceError> {
+        self.checkpoints.write().await.remove(&run_id);
+        Ok(())
+    }
 }
 
 /// JSON-file-backed [`RunStore`] and checkpoint store.
@@ -696,5 +807,29 @@ mod tests {
             .await
             .unwrap_err();
         assert!(matches!(error, PersistenceError::RevisionConflict { .. }));
+    }
+
+    #[tokio::test]
+    async fn in_memory_backend_matches_versioned_contract() {
+        let store = InMemoryRunPersistence::new();
+        let id = uuid::Uuid::now_v7();
+        let record = RunRepository::create(
+            &store,
+            RunRecord::new(id, "graph.yml", serde_json::json!({})),
+        )
+        .await
+        .unwrap();
+        let checkpoint = CheckpointStore::save_checkpoint(
+            &store,
+            RunCheckpoint::new(id, "graph".into(), "config".into()),
+            None,
+        )
+        .await
+        .unwrap();
+        assert_eq!(checkpoint.revision, Revision(1));
+        assert_eq!(
+            RunRepository::get_versioned(&store, id).await.unwrap(),
+            Some(record)
+        );
     }
 }
