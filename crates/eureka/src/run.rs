@@ -126,6 +126,14 @@ pub enum PersistenceError {
     /// A persisted record was malformed.
     #[error("invalid persisted run record: {0}")]
     Serialization(String),
+    /// An external artifact would overwrite an existing buffered input.
+    #[error("input already exists for node '{node_id}' port '{port}'")]
+    InputConflict {
+        /// Target node ID.
+        node_id: String,
+        /// Target input port.
+        port: String,
+    },
 }
 
 impl From<std::io::Error> for PersistenceError {
@@ -216,6 +224,33 @@ pub struct RunCheckpoint {
 }
 
 impl RunCheckpoint {
+    /// Add a human or external artifact to a target port in this checkpoint.
+    ///
+    /// The graph/session layer performs node and port validation before calling
+    /// this method. Replacing an existing artifact on the same port is
+    /// rejected so an input cannot be silently lost.
+    pub fn inject_input(
+        &mut self,
+        node_id: impl Into<String>,
+        port: impl Into<String>,
+        artifact: Artifact,
+    ) -> Result<(), PersistenceError> {
+        let node_id = node_id.into();
+        let port = port.into();
+        if self.pending_inputs.iter().any(|input| {
+            input.node_id == node_id && input.port == port && input.round == self.round
+        }) {
+            return Err(PersistenceError::InputConflict { node_id, port });
+        }
+        self.pending_inputs.push(PendingInput {
+            node_id,
+            round: self.round,
+            port,
+            artifact,
+        });
+        Ok(())
+    }
+
     /// Create an empty checkpoint at revision zero.
     #[must_use]
     pub fn new(run_id: uuid::Uuid, graph_hash: String, config_hash: String) -> Self {
