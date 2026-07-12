@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use eureka::config::{Budget, EurekaConfig};
-use eureka::run::{CheckpointStore, FileRunStore, RunStore};
+use eureka::run::{CheckpointStore, FileRunStore, RunStore, SqliteRunPersistence};
 use eureka::Session;
 use tokio::sync::broadcast;
 
@@ -77,9 +77,26 @@ pub async fn execute(args: RunArgs) -> Result<()> {
     } else {
         None
     };
-    let file_store = Arc::new(FileRunStore::new(&sessions_dir));
-    let run_store: Arc<dyn RunStore> = file_store.clone();
-    let checkpoint_store: Arc<dyn CheckpointStore> = file_store.clone();
+    let (run_store, checkpoint_store): (Arc<dyn RunStore>, Arc<dyn CheckpointStore>) = if let Some(
+        path,
+    ) =
+        &db_path
+    {
+        match SqliteRunPersistence::open(path).await {
+            Ok(sqlite) => {
+                let sqlite = Arc::new(sqlite);
+                (sqlite.clone(), sqlite)
+            }
+            Err(error) => {
+                tracing::warn!(error = %error, "Failed to open runtime SQLite persistence; using JSON lifecycle store");
+                let file = Arc::new(FileRunStore::new(&sessions_dir));
+                (file.clone(), file)
+            }
+        }
+    } else {
+        let file = Arc::new(FileRunStore::new(&sessions_dir));
+        (file.clone(), file)
+    };
 
     let goal = serde_json::json!({
         "goal": args.goal,
