@@ -233,7 +233,12 @@ pub async fn execute_output(
     // Filter by node if requested
     let filtered: Vec<&Value> = node_filter.map_or_else(
         || outputs.iter().collect(),
-        |node| outputs.iter().filter(|o| o["node_id"].as_str() == Some(node)).collect(),
+        |node| {
+            outputs
+                .iter()
+                .filter(|o| o["node_id"].as_str() == Some(node))
+                .collect()
+        },
     );
 
     if filtered.is_empty() {
@@ -281,10 +286,7 @@ pub async fn execute_output(
                         // Print compact summary for objects/arrays
                         let preview = serde_json::to_string(data).unwrap_or_default();
                         if preview.len() > 500 {
-                            println!(
-                                "  data: {} ... (truncated)",
-                                &preview[..200]
-                            );
+                            println!("  data: {} ... (truncated)", &preview[..200]);
                         } else {
                             println!("  data: {preview}");
                         }

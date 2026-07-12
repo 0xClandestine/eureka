@@ -12,6 +12,7 @@ agents:
         kind: Goal
       - port: context
         kind: Insights
+        required: false
     outputs:
       - port: out
         kind: Hypotheses
@@ -63,6 +64,7 @@ agents:
         kind: Hypotheses
       - port: context
         kind: Insights
+        required: false
     outputs:
       - port: out
         kind: Reviews
@@ -116,6 +118,7 @@ agents:
         kind: Hypotheses
       - port: context
         kind: Insights
+        required: false
     outputs:
       - port: out
         kind: Hypotheses
@@ -216,6 +219,7 @@ control:
         kind: Reviews
       - port: graph
         kind: ProximityGraph
+        required: false
     outputs:
       - port: top
         kind: Hypotheses
@@ -258,6 +262,9 @@ control:
     inputs:
       - port: in
         kind: Hypotheses
+      - port: ranking
+        kind: Ranking
+        required: false
     outputs:
       - port: continue
         kind: Hypotheses
@@ -274,6 +281,7 @@ control:
 # Forward pipeline: generation → reflection → ranking → evolution → proximity → supervisor
 # Feedback loops: supervisor → reflection (continue), proximity.graph → ranking,
 #                 meta_review.insights → generation, reflection, evolution
+#                 ranking.state → supervisor (statistics)
 edges:
   # ── Forward pipeline ──
   - from_node: generation
@@ -312,6 +320,12 @@ edges:
     from_port: state
     to_node: meta_review
     to_port: in
+
+  # ── Tournament state → Supervisor (for statistics & convergence) ──
+  - from_node: ranking
+    from_port: state
+    to_node: supervisor
+    to_port: ranking
 
   # ── Meta-review feedback → all agents ──
   - from_node: meta_review

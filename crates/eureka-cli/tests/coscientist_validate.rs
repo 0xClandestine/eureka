@@ -105,12 +105,20 @@ struct MockSup;
 impl Node for MockSup {
     fn ports(&self) -> PortSpec {
         PortSpec::new(
-            vec![PortSpecEntry {
-                name: "in".into(),
-                direction: PortDirection::Input,
-                kind: "Hypotheses".into(),
-                required: true,
-            }],
+            vec![
+                PortSpecEntry {
+                    name: "in".into(),
+                    direction: PortDirection::Input,
+                    kind: "Hypotheses".into(),
+                    required: true,
+                },
+                PortSpecEntry {
+                    name: "ranking".into(),
+                    direction: PortDirection::Input,
+                    kind: "Ranking".into(),
+                    required: false,
+                },
+            ],
             vec![
                 PortSpecEntry {
                     name: "continue".into(),

@@ -149,12 +149,53 @@ def main() -> None:
     except (json.JSONDecodeError, EOFError):
         envelope = {}
 
-    artifact = envelope.get("artifact", {})
-    data = artifact.get("data", {})
-    kind = artifact.get("kind", "Hypotheses")
+    # ── Collect data from all input ports ──
+    # The scheduler sends one envelope carrying:
+    #   "inputs": [{"port": "in", "artifact": {...}}, {"port": "ranking", "artifact": {...}}]
+    # Fall back to the single-artifact envelope for backward compatibility.
+    hypotheses = []
+    elo_ratings = {}
 
-    hypotheses = data.get("hypotheses", [])
-    elo_ratings = data.get("elo_ratings", {})
+    all_inputs = envelope.get("inputs", [])
+    if not all_inputs:
+        # Backward-compatible single-artifact path.
+        artifact = envelope.get("artifact", {})
+        data = artifact.get("data", {})
+        hypotheses = data.get("hypotheses", [])
+        elo_ratings = data.get("elo_ratings", {})
+    else:
+        for inp in all_inputs:
+            port = inp.get("port", "")
+            data = inp.get("artifact", {}).get("data", {})
+            if port == "in":
+                hypotheses = data.get("hypotheses", [])
+                # Legacy: ranking data might also arrive on "in".
+                if not elo_ratings:
+                    elo_ratings = data.get("elo_ratings", {})
+            elif port == "ranking":
+                elo_ratings = data.get("elo_ratings", {})
+
+    # ── Elo fallback: load persisted ratings from DB (written by ranker) ──
+    if not elo_ratings and db_path:
+        try:
+            conn = sqlite3.connect(db_path)
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS elo_ratings (
+                    session_id TEXT NOT NULL, node_id TEXT NOT NULL,
+                    item_id TEXT NOT NULL, elo REAL NOT NULL DEFAULT 1200.0,
+                    PRIMARY KEY (session_id, node_id, item_id)
+                )
+            """)
+            conn.commit()
+            cur = conn.execute(
+                "SELECT item_id, elo FROM elo_ratings WHERE session_id=?",
+                (session_id,),
+            )
+            for item_id, elo in cur.fetchall():
+                elo_ratings[item_id] = elo
+            conn.close()
+        except Exception:
+            pass
 
     # Compute statistics
     stats = _compute_stats(hypotheses, elo_ratings, round_num)
