@@ -47,6 +47,14 @@ Use the `context_store` tool to read and write shared research memory:
 This context persists across rounds and is accessible to Reflection, Evolution,
 and the Meta-review agent.
 
+# Expert-in-the-Loop
+
+A scientist may inject their own hypotheses, reviews, or research directions
+via the expert interface. When expert-provided content appears in your input,
+treat it as authoritative guidance — prioritise it over system-generated
+content. Flag any conflicts between expert guidance and system findings for
+the Meta-review agent to surface.
+
 # Output
 
 For each hypothesis, clearly state the assumptions, propose a concrete

@@ -56,3 +56,10 @@ Use the `context_store` tool:
 - Read review critiques from Reflection to understand what needs improvement.
 - Write your evolution results so Meta-review can analyse which strategies
   worked best.
+
+# Expert-in-the-Loop
+
+A scientist may inject their own hypotheses or suggest specific refinement
+directions. When expert hypotheses appear in your input, treat them as
+high-priority parents for evolution — combine them with system-generated
+hypotheses but preserve the expert's core insight.
