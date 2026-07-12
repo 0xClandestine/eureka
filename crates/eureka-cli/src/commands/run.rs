@@ -35,6 +35,7 @@ pub struct RunArgs {
 /// # Errors
 ///
 /// Returns an error if the session fails.
+#[allow(clippy::too_many_lines)]
 pub async fn execute(args: RunArgs) -> Result<()> {
     // Load config via figment layers: defaults → file → env
     let config = EurekaConfig::load(Some(Path::new(&args.config_path)))

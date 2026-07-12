@@ -1,7 +1,7 @@
 //! Durable tracing of scheduler events to JSONL files.
 //!
 //! The [`JsonlTraceWriter`] writes every [`SchedulerEvent`] to a
-//! `.traces.jsonl` file co-located with the session's SQLite database
+//! `.traces.jsonl` file co-located with the session's `SQLite` database
 //! under `<graph_dir>/.eureka/sessions/`.
 //!
 //! Tracing is opt-in via the `[tracing]` section in `eureka.toml` or the
@@ -22,8 +22,11 @@ use crate::scheduler::SchedulerEvent;
 /// - The `BufWriter` is flushed after every write.
 /// - `close` performs an `fsync` for durability.
 pub struct JsonlTraceWriter {
+    /// Path to the output traces JSONL file.
     path: PathBuf,
+    /// Buffered writer over the trace file.
     writer: BufWriter<File>,
+    /// Whether to include full artifacts in trace output.
     include_artifacts: bool,
 }
 
@@ -245,7 +248,7 @@ fn iso_now_rfc3339() -> String {
 /// Convert days since Unix epoch to (year, month, day) in the Gregorian
 /// civil calendar. Uses Howard Hinnant's algorithm.
 #[allow(clippy::many_single_char_names)]
-fn days_to_date(days: u64) -> (u64, u64, u64) {
+const fn days_to_date(days: u64) -> (u64, u64, u64) {
     let z = days + 719_468;
     let era = z / 146_097;
     let doe = z % 146_097;

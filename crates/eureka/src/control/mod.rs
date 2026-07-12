@@ -31,8 +31,11 @@
 //! | `EUREKA_CONFIG` | JSON-encoded node `config` from the manifest |
 //! | `EUREKA_DB_PATH` | Path to the session SQLite database (if available) |
 
+/// Control error types.
 pub mod error;
+/// Subprocess-backed control node implementation.
 pub mod node;
+/// Shared subprocess runner.
 pub mod process;
 
 pub use error::ControlError;

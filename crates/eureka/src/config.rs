@@ -310,11 +310,12 @@ impl std::fmt::Display for ProviderKind {
 }
 
 /// Per-model token pricing (USD per million tokens) used by the cost
-/// budget backstop. Most providers charge different rates for input
-/// (prompt) vs output (completion) tokens; set both for an accurate
-/// estimate. As a convenience, a single flat `cost_per_million_tokens`
-/// rate on [`ProviderConfig`] sets both to the same value when `pricing`
-/// is absent.
+/// budget backstop.
+///
+/// Most providers charge different rates for input (prompt) vs output
+/// (completion) tokens; set both for an accurate estimate. As a convenience,
+/// a single flat `cost_per_million_tokens` rate on [`ProviderConfig`] sets
+/// both to the same value when `pricing` is absent.
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct Pricing {
     /// USD per million input (prompt) tokens.
@@ -327,10 +328,13 @@ pub struct Pricing {
 
 impl Pricing {
     /// Compute the USD cost for the given token counts.
+    #[allow(clippy::cast_precision_loss)]
     #[must_use]
     pub fn cost(&self, input_tokens: u64, output_tokens: u64) -> f64 {
-        (input_tokens as f64 / 1_000_000.0) * self.input_per_million
-            + (output_tokens as f64 / 1_000_000.0) * self.output_per_million
+        (output_tokens as f64 / 1_000_000.0).mul_add(
+            self.output_per_million,
+            (input_tokens as f64 / 1_000_000.0) * self.input_per_million,
+        )
     }
 
     /// Whether any non-zero rate is configured.
@@ -422,7 +426,8 @@ pub struct TracingConfig {
     pub include_artifacts: bool,
 }
 
-fn default_true() -> bool {
+/// Serde default helper: returns `true`.
+const fn default_true() -> bool {
     true
 }
 

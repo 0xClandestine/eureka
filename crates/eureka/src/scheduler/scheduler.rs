@@ -69,9 +69,13 @@ struct TaskHandles {
 /// Identity metadata required to validate checkpoints.
 #[derive(Clone)]
 struct CheckpointIdentity {
+    /// Run UUID this identity belongs to.
     run_id: uuid::Uuid,
+    /// Hash of the graph manifest topology.
     graph_hash: String,
+    /// Hash of the runtime configuration.
     config_hash: String,
+    /// Optional checkpoint revision for optimistic concurrency control.
     revision: Option<Revision>,
 }
 
@@ -192,6 +196,11 @@ impl Scheduler {
     }
 
     /// Resume graph execution from a previously persisted checkpoint.
+    ///
+    /// # Errors
+    /// Returns `SchedulerError::CheckpointInvalid` if the checkpoint does not match the
+    /// current graph/config, or `SchedulerError::SchedulerStopped` if the scheduler was
+    /// cancelled.
     pub async fn run_from_checkpoint(
         &mut self,
         checkpoint: RunCheckpoint,
@@ -214,6 +223,7 @@ impl Scheduler {
     ///
     /// A pause signal returns [`SchedulerError::Paused`] so the caller can
     /// persist the run and resume it later with a fresh scheduler instance.
+    #[allow(clippy::too_many_lines)]
     async fn run_until_signal(
         &mut self,
         initial_artifacts: HashMap<String, Vec<Artifact>>,
@@ -314,7 +324,7 @@ impl Scheduler {
         }
 
         for (source_id, artifacts) in &initial_artifacts {
-            if self.nodes.get(source_id).is_some() {
+            if self.nodes.contains_key(source_id) {
                 for artifact in artifacts {
                     let span = span!(Level::INFO, "inject", node = %source_id);
                     let _guard = span.enter();
@@ -526,7 +536,7 @@ impl Scheduler {
                                             // Determine the target round(s) for
                                             // the dispatched activations by
                                             // re-deriving from the edges.
-                                            let (fwd, fb) = self.route_round_split(
+                                            let (fwd, fb) = Self::route_round_split(
                                                 &node_id, &emit, &outbound);
                                             if fwd > 0 {
                                                 *round_pending.entry(round).or_insert(0) += fwd;
@@ -568,7 +578,7 @@ impl Scheduler {
                             while total_pending(&round_pending) > 0
                                 && !round_pending.contains_key(&current_round)
                             {
-                                current_round = current_round + 1;
+                                current_round += 1;
                                 self.stats.rounds_completed = current_round;
                                 advanced_round = true;
                                 let _ = self.event_tx.send(SchedulerEvent::CycleCompleted {
@@ -627,6 +637,7 @@ impl Scheduler {
         Ok(self.stats.clone())
     }
 
+    /// Persist a checkpoint through the store.
     async fn persist_checkpoint(
         &mut self,
         round: u32,
@@ -681,6 +692,7 @@ impl Scheduler {
     /// `round` is the round the *source* activation belonged to. Forward edges
     /// deliver to the same round; feedback edges deliver to `round + 1` (the
     /// next cycle). Returns the total number of activations dispatched.
+    #[allow(clippy::too_many_arguments)]
     fn route_emission(
         &self,
         from_node_id: &str,
@@ -728,7 +740,6 @@ impl Scheduler {
     /// so the caller can attribute dispatched activations to the right round.
     /// Returns `(forward_count, feedback_count)`.
     fn route_round_split(
-        &self,
         from_node_id: &str,
         emit: &Emit,
         outbound: &HashMap<String, Vec<Edge>>,
@@ -755,6 +766,7 @@ impl Scheduler {
     /// all required inputs present, drain the buffer into an `Activation` and
     /// spawn it as a worker task. Returns the number of activations dispatched
     /// (0 or 1).
+    #[allow(clippy::too_many_arguments)]
     fn deliver_input(
         &self,
         node_id: &str,
@@ -834,7 +846,7 @@ impl Scheduler {
 /// Spawn a single activation as a worker task. The task emits an
 /// `ActivationStarted` event, acquires an in-flight permit (cancelling
 /// promptly if the run is cancelled), runs the node, and sends the result
-/// back to the main loop via `handles.results_tx`. Aborting the JoinSet
+/// back to the main loop via `handles.results_tx`. Aborting the `JoinSet`
 /// (on cancel or drop) cancels in-flight `process` calls.
 fn spawn_activation(
     activation: Activation,

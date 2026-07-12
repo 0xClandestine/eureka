@@ -35,9 +35,9 @@ pub struct ProcessOutput {
 
 impl ProcessOutput {
     /// Build a `ProcessOutput` from raw stdout/stderr bytes and an exit status.
-    fn from_parts(stdout: Vec<u8>, stderr: Vec<u8>, status: Option<i32>, success: bool) -> Self {
-        let stdout = String::from_utf8_lossy(&stdout);
-        let stderr = String::from_utf8_lossy(&stderr);
+    fn from_parts(stdout: &[u8], stderr: &[u8], status: Option<i32>, success: bool) -> Self {
+        let stdout = String::from_utf8_lossy(stdout);
+        let stderr = String::from_utf8_lossy(stderr);
         let stdout = stdout.trim();
         // Cap on a character boundary to avoid splitting a multi-byte UTF-8
         // sequence (which would panic on `str` slicing).
@@ -149,8 +149,8 @@ pub async fn run_subprocess(
     let stderr_buf = stderr_task.await.unwrap_or_default();
 
     Ok(ProcessOutput::from_parts(
-        stdout_buf,
-        stderr_buf,
+        &stdout_buf,
+        &stderr_buf,
         status.code(),
         status.success(),
     ))

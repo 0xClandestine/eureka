@@ -90,8 +90,7 @@ impl Node for LlmAgentNode {
             let data = inputs
                 .into_iter()
                 .next()
-                .map(|m| m.artifact.data)
-                .unwrap_or(serde_json::Value::Null);
+                .map_or(serde_json::Value::Null, |m| m.artifact.data);
             serde_json::to_string_pretty(&data).map_err(|e| NodeError::Internal(e.to_string()))?
         };
 

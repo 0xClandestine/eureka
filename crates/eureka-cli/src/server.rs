@@ -231,18 +231,25 @@ async fn run_handler(
         .ok_or(axum::http::StatusCode::NOT_FOUND)
 }
 
+/// Request body for creating a new run.
 #[derive(Debug, serde::Deserialize)]
 struct CreateRunBody {
+    /// Initial goal artifact payload.
     goal: serde_json::Value,
 }
 
+/// Request body for injecting an input into a run.
 #[derive(Debug, serde::Deserialize)]
 struct InputBody {
+    /// Target node ID.
     node_id: String,
+    /// Target input port name.
     port: String,
+    /// Artifact to inject.
     artifact: Artifact,
 }
 
+/// Extract the `RunManager` from the server state, returning 404 if absent.
 fn manager_or_404(state: &ServerState) -> Result<RunManager, axum::http::StatusCode> {
     state
         .manager

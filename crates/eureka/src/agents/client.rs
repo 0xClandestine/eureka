@@ -97,7 +97,7 @@ pub struct RigClient<M> {
 impl<M: CompletionModel + Clone + Send + Sync + 'static> RigClient<M> {
     /// Wrap a rig completion model with optional per-input/per-output pricing
     /// used to populate [`NodeUsage::cost_usd`].
-    pub fn new(model: M, pricing: Option<crate::config::Pricing>) -> Self {
+    pub const fn new(model: M, pricing: Option<crate::config::Pricing>) -> Self {
         Self { model, pricing }
     }
 }

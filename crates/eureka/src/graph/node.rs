@@ -14,7 +14,7 @@ use crate::run::RunEnvironment;
 use crate::scheduler::SchedulerEvent;
 
 /// A message arriving on an input port of a node.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PortMsg {
     /// The port on which this message arrived.
     pub port: PortId,
@@ -156,9 +156,7 @@ impl NodeUsage {
         } else {
             total_tokens
         };
-        let cost_usd = pricing
-            .map(|p| p.cost(input_tokens, output_tokens))
-            .unwrap_or(0.0);
+        let cost_usd = pricing.map_or(0.0, |p| p.cost(input_tokens, output_tokens));
         Self {
             input_tokens,
             output_tokens,

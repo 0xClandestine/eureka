@@ -24,8 +24,11 @@ pub const DATABASE_SCHEMA_VERSION: u32 = 1;
 /// ownership of its own persistence transactions.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RunEnvironment {
+    /// Unique session identifier.
     session_id: String,
+    /// Optional path to the per-run `SQLite` database.
     db_path: Option<PathBuf>,
+    /// Expected database schema version for compatibility checks.
     database_schema_version: u32,
 }
 
@@ -159,7 +162,7 @@ pub enum CheckpointReason {
 }
 
 /// An input artifact waiting for a node activation.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PendingInput {
     /// Target node ID.
     pub node_id: String,
@@ -172,7 +175,7 @@ pub struct PendingInput {
 }
 
 /// A ready activation captured at a scheduler boundary.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ActivationSnapshot {
     /// Node ID to activate.
     pub node_id: String,
@@ -183,7 +186,7 @@ pub struct ActivationSnapshot {
 }
 
 /// An artifact emitted by a terminal/sink node.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunOutput {
     /// Node that emitted the artifact.
     pub node_id: String,
@@ -209,7 +212,7 @@ pub struct RunCheckpoint {
     /// Current synchronized scheduler round.
     pub round: u32,
     /// Outstanding activation count by round.
-    pub round_pending: std::collections::HashMap<u32, usize>,
+    pub round_pending: HashMap<u32, usize>,
     /// Artifacts buffered for not-yet-ready nodes.
     pub pending_inputs: Vec<PendingInput>,
     /// Activations ready to dispatch at the checkpoint boundary.
@@ -229,6 +232,10 @@ impl RunCheckpoint {
     /// The graph/session layer performs node and port validation before calling
     /// this method. Replacing an existing artifact on the same port is
     /// rejected so an input cannot be silently lost.
+    ///
+    /// # Errors
+    /// Returns `PersistenceError::AlreadyExists` if an input already exists for the
+    /// same (`node_id`, port) pair.
     pub fn inject_input(
         &mut self,
         node_id: impl Into<String>,
@@ -260,7 +267,7 @@ impl RunCheckpoint {
             graph_hash,
             config_hash,
             round: 0,
-            round_pending: std::collections::HashMap::new(),
+            round_pending: HashMap::new(),
             pending_inputs: Vec::new(),
             ready_activations: Vec::new(),
             stats: RunStats::default(),
@@ -388,15 +395,21 @@ pub trait RunStore: Send + Sync {
     async fn list(&self) -> std::io::Result<Vec<RunRecord>>;
 }
 
-/// SQLite-backed run and checkpoint persistence backend.
+/// SQLite-backed run persistence.
 #[derive(Debug, Clone)]
 pub struct SqliteRunPersistence {
+    /// Path to the `SQLite` database file.
     path: Arc<PathBuf>,
+    /// Mutex serializing concurrent database access.
     lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl SqliteRunPersistence {
-    /// Open or create a SQLite database and initialize runtime tables.
+    /// Open or create a `SQLite` database and initialize runtime tables.
+    ///
+    /// # Errors
+    /// Returns `PersistenceError::Io` on filesystem errors or `PersistenceError::Migration`
+    /// on schema migration failures.
     pub async fn open(path: impl Into<PathBuf>) -> Result<Self, PersistenceError> {
         let persistence = Self {
             path: Arc::new(path.into()),
@@ -435,6 +448,7 @@ impl SqliteRunPersistence {
         self.path.as_path()
     }
 
+    /// Wrap an async operation in a blocking database task.
     async fn blocking<T, F>(&self, operation: F) -> Result<T, PersistenceError>
     where
         T: Send + 'static,
@@ -641,7 +655,7 @@ impl CheckpointStore for SqliteRunPersistence {
         self.blocking(move |connection| {
             let current: Option<(String, u64)> = connection.query_row("SELECT checkpoint_json, revision FROM eureka_checkpoints WHERE run_id = ?1", [&id_text], |row| Ok((row.get(0)?, row.get(1)?))).optional()
                 .map_err(|error| PersistenceError::Io(std::io::Error::other(error.to_string())))?;
-            let actual = current.as_ref().map_or(Revision::default(), |item| Revision(item.1));
+            let actual = current.as_ref().map_or_else(Revision::default, |item| Revision(item.1));
             if let Some(expected) = expected { if actual != expected { return Err(PersistenceError::RevisionConflict { run_id: id, expected, actual }); } }
             checkpoint.revision = Revision(actual.0 + 1);
             let json = serde_json::to_string(&checkpoint).map_err(|error| PersistenceError::Serialization(error.to_string()))?;
@@ -690,10 +704,12 @@ impl CheckpointStore for SqliteRunPersistence {
     }
 }
 
-/// In-memory run and checkpoint persistence backend for tests and embedded use.
+/// In-memory run repository for testing and single-process use.
 #[derive(Debug, Clone, Default)]
 pub struct InMemoryRunPersistence {
+    /// In-memory run records.
     runs: Arc<tokio::sync::RwLock<HashMap<uuid::Uuid, RunRecord>>>,
+    /// In-memory checkpoint records.
     checkpoints: Arc<tokio::sync::RwLock<HashMap<uuid::Uuid, RunCheckpoint>>>,
 }
 
@@ -714,6 +730,7 @@ impl RunRepository for InMemoryRunPersistence {
         }
         record.revision = Revision::default();
         runs.insert(record.id, record.clone());
+        drop(runs);
         Ok(record)
     }
 
@@ -739,12 +756,15 @@ impl RunRepository for InMemoryRunPersistence {
         }
         record.revision = Revision(expected.0.saturating_add(1));
         runs.insert(record.id, record.clone());
+        drop(runs);
         Ok(record)
     }
 
     async fn list(&self, filter: RunFilter) -> Result<Vec<RunRecord>, PersistenceError> {
-        let runs = self.runs.read().await;
-        let mut records: Vec<_> = runs
+        let mut records: Vec<_> = self
+            .runs
+            .read()
+            .await
             .values()
             .filter(|record| filter.status.is_none_or(|status| record.status == status))
             .cloned()
@@ -773,7 +793,7 @@ impl CheckpointStore for InMemoryRunPersistence {
         let mut checkpoints = self.checkpoints.write().await;
         let current = checkpoints.get(&checkpoint.run_id);
         if let Some(expected) = expected {
-            let actual = current.map_or(Revision::default(), |item| item.revision);
+            let actual = current.map_or_else(Revision::default, |item| item.revision);
             if actual != expected {
                 return Err(PersistenceError::RevisionConflict {
                     run_id: checkpoint.run_id,
@@ -782,8 +802,10 @@ impl CheckpointStore for InMemoryRunPersistence {
                 });
             }
         }
-        checkpoint.revision = current.map_or(Revision(1), |item| Revision(item.revision.0 + 1));
+        checkpoint.revision =
+            current.map_or_else(|| Revision(1), |item| Revision(item.revision.0 + 1));
         checkpoints.insert(checkpoint.run_id, checkpoint.clone());
+        drop(checkpoints);
         Ok(checkpoint)
     }
 
@@ -802,8 +824,11 @@ impl CheckpointStore for InMemoryRunPersistence {
 
 /// JSON-file-backed [`RunStore`] and checkpoint store.
 #[derive(Debug, Clone)]
+/// File-system-backed run store.
 pub struct FileRunStore {
+    /// Base directory for run record files.
     directory: Arc<PathBuf>,
+    /// Mutex serializing concurrent filesystem access.
     lock: Arc<tokio::sync::Mutex<()>>,
 }
 
@@ -823,14 +848,17 @@ impl FileRunStore {
         self.directory.as_path()
     }
 
+    /// Build the filesystem path for a run record.
     fn path_for(&self, id: uuid::Uuid) -> PathBuf {
         self.directory.join(format!("{id}.json"))
     }
 
+    /// Build the filesystem path for a checkpoint record.
     fn checkpoint_path_for(&self, id: uuid::Uuid) -> PathBuf {
         self.directory.join(format!("{id}.checkpoint.json"))
     }
 
+    /// Read a single run record from the filesystem.
     async fn read_record(&self, id: uuid::Uuid) -> std::io::Result<Option<RunRecord>> {
         let path = self.path_for(id);
         tokio::task::spawn_blocking(move || match std::fs::read(path) {
@@ -844,6 +872,7 @@ impl FileRunStore {
         .map_err(|error| std::io::Error::other(error.to_string()))?
     }
 
+    /// Write a single run record to the filesystem.
     async fn write_record(&self, record: &RunRecord) -> std::io::Result<()> {
         let directory = self.directory.clone();
         let path = self.path_for(record.id);
@@ -859,6 +888,7 @@ impl FileRunStore {
         .map_err(|error| std::io::Error::other(error.to_string()))?
     }
 
+    /// List all run records from the filesystem.
     async fn list_records(&self) -> std::io::Result<Vec<RunRecord>> {
         let directory = self.directory.clone();
         tokio::task::spawn_blocking(move || {
@@ -884,6 +914,7 @@ impl FileRunStore {
         .map_err(|error| std::io::Error::other(error.to_string()))?
     }
 
+    /// Delete a single run record from the filesystem.
     async fn delete_record(&self, id: uuid::Uuid) -> std::io::Result<()> {
         let path = self.path_for(id);
         tokio::task::spawn_blocking(move || match std::fs::remove_file(path) {
@@ -987,7 +1018,7 @@ impl CheckpointStore for FileRunStore {
         if let Some(expected) = expected {
             let actual = current
                 .as_ref()
-                .map_or(Revision::default(), |item| item.revision);
+                .map_or_else(Revision::default, |item| item.revision);
             if actual != expected {
                 return Err(PersistenceError::RevisionConflict {
                     run_id: checkpoint.run_id,

@@ -27,14 +27,23 @@ pub struct CreateRunRequest {
     pub goal: serde_json::Value,
 }
 
+/// Type alias for the map of active run signal channels.
+type ActiveRunMap = HashMap<uuid::Uuid, Arc<Mutex<Option<mpsc::Sender<SchedulerSignal>>>>>;
+
 /// High-level lifecycle service for application and HTTP integrations.
 #[derive(Clone)]
 pub struct RunManager {
+    /// Runtime configuration.
     config: EurekaConfig,
+    /// Durable run record store.
     run_store: Arc<dyn RunStore>,
+    /// Durable checkpoint store.
     checkpoint_store: Arc<dyn CheckpointStore>,
+    /// Optional database directory for SQLite-backed sessions.
     db_directory: Option<PathBuf>,
-    active: Arc<Mutex<HashMap<uuid::Uuid, Arc<Mutex<Option<mpsc::Sender<SchedulerSignal>>>>>>>,
+    /// Map of active run signal channels, keyed by run UUID.
+    #[allow(clippy::type_complexity)]
+    active: Arc<Mutex<ActiveRunMap>>,
 }
 
 impl RunManager {
@@ -56,6 +65,9 @@ impl RunManager {
     }
 
     /// Return the run record, if it exists.
+    ///
+    /// # Errors
+    /// Returns `EngineError::Store` on persistence failures.
     pub async fn get_run(&self, run_id: uuid::Uuid) -> Result<Option<RunRecord>, EngineError> {
         self.run_store
             .get(run_id)
@@ -64,6 +76,9 @@ impl RunManager {
     }
 
     /// List all persisted run records.
+    ///
+    /// # Errors
+    /// Returns `EngineError::Store` on persistence failures.
     pub async fn list_runs(&self) -> Result<Vec<RunRecord>, EngineError> {
         self.run_store
             .list()
@@ -72,6 +87,9 @@ impl RunManager {
     }
 
     /// Load the latest durable checkpoint for a run.
+    ///
+    /// # Errors
+    /// Returns `EngineError::Store` on persistence failures.
     pub async fn get_checkpoint(
         &self,
         run_id: uuid::Uuid,
@@ -83,6 +101,9 @@ impl RunManager {
     }
 
     /// Start a new run in the background and return its ID immediately.
+    ///
+    /// # Errors
+    /// Returns `EngineError::Store` on persistence failures.
     pub async fn create_run(&self, request: CreateRunRequest) -> Result<uuid::Uuid, EngineError> {
         let run_id = uuid::Uuid::now_v7();
         let record = RunRecord::new(run_id, self.config.graph.clone(), request.goal.clone());
@@ -95,16 +116,25 @@ impl RunManager {
     }
 
     /// Request a pause on an active run.
+    ///
+    /// # Errors
+    /// Returns `EngineError::Run` if the run is not active or not ready.
     pub async fn pause_run(&self, run_id: uuid::Uuid) -> Result<(), EngineError> {
         self.send_signal(run_id, SchedulerSignal::Pause).await
     }
 
     /// Request cancellation on an active run.
+    ///
+    /// # Errors
+    /// Returns `EngineError::Run` if the run is not active or not ready.
     pub async fn cancel_run(&self, run_id: uuid::Uuid) -> Result<(), EngineError> {
         self.send_signal(run_id, SchedulerSignal::Cancel).await
     }
 
     /// Resume a paused run from its latest durable checkpoint.
+    ///
+    /// # Errors
+    /// Returns `EngineError::Run` if the run is not found, not paused, or has no checkpoint.
     pub async fn resume_run(&self, run_id: uuid::Uuid) -> Result<(), EngineError> {
         let record = self
             .get_run(run_id)
@@ -126,6 +156,10 @@ impl RunManager {
     }
 
     /// Inject one typed artifact into a paused run's checkpoint.
+    ///
+    /// # Errors
+    /// Returns `EngineError::Run` if the run is not active or `EngineError::Store` on
+    /// persistence failures.
     pub async fn submit_input(
         &self,
         run_id: uuid::Uuid,
@@ -165,6 +199,7 @@ impl RunManager {
             .map_err(|error| EngineError::Store(error.to_string()))
     }
 
+    /// Send a signal to an active run's scheduler.
     async fn send_signal(
         &self,
         run_id: uuid::Uuid,
@@ -179,12 +214,14 @@ impl RunManager {
             .await
             .clone()
             .ok_or_else(|| EngineError::Run(format!("run {run_id} scheduler is not ready")))?;
+        drop(active);
         sender
             .send(signal)
             .await
             .map_err(|error| EngineError::Run(format!("failed to signal run {run_id}: {error}")))
     }
 
+    /// Spawn a new run in the background and register it in the active map.
     async fn spawn_run(
         &self,
         run_id: uuid::Uuid,

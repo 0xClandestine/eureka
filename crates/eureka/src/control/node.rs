@@ -95,10 +95,8 @@ impl ControlNode {
 
         // Backward-compatible primary envelope: the first input's port/artifact,
         // plus the full `inputs` array for multi-input-aware scripts.
-        let (primary_port, primary_artifact) = inputs
-            .first()
-            .map(|m| (m.port.clone(), m.artifact.clone()))
-            .unwrap_or_else(|| {
+        let (primary_port, primary_artifact) = inputs.first().map_or_else(
+            || {
                 (
                     String::new(),
                     Artifact {
@@ -106,7 +104,9 @@ impl ControlNode {
                         data: serde_json::Value::Null,
                     },
                 )
-            });
+            },
+            |m| (m.port.clone(), m.artifact.clone()),
+        );
         let envelope = serde_json::json!({
             "port": primary_port,
             "artifact": {

@@ -58,7 +58,7 @@ impl CommandTool {
 
     /// Create a command tool with an explicit run environment.
     #[must_use]
-    pub fn with_environment(
+    pub const fn with_environment(
         def: Arc<ToolDef>,
         node_id: String,
         node_kind: String,

@@ -101,7 +101,7 @@ impl Session {
                 result
                     .errors
                     .iter()
-                    .map(std::string::ToString::to_string)
+                    .map(ToString::to_string)
                     .collect::<Vec<_>>()
                     .join("; ")
             ))));
@@ -195,7 +195,7 @@ impl Session {
                 result
                     .errors
                     .iter()
-                    .map(std::string::ToString::to_string)
+                    .map(ToString::to_string)
                     .collect::<Vec<_>>()
                     .join("; ")
             ))));
@@ -252,6 +252,9 @@ impl Session {
     }
 
     /// Load the latest durable checkpoint for this session.
+    ///
+    /// # Errors
+    /// Returns `EngineError::Store` on persistence failures.
     pub async fn latest_checkpoint(&self) -> Result<Option<RunCheckpoint>, EngineError> {
         let Some(store) = &self.checkpoint_store else {
             return Ok(None);
@@ -276,6 +279,10 @@ impl Session {
     }
 
     /// Validate an artifact kind against a manifest input port.
+    ///
+    /// # Errors
+    /// Returns `EngineError::Run` if the node ID is unknown or the port spec
+    /// cannot be found.
     pub fn validate_input(&self, node_id: &str, port: &str, kind: &str) -> Result<(), EngineError> {
         let registry = build_port_registry(&self.manifest);
         let Some(node_spec) = self.spec.nodes.iter().find(|node| node.id == node_id) else {
@@ -341,6 +348,10 @@ impl Session {
     /// The store is updated before execution, after successful completion, and
     /// when a pause or node failure is observed. This gives API callers a
     /// durable record even when execution returns an error.
+    ///
+    /// # Errors
+    /// Returns `EngineError::Scheduler` on runtime errors (budget exceeded,
+    /// node failure), or `EngineError::Store` on persistence failures.
     pub async fn run_with_store(
         &mut self,
         goal: serde_json::Value,
@@ -353,6 +364,9 @@ impl Session {
     ///
     /// The checkpoint must have been created for the same graph and runtime
     /// configuration. The scheduler validates both identities before dispatch.
+    ///
+    /// # Errors
+    /// Same as [`run_with_store`](Self::run_with_store).
     pub async fn resume_with_store(
         &mut self,
         goal: serde_json::Value,
@@ -362,6 +376,8 @@ impl Session {
         self.run_internal(goal, store, Some(checkpoint)).await
     }
 
+    /// Internal entry point that assembles the graph and drives the scheduler.
+    #[allow(clippy::too_many_lines)]
     async fn run_internal(
         &mut self,
         goal: serde_json::Value,
@@ -404,6 +420,7 @@ impl Session {
         let node_specs = self.spec.nodes.clone();
         let mut nodes: HashMap<String, BoxedNode> = HashMap::new();
         for node_spec in &node_specs {
+            #[allow(clippy::option_if_let_else)]
             let node_result = if let Some(override_node) = self.node_overrides.get(&node_spec.id) {
                 Ok(override_node.clone())
             } else {
@@ -824,10 +841,10 @@ impl Session {
 /// Compute a stable content hash for checkpoint identity validation.
 fn stable_hash<T: serde::Serialize>(value: &T) -> String {
     let bytes = serde_json::to_vec(value).unwrap_or_default();
-    let mut hash: u64 = 14695981039346656037;
+    let mut hash: u64 = 14_695_981_039_346_656_037;
     for byte in bytes {
         hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(1099511628211);
+        hash = hash.wrapping_mul(1_099_511_628_211);
     }
     format!("{hash:016x}")
 }
