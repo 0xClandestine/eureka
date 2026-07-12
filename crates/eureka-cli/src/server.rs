@@ -11,12 +11,12 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use axum::{
-    extract::State,
+    extract::{Path, State},
     response::{
         sse::{Event, KeepAlive, Sse},
         Json,
     },
-    routing::get,
+    routing::{get, post},
     Router,
 };
 use serde::Serialize;
@@ -25,8 +25,12 @@ use tokio_stream::{wrappers::BroadcastStream, Stream, StreamExt};
 use tower_http::cors::CorsLayer;
 
 use eureka::graph::GraphSpec;
-use eureka::run::{RunRecord, RunStore};
 use eureka::scheduler::SchedulerEvent;
+use eureka::{
+    graph::artifact::Artifact,
+    manager::{CreateRunRequest, RunManager},
+    run::{RunCheckpoint, RunRecord, RunStore},
+};
 
 /// Shared state injected into every axum handler.
 #[derive(Clone)]
@@ -43,6 +47,8 @@ pub struct ServerState {
     run_store: Option<Arc<dyn RunStore>>,
     /// Run ID used by the durable status endpoint.
     run_id: Option<uuid::Uuid>,
+    /// Optional application run manager for lifecycle endpoints.
+    manager: Option<RunManager>,
 }
 
 /// Live run state snapshot served at `GET /api/state`.
@@ -139,6 +145,19 @@ pub fn start_server_with_run_store(
     run_store: Option<Arc<dyn RunStore>>,
     run_id: Option<uuid::Uuid>,
 ) -> tokio::task::JoinHandle<()> {
+    start_server_with_manager(spec, event_tx, live, port, run_store, run_id, None)
+}
+
+/// Start the HTTP server with a high-level lifecycle manager.
+pub fn start_server_with_manager(
+    spec: GraphSpec,
+    event_tx: broadcast::Sender<SchedulerEvent>,
+    live: Arc<Mutex<LiveState>>,
+    port: u16,
+    run_store: Option<Arc<dyn RunStore>>,
+    run_id: Option<uuid::Uuid>,
+    manager: Option<RunManager>,
+) -> tokio::task::JoinHandle<()> {
     let state = ServerState {
         spec: Arc::new(spec),
         event_tx,
@@ -146,6 +165,7 @@ pub fn start_server_with_run_store(
         started_at: Instant::now(),
         run_store,
         run_id,
+        manager,
     };
 
     let app = Router::new()
@@ -153,6 +173,12 @@ pub fn start_server_with_run_store(
         .route("/api/state", get(state_handler))
         .route("/api/run", get(run_handler))
         .route("/api/events", get(events_handler))
+        .route("/runs", post(create_run_handler).get(list_runs_handler))
+        .route("/runs/{id}", get(get_run_handler))
+        .route("/runs/{id}/pause", post(pause_run_handler))
+        .route("/runs/{id}/resume", post(resume_run_handler))
+        .route("/runs/{id}/cancel", post(cancel_run_handler))
+        .route("/runs/{id}/input", post(input_run_handler))
         .layer(CorsLayer::permissive())
         .with_state(state);
 
@@ -203,6 +229,117 @@ async fn run_handler(
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?
         .map(Json)
         .ok_or(axum::http::StatusCode::NOT_FOUND)
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct CreateRunBody {
+    goal: serde_json::Value,
+}
+
+#[derive(Debug, serde::Deserialize)]
+struct InputBody {
+    node_id: String,
+    port: String,
+    artifact: Artifact,
+}
+
+fn manager_or_404(state: &ServerState) -> Result<RunManager, axum::http::StatusCode> {
+    state
+        .manager
+        .clone()
+        .ok_or(axum::http::StatusCode::NOT_FOUND)
+}
+
+/// `POST /runs` — create and start a managed run.
+async fn create_run_handler(
+    State(state): State<ServerState>,
+    Json(body): Json<CreateRunBody>,
+) -> Result<(axum::http::StatusCode, Json<serde_json::Value>), axum::http::StatusCode> {
+    let manager = manager_or_404(&state)?;
+    let id = manager
+        .create_run(CreateRunRequest { goal: body.goal })
+        .await
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
+    Ok((
+        axum::http::StatusCode::ACCEPTED,
+        Json(serde_json::json!({ "id": id })),
+    ))
+}
+
+/// `GET /runs` — list managed runs.
+async fn list_runs_handler(
+    State(state): State<ServerState>,
+) -> Result<Json<Vec<RunRecord>>, axum::http::StatusCode> {
+    let manager = manager_or_404(&state)?;
+    manager
+        .list_runs()
+        .await
+        .map(Json)
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+/// `GET /runs/:id` — retrieve one managed run.
+async fn get_run_handler(
+    State(state): State<ServerState>,
+    Path(id): Path<uuid::Uuid>,
+) -> Result<Json<RunRecord>, axum::http::StatusCode> {
+    let manager = manager_or_404(&state)?;
+    manager
+        .get_run(id)
+        .await
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?
+        .map(Json)
+        .ok_or(axum::http::StatusCode::NOT_FOUND)
+}
+
+/// `POST /runs/:id/pause` — request a pause.
+async fn pause_run_handler(
+    State(state): State<ServerState>,
+    Path(id): Path<uuid::Uuid>,
+) -> Result<axum::http::StatusCode, axum::http::StatusCode> {
+    manager_or_404(&state)?
+        .pause_run(id)
+        .await
+        .map(|()| axum::http::StatusCode::ACCEPTED)
+        .map_err(|_| axum::http::StatusCode::CONFLICT)
+}
+
+/// `POST /runs/:id/resume` — resume a paused run.
+async fn resume_run_handler(
+    State(state): State<ServerState>,
+    Path(id): Path<uuid::Uuid>,
+) -> Result<axum::http::StatusCode, axum::http::StatusCode> {
+    manager_or_404(&state)?
+        .resume_run(id)
+        .await
+        .map(|()| axum::http::StatusCode::ACCEPTED)
+        .map_err(|_| axum::http::StatusCode::CONFLICT)
+}
+
+/// `POST /runs/:id/cancel` — request cancellation.
+async fn cancel_run_handler(
+    State(state): State<ServerState>,
+    Path(id): Path<uuid::Uuid>,
+) -> Result<axum::http::StatusCode, axum::http::StatusCode> {
+    manager_or_404(&state)?
+        .cancel_run(id)
+        .await
+        .map(|()| axum::http::StatusCode::ACCEPTED)
+        .map_err(|_| axum::http::StatusCode::CONFLICT)
+}
+
+/// `POST /runs/:id/input` — inject a typed artifact into a paused run.
+async fn input_run_handler(
+    State(state): State<ServerState>,
+    Path(id): Path<uuid::Uuid>,
+    Json(body): Json<InputBody>,
+) -> Result<Json<RunCheckpoint>, axum::http::StatusCode> {
+    let manager = manager_or_404(&state)?;
+    manager
+        .submit_input(id, body.node_id, body.port, body.artifact)
+        .await
+        .map(Json)
+        .map_err(|_| axum::http::StatusCode::CONFLICT)
 }
 
 /// `GET /api/events` — SSE stream that replays every `SchedulerEvent`.

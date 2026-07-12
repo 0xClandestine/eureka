@@ -28,6 +28,7 @@ pub struct CreateRunRequest {
 }
 
 /// High-level lifecycle service for application and HTTP integrations.
+#[derive(Clone)]
 pub struct RunManager {
     config: EurekaConfig,
     run_store: Arc<dyn RunStore>,
@@ -66,6 +67,17 @@ impl RunManager {
     pub async fn list_runs(&self) -> Result<Vec<RunRecord>, EngineError> {
         self.run_store
             .list()
+            .await
+            .map_err(|error| EngineError::Store(error.to_string()))
+    }
+
+    /// Load the latest durable checkpoint for a run.
+    pub async fn get_checkpoint(
+        &self,
+        run_id: uuid::Uuid,
+    ) -> Result<Option<RunCheckpoint>, EngineError> {
+        self.checkpoint_store
+            .load_checkpoint(run_id)
             .await
             .map_err(|error| EngineError::Store(error.to_string()))
     }
