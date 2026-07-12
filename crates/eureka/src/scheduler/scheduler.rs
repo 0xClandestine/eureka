@@ -501,14 +501,25 @@ impl Scheduler {
                             // work, advance and emit a single CycleCompleted.
                             // This makes `rounds_completed` count complete
                             // cycles rather than per-emit feedback crossings.
+                            let mut advanced_round = false;
                             while total_pending(&round_pending) > 0
                                 && !round_pending.contains_key(&current_round)
                             {
                                 current_round = current_round + 1;
                                 self.stats.rounds_completed = current_round;
+                                advanced_round = true;
                                 let _ = self.event_tx.send(SchedulerEvent::CycleCompleted {
                                     round: current_round,
                                 }).await;
+                            }
+                            if advanced_round {
+                                self.persist_checkpoint(
+                                    current_round,
+                                    &round_pending,
+                                    &input_buffer,
+                                    &in_flight,
+                                    CheckpointReason::RoundCompleted,
+                                ).await?;
                             }
                         }
                         None => {
