@@ -11,6 +11,9 @@ use crate::graph::artifact::Artifact;
 use crate::graph::edge::Edge;
 use crate::graph::node::{BoxedNode, Emit, NodeCtx, NodeError, NodeUsage, PortMsg};
 use crate::graph::spec::GraphSpec;
+use crate::run::{
+    ActivationSnapshot, CheckpointReason, CheckpointStore, PendingInput, Revision, RunCheckpoint,
+};
 
 use super::error::SchedulerError;
 use super::event::{SchedulerEvent, SchedulerSignal};
@@ -18,6 +21,8 @@ use super::event::{SchedulerEvent, SchedulerSignal};
 /// A ready activation: a node plus its joined inputs, about to run.
 #[derive(Debug)]
 struct Activation {
+    /// Stable identifier used to reconstruct work at a checkpoint boundary.
+    id: u64,
     /// The node ID to activate.
     node_id: String,
     /// The kind of the node being activated.
@@ -33,6 +38,8 @@ struct Activation {
 /// The result of running an activation, sent back from a worker task to the
 /// main scheduler loop.
 struct ActivationResult {
+    /// Stable identifier of the completed activation.
+    id: u64,
     /// The node ID that ran.
     node_id: String,
     /// The kind of the node that ran.
@@ -56,6 +63,15 @@ struct TaskHandles {
     in_flight_sem: Arc<Semaphore>,
     /// Cancellation token for graceful shutdown.
     cancel: CancellationToken,
+}
+
+/// Identity metadata required to validate checkpoints.
+#[derive(Clone)]
+struct CheckpointIdentity {
+    run_id: uuid::Uuid,
+    graph_hash: String,
+    config_hash: String,
+    revision: Option<Revision>,
 }
 
 /// Total outstanding activations across all rounds.
@@ -85,6 +101,10 @@ pub struct Scheduler {
     event_tx: mpsc::Sender<SchedulerEvent>,
     /// Event receiver for external consumers.
     event_rx: Option<mpsc::Receiver<SchedulerEvent>>,
+    /// Optional durable checkpoint backend.
+    checkpoint_store: Option<Arc<dyn CheckpointStore>>,
+    /// Identity metadata required to validate checkpoints.
+    checkpoint_identity: Option<CheckpointIdentity>,
 }
 
 impl Scheduler {
@@ -110,7 +130,28 @@ impl Scheduler {
             signal_rx: Some(signal_rx),
             event_tx,
             event_rx: Some(event_rx),
+            checkpoint_store: None,
+            checkpoint_identity: None,
         }
+    }
+
+    /// Attach a durable checkpoint backend and run identity.
+    #[must_use]
+    pub fn with_checkpoint_store(
+        mut self,
+        store: Arc<dyn CheckpointStore>,
+        run_id: uuid::Uuid,
+        graph_hash: impl Into<String>,
+        config_hash: impl Into<String>,
+    ) -> Self {
+        self.checkpoint_store = Some(store);
+        self.checkpoint_identity = Some(CheckpointIdentity {
+            run_id,
+            graph_hash: graph_hash.into(),
+            config_hash: config_hash.into(),
+            revision: None,
+        });
+        self
     }
 
     /// Get a sender for scheduler signals.
@@ -146,7 +187,26 @@ impl Scheduler {
         &mut self,
         initial_artifacts: HashMap<String, Vec<Artifact>>,
     ) -> Result<RunStats, SchedulerError> {
-        self.run_until_signal(initial_artifacts).await
+        self.run_until_signal(initial_artifacts, None).await
+    }
+
+    /// Resume graph execution from a previously persisted checkpoint.
+    pub async fn run_from_checkpoint(
+        &mut self,
+        checkpoint: RunCheckpoint,
+    ) -> Result<RunStats, SchedulerError> {
+        let Some(identity) = &mut self.checkpoint_identity else {
+            return Err(SchedulerError::CheckpointMismatch);
+        };
+        if identity.run_id != checkpoint.run_id
+            || identity.graph_hash != checkpoint.graph_hash
+            || identity.config_hash != checkpoint.config_hash
+        {
+            return Err(SchedulerError::CheckpointMismatch);
+        }
+        identity.revision = Some(checkpoint.revision);
+        self.run_until_signal(HashMap::new(), Some(checkpoint))
+            .await
     }
 
     /// Run the graph and return `Ok` only when it drains normally.
@@ -156,6 +216,7 @@ impl Scheduler {
     async fn run_until_signal(
         &mut self,
         initial_artifacts: HashMap<String, Vec<Artifact>>,
+        checkpoint: Option<RunCheckpoint>,
     ) -> Result<RunStats, SchedulerError> {
         let start = std::time::Instant::now();
 
@@ -186,6 +247,9 @@ impl Scheduler {
         // present for a given round. Single-input nodes fire immediately on
         // arrival, exactly as before.
         let mut input_buffer: HashMap<(String, u32), HashMap<String, Artifact>> = HashMap::new();
+        let mut ready_activations: Vec<ActivationSnapshot> = Vec::new();
+        let mut in_flight: HashMap<u64, ActivationSnapshot> = HashMap::new();
+        let mut next_activation_id: u64 = 0;
 
         // Synchronized round model: a round is one forward wave starting from
         // source injections and feedback inputs. Forward edges stay in the
@@ -195,8 +259,20 @@ impl Scheduler {
         // round that has buffered work and emit a single `CycleCompleted`.
         // `rounds_completed` thus counts fully drained cycles, not arbitrary
         // feedback crossings.
-        let mut current_round: u32 = 0;
-        let mut round_pending: HashMap<u32, usize> = HashMap::new();
+        let mut current_round: u32 = checkpoint.as_ref().map_or(0, |item| item.round);
+        let mut round_pending: HashMap<u32, usize> = checkpoint
+            .as_ref()
+            .map_or_else(HashMap::new, |item| item.round_pending.clone());
+        if let Some(item) = &checkpoint {
+            self.stats = item.stats.clone();
+            for pending in &item.pending_inputs {
+                input_buffer
+                    .entry((pending.node_id.clone(), pending.round))
+                    .or_default()
+                    .insert(pending.port.clone(), pending.artifact.clone());
+            }
+            ready_activations = item.ready_activations.clone();
+        }
         // Highest round for which an activation has been dispatched (used to
         // know which future rounds might have buffered work when the current
         // round drains).
@@ -223,6 +299,8 @@ impl Scheduler {
                         artifact.clone(),
                         current_round,
                         &mut input_buffer,
+                        &mut in_flight,
+                        &mut next_activation_id,
                         &handles,
                         &mut tasks,
                     )?;
@@ -232,6 +310,40 @@ impl Scheduler {
                     }
                 }
             }
+        }
+
+        for snapshot in ready_activations {
+            let Some(node) = self.nodes.get(&snapshot.node_id).cloned() else {
+                return Err(SchedulerError::NodeNotFound(snapshot.node_id));
+            };
+            let node_kind = self
+                .spec
+                .node_kind(&snapshot.node_id)
+                .unwrap_or("unknown")
+                .to_string();
+            let id = next_activation_id;
+            next_activation_id = next_activation_id.saturating_add(1);
+            in_flight.insert(id, snapshot.clone());
+            let mut ctx = NodeCtx::new(
+                snapshot.node_id.clone(),
+                node_kind.clone(),
+                snapshot.round,
+                self.cancel.clone(),
+            );
+            ctx.event_tx = Some(self.event_tx.clone());
+            spawn_activation(
+                Activation {
+                    id,
+                    node_id: snapshot.node_id,
+                    node_kind,
+                    round: snapshot.round,
+                    ctx,
+                    inputs: snapshot.inputs,
+                },
+                node,
+                &handles,
+                &mut tasks,
+            );
         }
 
         let mut budget_ticker = tokio::time::interval(std::time::Duration::from_millis(100));
@@ -270,6 +382,13 @@ impl Scheduler {
                                 .await;
                             tasks.abort_all();
                             self.stats.elapsed_secs = start.elapsed().as_secs_f64();
+                            self.persist_checkpoint(
+                                current_round,
+                                &round_pending,
+                                &input_buffer,
+                                &in_flight,
+                                CheckpointReason::Pause,
+                            ).await?;
                             return Err(SchedulerError::Paused(self.stats.clone()));
                         }
                         Some(SchedulerSignal::Resume) => {
@@ -285,6 +404,7 @@ impl Scheduler {
                             let node_id = result.node_id.clone();
                             let node_kind = result.node_kind.clone();
                             let round = result.round;
+                            in_flight.remove(&result.id);
 
                             // Decrement this activation's round pending count.
                             if let Some(count) = round_pending.get_mut(&round) {
@@ -326,6 +446,8 @@ impl Scheduler {
                                             &outbound,
                                             round,
                                             &mut input_buffer,
+                                            &mut in_flight,
+                                            &mut next_activation_id,
                                             &handles,
                                             &mut tasks,
                                         )?;
@@ -412,6 +534,14 @@ impl Scheduler {
         }
 
         self.stats.elapsed_secs = start.elapsed().as_secs_f64();
+        self.persist_checkpoint(
+            current_round,
+            &round_pending,
+            &input_buffer,
+            &in_flight,
+            CheckpointReason::Completion,
+        )
+        .await?;
         info!(
             rounds = self.stats.rounds_completed,
             elapsed_secs = self.stats.elapsed_secs,
@@ -419,6 +549,51 @@ impl Scheduler {
         );
 
         Ok(self.stats.clone())
+    }
+
+    async fn persist_checkpoint(
+        &mut self,
+        round: u32,
+        round_pending: &HashMap<u32, usize>,
+        input_buffer: &HashMap<(String, u32), HashMap<String, Artifact>>,
+        in_flight: &HashMap<u64, ActivationSnapshot>,
+        reason: CheckpointReason,
+    ) -> Result<(), SchedulerError> {
+        let (Some(store), Some(identity)) = (
+            self.checkpoint_store.clone(),
+            self.checkpoint_identity.as_mut(),
+        ) else {
+            return Ok(());
+        };
+        let pending_inputs = input_buffer
+            .iter()
+            .flat_map(|((node_id, round), ports)| {
+                ports.iter().map(|(port, artifact)| PendingInput {
+                    node_id: node_id.clone(),
+                    round: *round,
+                    port: port.clone(),
+                    artifact: artifact.clone(),
+                })
+            })
+            .collect();
+        let checkpoint = RunCheckpoint {
+            run_id: identity.run_id,
+            revision: identity.revision.unwrap_or_default(),
+            graph_hash: identity.graph_hash.clone(),
+            config_hash: identity.config_hash.clone(),
+            round,
+            round_pending: round_pending.clone(),
+            pending_inputs,
+            ready_activations: in_flight.values().cloned().collect(),
+            stats: self.stats.clone(),
+            reason,
+        };
+        let saved = store
+            .save_checkpoint(checkpoint, identity.revision)
+            .await
+            .map_err(|error| SchedulerError::Internal(error.to_string()))?;
+        identity.revision = Some(saved.revision);
+        Ok(())
     }
 
     /// Route a single emission along its outbound edges, buffering each
@@ -435,6 +610,8 @@ impl Scheduler {
         outbound: &HashMap<String, Vec<Edge>>,
         round: u32,
         input_buffer: &mut HashMap<(String, u32), HashMap<String, Artifact>>,
+        in_flight: &mut HashMap<u64, ActivationSnapshot>,
+        next_activation_id: &mut u64,
         handles: &TaskHandles,
         tasks: &mut JoinSet<()>,
     ) -> Result<usize, SchedulerError> {
@@ -459,6 +636,8 @@ impl Scheduler {
                 emit.artifact.clone(),
                 target_round,
                 input_buffer,
+                in_flight,
+                next_activation_id,
                 handles,
                 tasks,
             )?;
@@ -505,6 +684,8 @@ impl Scheduler {
         artifact: Artifact,
         round: u32,
         input_buffer: &mut HashMap<(String, u32), HashMap<String, Artifact>>,
+        in_flight: &mut HashMap<u64, ActivationSnapshot>,
+        next_activation_id: &mut u64,
         handles: &TaskHandles,
         tasks: &mut JoinSet<()>,
     ) -> Result<usize, SchedulerError> {
@@ -549,7 +730,18 @@ impl Scheduler {
         );
         ctx.event_tx = Some(self.event_tx.clone());
 
+        let id = *next_activation_id;
+        *next_activation_id = next_activation_id.saturating_add(1);
+        in_flight.insert(
+            id,
+            ActivationSnapshot {
+                node_id: node_id.to_string(),
+                round,
+                inputs: inputs.clone(),
+            },
+        );
         let activation = Activation {
+            id,
             node_id: node_id.to_string(),
             node_kind: ctx.node_kind.clone(),
             round,
@@ -572,6 +764,7 @@ fn spawn_activation(
     handles: &TaskHandles,
     tasks: &mut JoinSet<()>,
 ) {
+    let activation_id = activation.id;
     let node_id = activation.node_id.clone();
     let node_kind = activation.node_kind.clone();
     let round = activation.round;
@@ -606,6 +799,7 @@ fn spawn_activation(
         drop(permit);
 
         let _ = results_tx.send(ActivationResult {
+            id: activation_id,
             node_id,
             node_kind,
             round,

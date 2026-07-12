@@ -21,6 +21,10 @@ pub enum SchedulerError {
     #[error("Run paused after round {0:?}")]
     Paused(RunStats),
 
+    /// A durable checkpoint does not match the scheduler identity.
+    #[error("checkpoint graph or configuration identity does not match the scheduler")]
+    CheckpointMismatch,
+
     /// A node activation failed and the run was aborted.
     #[error("Node '{node_id}' failed in round {round}: {error}")]
     NodeFailed {
