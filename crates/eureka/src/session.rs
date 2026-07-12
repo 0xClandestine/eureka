@@ -17,7 +17,7 @@ use crate::graph::port::{PortDef, PortDirection, PortSpec, PortSpecEntry};
 use crate::graph::spec::{GraphError, GraphNodeSpec, GraphSpec};
 use crate::graph::validate::{validate_graph, PortRegistry};
 use crate::manifest::{AgentSpec, ControlSpec, GraphManifest};
-use crate::run::{RunEnvironment, RunRecord, RunStatus, RunStore};
+use crate::run::{CheckpointStore, RunEnvironment, RunRecord, RunStatus, RunStore};
 use crate::scheduler::{Scheduler, SchedulerError, SchedulerEvent};
 use anyhow::Context;
 use rig_core::client::{CompletionClient, ProviderClient};
@@ -57,6 +57,8 @@ pub struct Session {
     event_broadcaster: Option<broadcast::Sender<SchedulerEvent>>,
     /// Node overrides for testing — keyed by node ID.
     node_overrides: HashMap<String, BoxedNode>,
+    /// Optional durable scheduler checkpoint backend.
+    checkpoint_store: Option<Arc<dyn CheckpointStore>>,
 }
 
 impl Session {
@@ -142,6 +144,7 @@ impl Session {
             stats: None,
             event_broadcaster: None,
             node_overrides: HashMap::new(),
+            checkpoint_store: None,
         })
     }
 
@@ -231,12 +234,18 @@ impl Session {
             stats: None,
             event_broadcaster: None,
             node_overrides: nodes,
+            checkpoint_store: None,
         })
     }
 
     /// Attach a broadcast sender so the UI server receives every `SchedulerEvent`.
     pub fn set_event_broadcaster(&mut self, tx: broadcast::Sender<SchedulerEvent>) {
         self.event_broadcaster = Some(tx);
+    }
+
+    /// Configure durable scheduler checkpoints for this session.
+    pub fn set_checkpoint_store(&mut self, store: Arc<dyn CheckpointStore>) {
+        self.checkpoint_store = Some(store);
     }
 
     /// Get the session ID.
@@ -329,7 +338,17 @@ impl Session {
         // Create the scheduler
         let max_in_flight = self.config.scheduler.max_in_flight;
         let budget = self.config.budget.clone();
-        let mut scheduler = Scheduler::new(self.spec.clone(), nodes, budget, max_in_flight);
+        let scheduler = Scheduler::new(self.spec.clone(), nodes, budget, max_in_flight);
+        let mut scheduler = if let Some(store) = &self.checkpoint_store {
+            scheduler.with_checkpoint_store(
+                Arc::clone(store),
+                self.session_id,
+                stable_hash(&self.spec),
+                stable_hash(&self.config),
+            )
+        } else {
+            scheduler
+        };
 
         let mut events = scheduler.event_receiver();
 
@@ -689,6 +708,17 @@ impl Session {
             .insert(model_id.to_string(), Arc::clone(&client));
         Ok(client)
     }
+}
+
+/// Compute a stable content hash for checkpoint identity validation.
+fn stable_hash<T: serde::Serialize>(value: &T) -> String {
+    let bytes = serde_json::to_vec(value).unwrap_or_default();
+    let mut hash: u64 = 14695981039346656037;
+    for byte in bytes {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(1099511628211);
+    }
+    format!("{hash:016x}")
 }
 
 // ---------------------------------------------------------------------------
