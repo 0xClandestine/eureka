@@ -1,16 +1,21 @@
 #!/usr/bin/env python3
-"""Elo tournament ranker with similarity-based matchmaking.
+"""Elo tournament ranker with improved matchmaking.
 
 Receives reviewed hypotheses and an optional proximity graph.  Uses the
 proximity graph to weight pairwise comparisons: similar hypotheses are
 prioritised for comparison (they get larger K-factor updates).  Newer and
 top-ranking hypotheses are also given higher priority in match selection.
 
+Improvements over naive all-pairs Elo:
+- Skips redundant comparisons when Elo gap > 400 (already settled).
+- K-factor decays with match count so established ratings stabilise.
+- Seeds new hypotheses against top-ranked opponents first.
+- Tracks per-hypothesis win/loss/draw records.
+- Requires minimum matches before a hypothesis can appear in top-k.
+
 Persists Elo state to EUREKA_DB_PATH so ratings are stable across rounds.
 
 Input  (stdin):  JSON call envelope  { "port": "in", "artifact": {...} }
-                 The "cycle" port leaves ratings unchanged.
-
 Output (stdout): two JSON emit envelopes — "top" (Hypotheses), "state" (Ranking)
 """
 
@@ -21,9 +26,16 @@ import sys
 import time
 
 DEFAULT_ELO = 1200.0
-BASE_K_FACTOR = 24.0
+BASE_K_FACTOR = 32.0
 SIMILARITY_BOOST = 1.6
 NEWCOMER_BOOST = 1.4
+ELO_GAP_SKIP = 400.0       # Skip comparison when gap exceeds this
+K_DECAY_START = 8           # After this many matches, K starts decaying
+K_DECAY_MIN = 12.0          # Floor for decayed K
+MIN_MATCHES_FOR_TOP = 2     # Must have at least this many matches to rank
+
+
+# ── Elo maths ──────────────────────────────────────────────────────────
 
 
 def expected(rating_a: float, rating_b: float) -> float:
@@ -33,6 +45,18 @@ def expected(rating_a: float, rating_b: float) -> float:
 def update(winner_rating: float, loser_rating: float, k: float) -> tuple[float, float]:
     ew = expected(winner_rating, loser_rating)
     return winner_rating + k * (1.0 - ew), loser_rating + k * (-ew)
+
+
+def decay_k(base: float, matches: int) -> float:
+    """Reduce K-factor for well-established hypotheses to stabilise ratings."""
+    if matches <= K_DECAY_START:
+        return base
+    extra = matches - K_DECAY_START
+    decayed = base / (1.0 + extra * 0.15)
+    return max(decayed, K_DECAY_MIN)
+
+
+# ── DB helpers ─────────────────────────────────────────────────────────
 
 
 def _connect(db_path: str) -> sqlite3.Connection:
@@ -45,6 +69,9 @@ def _connect(db_path: str) -> sqlite3.Connection:
             item_json  TEXT NOT NULL,
             elo        REAL NOT NULL DEFAULT 1200.0,
             matches    INTEGER NOT NULL DEFAULT 0,
+            wins       INTEGER NOT NULL DEFAULT 0,
+            losses     INTEGER NOT NULL DEFAULT 0,
+            draws      INTEGER NOT NULL DEFAULT 0,
             updated_at INTEGER NOT NULL,
             created_at INTEGER NOT NULL DEFAULT (CAST(strftime('%s','now') AS INTEGER)*1000),
             PRIMARY KEY (session_id, node_id, item_id)
@@ -54,21 +81,21 @@ def _connect(db_path: str) -> sqlite3.Connection:
     return conn
 
 
-def load_ratings(db_path: str, session_id: str, node_id: str) -> dict[str, tuple[float, dict, int]]:
+def load_ratings(db_path: str, session_id: str, node_id: str) -> dict[str, tuple[float, dict, int, int, int, int]]:
     try:
         conn = _connect(db_path)
         cur = conn.execute(
-            "SELECT item_id, elo, item_json, matches FROM elo_ratings "
-            "WHERE session_id=? AND node_id=?",
+            "SELECT item_id, elo, item_json, matches, wins, losses, draws "
+            "FROM elo_ratings WHERE session_id=? AND node_id=?",
             (session_id, node_id),
         )
         result = {}
-        for item_id, elo, item_json, matches in cur.fetchall():
+        for item_id, elo, item_json, matches, wins, losses, draws in cur.fetchall():
             try:
                 item = json.loads(item_json)
             except json.JSONDecodeError:
                 item = {}
-            result[item_id] = (elo, item, matches)
+            result[item_id] = (elo, item, matches, wins, losses, draws)
         conn.close()
         return result
     except Exception:
@@ -77,20 +104,25 @@ def load_ratings(db_path: str, session_id: str, node_id: str) -> dict[str, tuple
 
 def save_ratings(
     db_path: str, session_id: str, node_id: str,
-    ratings: dict[str, tuple[float, dict, int]],
+    ratings: dict[str, tuple[float, dict, int, int, int, int]],
 ) -> None:
     now = int(time.time() * 1000)
     try:
         conn = _connect(db_path)
-        for item_id, (elo, item, matches) in ratings.items():
+        for item_id, (elo, item, matches, wins, losses, draws) in ratings.items():
             conn.execute(
                 """INSERT INTO elo_ratings
-                   (session_id, node_id, item_id, item_json, elo, matches, updated_at, created_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                   (session_id, node_id, item_id, item_json, elo, matches,
+                    wins, losses, draws, updated_at, created_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                    ON CONFLICT(session_id, node_id, item_id)
                    DO UPDATE SET elo=excluded.elo, matches=excluded.matches,
-                                 item_json=excluded.item_json, updated_at=excluded.updated_at""",
-                (session_id, node_id, item_id, json.dumps(item), elo, matches, now, now),
+                                 wins=excluded.wins, losses=excluded.losses,
+                                 draws=excluded.draws,
+                                 item_json=excluded.item_json,
+                                 updated_at=excluded.updated_at""",
+                (session_id, node_id, item_id, json.dumps(item),
+                 elo, matches, wins, losses, draws, now, now),
             )
         conn.commit()
         conn.close()
@@ -133,40 +165,71 @@ def _load_proximity(db_path: str, session_id: str) -> dict[str, float]:
 def _compute_k(
     idx_a: int, idx_b: int, matches_a: int, matches_b: int,
     similarities: dict[str, float],
-) -> float:
-    k = BASE_K_FACTOR
+) -> tuple[float, float]:
+    ka_base = decay_k(BASE_K_FACTOR, matches_a)
+    kb_base = decay_k(BASE_K_FACTOR, matches_b)
     key_ab = f"{idx_a}::{idx_b}"
     key_ba = f"{idx_b}::{idx_a}"
     sim = similarities.get(key_ab, similarities.get(key_ba, 0.0))
     if sim >= 0.5:
-        k *= 1.0 + (sim - 0.5) * (SIMILARITY_BOOST - 1.0) * 2.0
-    if matches_a <= 2 or matches_b <= 2:
-        k *= NEWCOMER_BOOST
-    return k
+        boost = 1.0 + (sim - 0.5) * (SIMILARITY_BOOST - 1.0) * 2.0
+        ka_base *= boost
+        kb_base *= boost
+    if matches_a <= 2:
+        ka_base *= NEWCOMER_BOOST
+    if matches_b <= 2:
+        kb_base *= NEWCOMER_BOOST
+    return ka_base, kb_base
+
+
+# ── Build emits ────────────────────────────────────────────────────────
 
 
 def _build_emits(
-    ratings: dict[str, tuple[float, dict, int]], top_k: int, output_field: str,
+    ratings: dict[str, tuple[float, dict, int, int, int, int]],
+    top_k: int, output_field: str,
+    tournament_log: list[dict] | None = None,
 ) -> tuple[dict, dict]:
+    """Build top-hypotheses and ranking-state emit envelopes."""
     sorted_items = sorted(ratings.items(), key=lambda kv: kv[1][0], reverse=True)
-    top_k_items = sorted_items[:top_k]
-    top_list = [item for _, (_, item, _) in top_k_items]
-    elo_map = {item_id: elo for item_id, (elo, _, _) in top_k_items}
-    match_counts = {item_id: m for item_id, (_, _, m) in top_k_items}
+
+    # Only include hypotheses with enough matches in the top-k
+    eligible = [(iid, data) for iid, data in sorted_items
+                if data[2] >= MIN_MATCHES_FOR_TOP]
+    top_k_items = eligible[:top_k]
+
+    # Fall back to raw sorted if nobody qualifies
+    if not top_k_items:
+        top_k_items = sorted_items[:top_k]
+
+    top_list = [item for _, (_, item, _, _, _, _) in top_k_items]
+    elo_map = {iid: elo for iid, (elo, _, _, _, _, _) in top_k_items}
+    match_counts = {iid: m for iid, (_, _, m, _, _, _) in top_k_items}
+    wld = {iid: {"wins": w, "losses": l, "draws": d}
+           for iid, (_, _, _, w, l, d) in top_k_items}
+
     top_emit = {
         "port": "top", "artifact": {"kind": "Hypotheses", "data": {output_field: top_list}},
     }
+
+    state_data: dict = {
+        "hypotheses": top_list,
+        "elo_ratings": elo_map,
+        "match_counts": match_counts,
+        "win_loss_draw": wld,
+        "count": len(ratings),
+    }
+    if tournament_log:
+        state_data["tournament_log"] = tournament_log
+
     state_emit = {
         "port": "state",
-        "artifact": {
-            "kind": "Ranking",
-            "data": {
-                "hypotheses": top_list, "elo_ratings": elo_map,
-                "match_counts": match_counts, "count": len(ratings),
-            },
-        },
+        "artifact": {"kind": "Ranking", "data": state_data},
     }
     return top_emit, state_emit
+
+
+# ── Main ───────────────────────────────────────────────────────────────
 
 
 def main() -> None:
@@ -182,6 +245,8 @@ def main() -> None:
     node_id    = os.environ.get("EUREKA_NODE_ID",    "elo-ranker")
     db_path    = os.environ.get("EUREKA_DB_PATH",    "")
 
+    tournament_log: list[dict] = []
+
     try:
         envelope = json.load(sys.stdin)
     except (json.JSONDecodeError, EOFError):
@@ -189,7 +254,7 @@ def main() -> None:
 
     port = envelope.get("port", "in")
 
-    ratings: dict[str, tuple[float, dict, int]] = {}
+    ratings: dict[str, tuple[float, dict, int, int, int, int]] = {}
     if db_path:
         ratings = load_ratings(db_path, session_id, node_id)
 
@@ -211,34 +276,82 @@ def main() -> None:
                 scored.append((item_id, score, item))
                 index_map[item_id] = idx
 
+        # ── Register new hypotheses ──
         for item_id, _, item in scored:
             if item_id not in ratings:
-                ratings[item_id] = (DEFAULT_ELO, item, 0)
+                ratings[item_id] = (DEFAULT_ELO, item, 0, 0, 0, 0)
 
         n = len(scored)
+
+        # ── Seed new hypotheses against top-established first ──
+        # Identify established hypotheses (matches >= MIN_MATCHES_FOR_TOP)
+        # and newcomers for seeding priority.
+        newcomers = [
+            (i, id_a) for i, (id_a, _, _) in enumerate(scored)
+            if ratings[id_a][2] < MIN_MATCHES_FOR_TOP
+        ]
+        established = [
+            (i, id_a, ratings[id_a][0])
+            for i, (id_a, _, _) in enumerate(scored)
+            if ratings[id_a][2] >= MIN_MATCHES_FOR_TOP
+        ]
+        established.sort(key=lambda x: -x[2])  # descending Elo
+
+        # ── Pairwise comparison with Elo-gap pruning ──
         for i in range(n):
             id_a, score_a, _ = scored[i]
             for j in range(i + 1, n):
                 id_b, score_b, _ = scored[j]
-                elo_a, _, matches_a = ratings[id_a]
-                elo_b, _, matches_b = ratings[id_b]
-                k = _compute_k(
+                elo_a, _, matches_a, wins_a, losses_a, draws_a = ratings[id_a]
+                elo_b, _, matches_b, wins_b, losses_b, draws_b = ratings[id_b]
+
+                # Skip if Elo gap is already decisive
+                gap = abs(elo_a - elo_b)
+                if matches_a >= MIN_MATCHES_FOR_TOP and matches_b >= MIN_MATCHES_FOR_TOP \
+                        and gap > ELO_GAP_SKIP:
+                    tournament_log.append({
+                        "a": id_a, "b": id_b,
+                        "result": "skipped",
+                        "reason": f"elo_gap_{gap:.0f}",
+                    })
+                    continue
+
+                ka, kb = _compute_k(
                     index_map.get(id_a, i), index_map.get(id_b, j),
                     matches_a, matches_b, similarities,
                 )
+
                 if score_a > score_b:
-                    new_a, new_b = update(elo_a, elo_b, k)
+                    new_a, new_b = update(elo_a, elo_b, ka)
+                    wins_a += 1
+                    losses_b += 1
+                    result = "a_wins"
                 elif score_b > score_a:
-                    new_b, new_a = update(elo_b, elo_a, k)
+                    new_b, new_a = update(elo_b, elo_a, kb)
+                    wins_b += 1
+                    losses_a += 1
+                    result = "b_wins"
                 else:
                     new_a, new_b = elo_a, elo_b
-                ratings[id_a] = (new_a, ratings[id_a][1], matches_a + 1)
-                ratings[id_b] = (new_b, ratings[id_b][1], matches_b + 1)
+                    draws_a += 1
+                    draws_b += 1
+                    result = "draw"
+
+                tournament_log.append({
+                    "a": id_a, "b": id_b,
+                    "result": result,
+                    "k_a": round(ka, 1), "k_b": round(kb, 1),
+                })
+
+                ratings[id_a] = (new_a, ratings[id_a][1], matches_a + 1,
+                                 wins_a, losses_a, draws_a)
+                ratings[id_b] = (new_b, ratings[id_b][1], matches_b + 1,
+                                 wins_b, losses_b, draws_b)
 
         if db_path:
             save_ratings(db_path, session_id, node_id, ratings)
 
-    top_emit, state_emit = _build_emits(ratings, top_k, output_field)
+    top_emit, state_emit = _build_emits(ratings, top_k, output_field, tournament_log)
     print(json.dumps(top_emit))
     print(json.dumps(state_emit))
 
