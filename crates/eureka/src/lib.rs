@@ -34,5 +34,7 @@ pub mod session;
 pub mod tracing;
 
 pub use error::EngineError;
-pub use run::{FileRunStore, RunRecord, RunStatus, RunStore};
+pub use run::{
+    FileRunStore, RunEnvironment, RunRecord, RunStatus, RunStore, DATABASE_SCHEMA_VERSION,
+};
 pub use session::Session;

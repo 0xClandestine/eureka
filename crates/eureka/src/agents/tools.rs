@@ -7,6 +7,7 @@
 use std::sync::Arc;
 
 use crate::control::process::run_subprocess;
+use crate::run::RunEnvironment;
 use crate::scheduler::SchedulerEvent;
 use rig_core::completion::ToolDefinition;
 use rig_core::tool::{ToolDyn, ToolError};
@@ -27,6 +28,8 @@ pub struct CommandTool {
     round: u32,
     /// Working directory for the subprocess (the graph directory).
     work_dir: std::path::PathBuf,
+    /// Run-scoped identity and database capability for the subprocess.
+    environment: RunEnvironment,
     /// Optional channel for emitting `ToolCalled` events.
     event_tx: Option<mpsc::Sender<SchedulerEvent>>,
 }
@@ -42,12 +45,35 @@ impl CommandTool {
         work_dir: std::path::PathBuf,
         event_tx: Option<mpsc::Sender<SchedulerEvent>>,
     ) -> Self {
+        Self::with_environment(
+            def,
+            node_id.clone(),
+            node_kind,
+            round,
+            work_dir,
+            RunEnvironment::new(node_id, None),
+            event_tx,
+        )
+    }
+
+    /// Create a command tool with an explicit run environment.
+    #[must_use]
+    pub fn with_environment(
+        def: Arc<ToolDef>,
+        node_id: String,
+        node_kind: String,
+        round: u32,
+        work_dir: std::path::PathBuf,
+        environment: RunEnvironment,
+        event_tx: Option<mpsc::Sender<SchedulerEvent>>,
+    ) -> Self {
         Self {
             def,
             node_id,
             node_kind,
             round,
             work_dir,
+            environment,
             event_tx,
         }
     }
@@ -74,11 +100,18 @@ impl CommandTool {
             return Err(ToolError::ToolCallError("command array is empty".into()));
         };
 
+        let environment = self
+            .environment
+            .subprocess_env(&self.node_id, self.round, "{}");
+        let envs: Vec<(&str, String)> = environment
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.clone()))
+            .collect();
         let result = run_subprocess(
             binary,
             rest,
             Some(&self.work_dir),
-            &[],
+            &envs,
             &args_json,
             self.def.timeout_secs,
         )
@@ -268,6 +301,33 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(result, r#"{"key":"value"}"#);
+    }
+
+    #[tokio::test]
+    async fn test_execute_passes_run_database_environment() {
+        let db_path = tempfile::tempdir().unwrap().path().join("run.sqlite");
+        let def = Arc::new(ToolDef {
+            name: "env".to_string(),
+            description: "read run environment".to_string(),
+            command: vec![
+                "sh".to_string(),
+                "-c".to_string(),
+                "printf '%s|%s|%s' \"$EUREKA_SESSION_ID\" \"$EUREKA_DB_PATH\" \"$EUREKA_DB_NAMESPACE\"".to_string(),
+            ],
+            args_schema: serde_json::json!({ "type": "object" }),
+            timeout_secs: 5,
+        });
+        let tool = CommandTool::with_environment(
+            def,
+            "agent".into(),
+            "researcher".into(),
+            2,
+            std::path::PathBuf::from("."),
+            RunEnvironment::new("run-123", Some(db_path.clone())),
+            None,
+        );
+        let result = tool.execute("{}".to_string()).await.unwrap();
+        assert_eq!(result, format!("run-123|{}|agent", db_path.display()));
     }
 
     #[tokio::test]

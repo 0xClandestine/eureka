@@ -19,6 +19,7 @@ use super::process::run_subprocess;
 use crate::graph::artifact::Artifact;
 use crate::graph::node::{Emit, Node, NodeCtx, NodeError, PortMsg};
 use crate::graph::port::{PortDef, PortSpec};
+use crate::run::RunEnvironment;
 use async_trait::async_trait;
 
 /// A graph node implemented by a subprocess plugin.
@@ -27,10 +28,8 @@ pub struct ControlNode {
     name: String,
     /// Absolute path to the directory containing the scripts.
     work_dir: PathBuf,
-    /// Session ID passed to the subprocess as `EUREKA_SESSION_ID`.
-    session_id: String,
-    /// Path to the session database, passed as `EUREKA_DB_PATH`.
-    db_path: Option<PathBuf>,
+    /// Run-scoped identity and database capability passed to the subprocess.
+    environment: RunEnvironment,
     /// The per-node config object from the manifest.
     config: serde_json::Value,
     /// Subprocess argv.
@@ -50,6 +49,16 @@ impl ControlNode {
         db_path: Option<PathBuf>,
         config: serde_json::Value,
     ) -> Self {
+        Self::with_environment(def, RunEnvironment::new(session_id, db_path), config)
+    }
+
+    /// Create a control node with an explicit run environment.
+    #[must_use]
+    pub fn with_environment(
+        def: ControlNodeDef,
+        environment: RunEnvironment,
+        config: serde_json::Value,
+    ) -> Self {
         let inputs = def.inputs.iter().map(PortDef::to_input_spec).collect();
         let outputs = def.outputs.iter().map(PortDef::to_output_spec).collect();
 
@@ -59,8 +68,7 @@ impl ControlNode {
             command: def.command,
             port_spec: PortSpec::new(inputs, outputs),
             timeout_secs: def.timeout_secs,
-            session_id,
-            db_path,
+            environment,
             config,
         }
     }
@@ -111,16 +119,13 @@ impl ControlNode {
             .map_err(|e| NodeError::Internal(format!("Failed to serialize call envelope: {e}")))?;
 
         let config_str = serde_json::to_string(&self.config).unwrap_or_else(|_| "{}".to_string());
-
-        let mut envs: Vec<(&str, String)> = vec![
-            ("EUREKA_SESSION_ID", self.session_id.clone()),
-            ("EUREKA_NODE_ID", ctx.node_id.clone()),
-            ("EUREKA_ROUND", ctx.round.to_string()),
-            ("EUREKA_CONFIG", config_str),
-        ];
-        if let Some(db_path) = &self.db_path {
-            envs.push(("EUREKA_DB_PATH", db_path.display().to_string()));
-        }
+        let environment = self
+            .environment
+            .subprocess_env(&ctx.node_id, ctx.round, &config_str);
+        let envs: Vec<(&str, String)> = environment
+            .iter()
+            .map(|(key, value)| (key.as_str(), value.clone()))
+            .collect();
 
         let (binary, rest) = self.command.split_first().ok_or_else(|| {
             NodeError::Internal("Control node command array is empty".to_string())

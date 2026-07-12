@@ -7,6 +7,7 @@
 use std::sync::{Arc, Mutex};
 
 use crate::graph::node::NodeUsage;
+use crate::run::RunEnvironment;
 use crate::scheduler::SchedulerEvent;
 use async_trait::async_trait;
 use rig_core::agent::AgentBuilder;
@@ -47,6 +48,42 @@ pub trait LlmClient: Send + Sync {
         work_dir: &str,
         event_tx: Option<mpsc::Sender<SchedulerEvent>>,
     ) -> Result<(serde_json::Value, NodeUsage), AgentError>;
+
+    /// Run an agent loop while passing run-scoped capabilities to its tools.
+    ///
+    /// Custom clients retain the legacy behavior by default; the built-in
+    /// `RigClient` overrides this method so command tools receive the same
+    /// database identity as control-node subprocesses.
+    async fn run_agent_loop_with_environment(
+        &self,
+        preamble: &str,
+        output_schema: &serde_json::Value,
+        tools: &[ToolDef],
+        initial_message: &str,
+        max_iterations: u32,
+        temperature: f64,
+        node_id: &str,
+        node_kind: &str,
+        round: u32,
+        work_dir: &str,
+        event_tx: Option<mpsc::Sender<SchedulerEvent>>,
+        _environment: &RunEnvironment,
+    ) -> Result<(serde_json::Value, NodeUsage), AgentError> {
+        self.run_agent_loop(
+            preamble,
+            output_schema,
+            tools,
+            initial_message,
+            max_iterations,
+            temperature,
+            node_id,
+            node_kind,
+            round,
+            work_dir,
+            event_tx,
+        )
+        .await
+    }
 }
 
 /// A `LlmClient` backed by any `rig` `CompletionModel`.
@@ -81,6 +118,38 @@ impl<M: CompletionModel + Clone + Send + Sync + 'static> LlmClient for RigClient
         work_dir: &str,
         event_tx: Option<mpsc::Sender<SchedulerEvent>>,
     ) -> Result<(serde_json::Value, NodeUsage), AgentError> {
+        self.run_agent_loop_with_environment(
+            preamble,
+            output_schema,
+            tools,
+            initial_message,
+            max_iterations,
+            temperature,
+            node_id,
+            node_kind,
+            round,
+            work_dir,
+            event_tx,
+            &RunEnvironment::new(node_id, None),
+        )
+        .await
+    }
+
+    async fn run_agent_loop_with_environment(
+        &self,
+        preamble: &str,
+        output_schema: &serde_json::Value,
+        tools: &[ToolDef],
+        initial_message: &str,
+        max_iterations: u32,
+        temperature: f64,
+        node_id: &str,
+        node_kind: &str,
+        round: u32,
+        work_dir: &str,
+        event_tx: Option<mpsc::Sender<SchedulerEvent>>,
+        environment: &RunEnvironment,
+    ) -> Result<(serde_json::Value, NodeUsage), AgentError> {
         let result: Arc<Mutex<Option<serde_json::Value>>> = Arc::new(Mutex::new(None));
 
         let submit = Submit {
@@ -94,12 +163,13 @@ impl<M: CompletionModel + Clone + Send + Sync + 'static> LlmClient for RigClient
         let command_tools: Vec<Box<dyn rig_core::tool::ToolDyn>> = tools
             .iter()
             .map(|t| -> Box<dyn rig_core::tool::ToolDyn> {
-                Box::new(CommandTool::new(
+                Box::new(CommandTool::with_environment(
                     Arc::new(t.clone()),
                     node_id.to_string(),
                     node_kind.to_string(),
                     round,
                     std::path::PathBuf::from(work_dir),
+                    environment.clone(),
                     event_tx.clone(),
                 ))
             })

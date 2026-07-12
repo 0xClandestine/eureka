@@ -11,6 +11,7 @@ use std::sync::Arc;
 use crate::graph::artifact::Artifact;
 use crate::graph::node::{Emit, Node, NodeCtx, NodeError, PortMsg};
 use crate::graph::port::PortSpec;
+use crate::run::RunEnvironment;
 use async_trait::async_trait;
 
 use super::client::LlmClient;
@@ -24,6 +25,8 @@ pub struct LlmAgentNode {
     client: Arc<dyn LlmClient>,
     /// Working directory for tool subprocesses (the graph directory).
     work_dir: PathBuf,
+    /// Run-scoped identity and database capability for agent tools.
+    environment: RunEnvironment,
 }
 
 impl LlmAgentNode {
@@ -31,10 +34,23 @@ impl LlmAgentNode {
     /// working directory used when spawning tool subprocesses.
     #[must_use]
     pub fn new(def: Arc<AgentDef>, client: Arc<dyn LlmClient>, work_dir: PathBuf) -> Self {
+        let environment = RunEnvironment::new("", None);
+        Self::with_environment(def, client, work_dir, environment)
+    }
+
+    /// Create an agent node with an explicit run environment for its tools.
+    #[must_use]
+    pub fn with_environment(
+        def: Arc<AgentDef>,
+        client: Arc<dyn LlmClient>,
+        work_dir: PathBuf,
+        environment: RunEnvironment,
+    ) -> Self {
         Self {
             def,
             client,
             work_dir,
+            environment,
         }
     }
 
@@ -81,7 +97,7 @@ impl Node for LlmAgentNode {
 
         let (output_json, usage) = self
             .client
-            .run_agent_loop(
+            .run_agent_loop_with_environment(
                 &self.def.preamble,
                 &self.def.output_schema,
                 &self.def.tools,
@@ -93,6 +109,7 @@ impl Node for LlmAgentNode {
                 ctx.round,
                 &self.work_dir.to_string_lossy(),
                 ctx.event_tx.clone(),
+                &self.environment,
             )
             .await
             .map_err(|e| NodeError::Agent(e.to_string()))?;

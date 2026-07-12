@@ -17,7 +17,7 @@ use crate::graph::port::{PortDef, PortDirection, PortSpec, PortSpecEntry};
 use crate::graph::spec::{GraphError, GraphNodeSpec, GraphSpec};
 use crate::graph::validate::{validate_graph, PortRegistry};
 use crate::manifest::{AgentSpec, ControlSpec, GraphManifest};
-use crate::run::{RunRecord, RunStatus, RunStore};
+use crate::run::{RunEnvironment, RunRecord, RunStatus, RunStore};
 use crate::scheduler::{Scheduler, SchedulerError, SchedulerEvent};
 use anyhow::Context;
 use rig_core::client::{CompletionClient, ProviderClient};
@@ -620,10 +620,11 @@ impl Session {
             ))
         })?;
 
-        Ok(BoxedNode::new(LlmAgentNode::new(
+        Ok(BoxedNode::new(LlmAgentNode::with_environment(
             Arc::new(agent_def),
             client_arc,
             self.graph_dir.clone(),
+            RunEnvironment::new(self.session_id.to_string(), self.db_path.clone()),
         )))
     }
 
@@ -667,10 +668,9 @@ impl Session {
             timeout_secs: ctrl_spec.timeout_secs,
         };
 
-        BoxedNode::new(ControlNode::new(
+        BoxedNode::new(ControlNode::with_environment(
             def,
-            self.session_id.to_string(),
-            self.db_path.clone(),
+            RunEnvironment::new(self.session_id.to_string(), self.db_path.clone()),
             node_config.clone(),
         ))
     }
