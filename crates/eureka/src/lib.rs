@@ -37,6 +37,7 @@ pub use error::EngineError;
 pub use run::{
     ActivationSnapshot, CheckpointReason, CheckpointStore, FileRunStore, InMemoryRunPersistence,
     PendingInput, PersistenceError, Revision, RunCheckpoint, RunEnvironment, RunFilter,
-    RunPersistence, RunRecord, RunRepository, RunStatus, RunStore, DATABASE_SCHEMA_VERSION,
+    RunPersistence, RunRecord, RunRepository, RunStatus, RunStore, SqliteRunPersistence,
+    DATABASE_SCHEMA_VERSION,
 };
 pub use session::Session;
