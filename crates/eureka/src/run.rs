@@ -174,6 +174,19 @@ pub struct ActivationSnapshot {
     pub inputs: Vec<PortMsg>,
 }
 
+/// An artifact emitted by a terminal/sink node.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RunOutput {
+    /// Node that emitted the artifact.
+    pub node_id: String,
+    /// Output port that emitted the artifact.
+    pub port: String,
+    /// Scheduler round in which it was emitted.
+    pub round: u32,
+    /// Terminal artifact.
+    pub artifact: Artifact,
+}
+
 /// Serializable scheduler state used for durable recovery.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct RunCheckpoint {
@@ -195,6 +208,9 @@ pub struct RunCheckpoint {
     pub ready_activations: Vec<ActivationSnapshot>,
     /// Statistics accumulated through this boundary.
     pub stats: RunStats,
+    /// Terminal artifacts emitted through this boundary.
+    #[serde(default)]
+    pub outputs: Vec<RunOutput>,
     /// Reason this checkpoint was written.
     pub reason: CheckpointReason,
 }
@@ -213,6 +229,7 @@ impl RunCheckpoint {
             pending_inputs: Vec::new(),
             ready_activations: Vec::new(),
             stats: RunStats::default(),
+            outputs: Vec::new(),
             reason: CheckpointReason::RoundCompleted,
         }
     }

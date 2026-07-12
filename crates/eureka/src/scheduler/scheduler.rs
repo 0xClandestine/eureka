@@ -13,6 +13,7 @@ use crate::graph::node::{BoxedNode, Emit, NodeCtx, NodeError, NodeUsage, PortMsg
 use crate::graph::spec::GraphSpec;
 use crate::run::{
     ActivationSnapshot, CheckpointReason, CheckpointStore, PendingInput, Revision, RunCheckpoint,
+    RunOutput,
 };
 
 use super::error::SchedulerError;
@@ -250,6 +251,9 @@ impl Scheduler {
         let mut ready_activations: Vec<ActivationSnapshot> = Vec::new();
         let mut in_flight: HashMap<u64, ActivationSnapshot> = HashMap::new();
         let mut next_activation_id: u64 = 0;
+        let mut outputs: Vec<RunOutput> = checkpoint
+            .as_ref()
+            .map_or_else(Vec::new, |item| item.outputs.clone());
 
         // Synchronized round model: a round is one forward wave starting from
         // source injections and feedback inputs. Forward edges stay in the
@@ -387,6 +391,7 @@ impl Scheduler {
                                 &round_pending,
                                 &input_buffer,
                                 &in_flight,
+                                &outputs,
                                 CheckpointReason::Pause,
                             ).await?;
                             return Err(SchedulerError::Paused(self.stats.clone()));
@@ -423,7 +428,7 @@ impl Scheduler {
                                     self.stats.total_tokens += usage.total_tokens;
                                     self.stats.total_cost_usd += usage.cost_usd;
 
-                                    let outputs: Vec<serde_json::Value> = emits
+                                    let event_outputs: Vec<serde_json::Value> = emits
                                         .iter()
                                         .map(|e| serde_json::json!({
                                             "port": e.port,
@@ -436,10 +441,18 @@ impl Scheduler {
                                         node_kind: node_kind.clone(),
                                         round,
                                         emit_count: emits.len(),
-                                        outputs,
+                                        outputs: event_outputs,
                                     }).await;
 
                                     for emit in emits {
+                                        if outbound.get(&node_id).is_none_or(|edges| !edges.iter().any(|edge| edge.from_port == emit.port)) {
+                                            outputs.push(RunOutput {
+                                                node_id: node_id.clone(),
+                                                port: emit.port.clone(),
+                                                round,
+                                                artifact: emit.artifact.clone(),
+                                            });
+                                        }
                                         let new_count = self.route_emission(
                                             &node_id,
                                             &emit,
@@ -518,6 +531,7 @@ impl Scheduler {
                                     &round_pending,
                                     &input_buffer,
                                     &in_flight,
+                                    &outputs,
                                     CheckpointReason::RoundCompleted,
                                 ).await?;
                             }
@@ -550,6 +564,7 @@ impl Scheduler {
             &round_pending,
             &input_buffer,
             &in_flight,
+            &outputs,
             CheckpointReason::Completion,
         )
         .await?;
@@ -568,6 +583,7 @@ impl Scheduler {
         round_pending: &HashMap<u32, usize>,
         input_buffer: &HashMap<(String, u32), HashMap<String, Artifact>>,
         in_flight: &HashMap<u64, ActivationSnapshot>,
+        outputs: &[RunOutput],
         reason: CheckpointReason,
     ) -> Result<(), SchedulerError> {
         let (Some(store), Some(identity)) = (
@@ -597,6 +613,7 @@ impl Scheduler {
             pending_inputs,
             ready_activations: in_flight.values().cloned().collect(),
             stats: self.stats.clone(),
+            outputs: outputs.to_vec(),
             reason,
         };
         let saved = store

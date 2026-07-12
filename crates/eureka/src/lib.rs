@@ -36,7 +36,7 @@ pub mod tracing;
 pub use error::EngineError;
 pub use run::{
     ActivationSnapshot, CheckpointReason, CheckpointStore, FileRunStore, InMemoryRunPersistence,
-    PendingInput, PersistenceError, Revision, RunCheckpoint, RunEnvironment, RunFilter,
+    PendingInput, PersistenceError, Revision, RunCheckpoint, RunEnvironment, RunFilter, RunOutput,
     RunPersistence, RunRecord, RunRepository, RunStatus, RunStore, SqliteRunPersistence,
     DATABASE_SCHEMA_VERSION,
 };
