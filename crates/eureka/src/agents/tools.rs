@@ -9,7 +9,6 @@ use std::sync::Arc;
 use crate::control::process::run_subprocess;
 use crate::run::RunEnvironment;
 use crate::scheduler::SchedulerEvent;
-use rig_core::completion::ToolDefinition;
 use rig_core::tool::{ToolDyn, ToolError};
 use rig_core::wasm_compat::WasmBoxedFuture;
 use tokio::sync::mpsc;
@@ -133,13 +132,12 @@ impl ToolDyn for CommandTool {
         self.def.name.clone()
     }
 
-    fn definition(&self, _prompt: String) -> WasmBoxedFuture<'_, ToolDefinition> {
-        let def = ToolDefinition {
-            name: self.def.name.clone(),
-            description: self.def.description.clone(),
-            parameters: self.def.args_schema.clone(),
-        };
-        Box::pin(std::future::ready(def))
+    fn description(&self) -> String {
+        self.def.description.clone()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        self.def.args_schema.clone()
     }
 
     fn call(&self, args: String) -> WasmBoxedFuture<'_, Result<String, ToolError>> {

@@ -235,7 +235,6 @@ async fn main() -> anyhow::Result<()> {
 fn default_data_dir() -> PathBuf {
     let home = std::env::var("HOME")
         .ok()
-        .map(PathBuf::from)
-        .unwrap_or_else(|| PathBuf::from("."));
+        .map_or_else(|| PathBuf::from("."), PathBuf::from);
     home.join(".eureka")
 }

@@ -29,16 +29,22 @@ use tower_http::cors::CorsLayer;
 /// Metadata about a running daemon, written to `daemon.json`.
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) struct DaemonInfo {
+    /// Daemon process ID.
     pub(crate) pid: u32,
+    /// HTTP server port.
     pub(crate) port: u16,
+    /// Path to the daemon data directory.
     pub(crate) data_dir: String,
+    /// ISO-8601 timestamp of when the daemon started.
     pub(crate) started_at: String,
 }
 
 /// Shared daemon state injected into axum route handlers.
 #[derive(Clone)]
 struct DaemonState {
+    /// Run lifecycle manager.
     manager: RunManager,
+    /// Path to the daemon data directory.
     data_dir: PathBuf,
 }
 
@@ -48,6 +54,7 @@ struct DaemonState {
 ///
 /// # Errors
 /// Returns an error if the config cannot be loaded or the server fails to bind.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 pub async fn execute_start(port: u16, config_path: Option<String>, data_dir: &Path) -> Result<()> {
     // Create the data directory
     std::fs::create_dir_all(data_dir).with_context(|| {
@@ -165,7 +172,11 @@ fn build_daemon_router(state: DaemonState) -> Router {
 /// Returns an error if no daemon is running or the PID cannot be read.
 pub fn execute_stop(data_dir: &Path) -> Result<()> {
     let info = read_daemon_info(data_dir)?;
-    let pid = nix::unistd::Pid::from_raw(info.pid as i32);
+    let pid_int: i32 = info
+        .pid
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("PID {} is out of range", info.pid))?;
+    let pid = nix::unistd::Pid::from_raw(pid_int);
 
     // Check if the process is actually running
     let running = nix::sys::signal::kill(pid, None).is_ok();
@@ -208,7 +219,11 @@ pub fn execute_stop(data_dir: &Path) -> Result<()> {
 /// Returns an error if the daemon info file cannot be read.
 pub fn execute_status(data_dir: &Path) -> Result<()> {
     let info = read_daemon_info(data_dir)?;
-    let pid = nix::unistd::Pid::from_raw(info.pid as i32);
+    let pid_int: i32 = info
+        .pid
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("PID {} is out of range", info.pid))?;
+    let pid = nix::unistd::Pid::from_raw(pid_int);
 
     if nix::sys::signal::kill(pid, None).is_ok() {
         println!("✓ Daemon is running");
@@ -230,9 +245,9 @@ pub fn execute_status(data_dir: &Path) -> Result<()> {
 // HTTP Handlers
 // ---------------------------------------------------------------------------
 
-/// Extract the RunManager from state or return 404.
-fn manager_from_state(state: &DaemonState) -> Result<RunManager, StatusCode> {
-    Ok(state.manager.clone())
+/// Extract the `RunManager` from state.
+fn manager_from_state(state: &DaemonState) -> RunManager {
+    state.manager.clone()
 }
 
 /// `POST /runs` — create and start a new research run.
@@ -240,10 +255,9 @@ async fn create_run_handler(
     State(state): State<DaemonState>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), StatusCode> {
-    let manager = manager_from_state(&state)?;
     let goal = body.get("goal").cloned().unwrap_or(body);
     let request = eureka::CreateRunRequest { goal };
-    let id = manager
+    let id = manager_from_state(&state)
         .create_run(request)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -254,8 +268,7 @@ async fn create_run_handler(
 async fn list_runs_handler(
     State(state): State<DaemonState>,
 ) -> Result<Json<Vec<serde_json::Value>>, StatusCode> {
-    let manager = manager_from_state(&state)?;
-    let records = manager
+    let records = manager_from_state(&state)
         .list_runs()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -271,8 +284,7 @@ async fn get_run_handler(
     State(state): State<DaemonState>,
     AxumPath(id): AxumPath<uuid::Uuid>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let manager = manager_from_state(&state)?;
-    let record = manager
+    let record = manager_from_state(&state)
         .get_run(id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
@@ -285,8 +297,7 @@ async fn checkpoint_run_handler(
     State(state): State<DaemonState>,
     AxumPath(id): AxumPath<uuid::Uuid>,
 ) -> Result<Json<RunCheckpoint>, StatusCode> {
-    let manager = manager_from_state(&state)?;
-    let checkpoint = manager
+    let checkpoint = manager_from_state(&state)
         .get_checkpoint(id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
@@ -299,8 +310,7 @@ async fn pause_run_handler(
     State(state): State<DaemonState>,
     AxumPath(id): AxumPath<uuid::Uuid>,
 ) -> Result<StatusCode, StatusCode> {
-    let manager = manager_from_state(&state)?;
-    manager
+    manager_from_state(&state)
         .pause_run(id)
         .await
         .map(|()| StatusCode::ACCEPTED)
@@ -312,8 +322,7 @@ async fn resume_run_handler(
     State(state): State<DaemonState>,
     AxumPath(id): AxumPath<uuid::Uuid>,
 ) -> Result<StatusCode, StatusCode> {
-    let manager = manager_from_state(&state)?;
-    manager
+    manager_from_state(&state)
         .resume_run(id)
         .await
         .map(|()| StatusCode::ACCEPTED)
@@ -325,8 +334,7 @@ async fn cancel_run_handler(
     State(state): State<DaemonState>,
     AxumPath(id): AxumPath<uuid::Uuid>,
 ) -> Result<StatusCode, StatusCode> {
-    let manager = manager_from_state(&state)?;
-    manager
+    manager_from_state(&state)
         .cancel_run(id)
         .await
         .map(|()| StatusCode::ACCEPTED)
@@ -339,7 +347,7 @@ async fn input_run_handler(
     AxumPath(id): AxumPath<uuid::Uuid>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<RunCheckpoint>, StatusCode> {
-    let manager = manager_from_state(&state)?;
+    let manager = manager_from_state(&state);
 
     let node_id = body
         .get("node_id")
@@ -377,16 +385,19 @@ async fn daemon_status_handler(State(state): State<DaemonState>) -> Json<serde_j
 // Daemon info file management
 // ---------------------------------------------------------------------------
 
+/// Path to the daemon info JSON file within the data directory.
 fn daemon_info_path(data_dir: &Path) -> PathBuf {
     data_dir.join("daemon.json")
 }
 
+/// Write daemon metadata to the daemon info file.
 fn write_daemon_info(data_dir: &Path, info: &DaemonInfo) -> Result<()> {
     let content = serde_json::to_string_pretty(info)?;
     std::fs::write(daemon_info_path(data_dir), content)?;
     Ok(())
 }
 
+/// Read daemon metadata from the daemon info file.
 pub(crate) fn read_daemon_info(data_dir: &Path) -> Result<DaemonInfo> {
     let path = daemon_info_path(data_dir);
     let content = std::fs::read_to_string(&path).with_context(|| {
@@ -395,10 +406,10 @@ pub(crate) fn read_daemon_info(data_dir: &Path) -> Result<DaemonInfo> {
             path.display()
         )
     })?;
-    let info: DaemonInfo = serde_json::from_str(&content).context("Failed to parse daemon info")?;
-    Ok(info)
+    serde_json::from_str(&content).context("Failed to parse daemon info")
 }
 
+/// Remove the daemon info file (cleanup on shutdown or stale state).
 fn remove_daemon_info(data_dir: &Path) {
     let path = daemon_info_path(data_dir);
     if path.exists() {
@@ -407,6 +418,7 @@ fn remove_daemon_info(data_dir: &Path) {
 }
 
 /// Wait for Ctrl+C or SIGTERM.
+#[allow(clippy::ignored_unit_patterns)]
 async fn shutdown_signal() {
     let ctrl_c = signal::ctrl_c();
 
@@ -429,40 +441,41 @@ async fn shutdown_signal() {
     }
 }
 
-/// Get a stable timestamp string for daemon info.
+/// Get a stable timestamp string for daemon info (no chrono dependency).
 fn chrono_now() -> String {
-    // Use a simple UTC timestamp without a chrono dependency
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
     let secs = now.as_secs();
-    // Format as ISO-like: YYYY-MM-DDTHH:MM:SSZ
-    // This avoids a chrono dependency
-    let days_since_epoch = secs / 86400;
-    let time_in_day = secs % 86400;
-    let hours = time_in_day / 3600;
-    let minutes = (time_in_day % 3600) / 60;
+    let days_since_epoch = secs / 86_400;
+    let time_in_day = secs % 86_400;
+    let hours = time_in_day / 3_600;
+    let minutes = (time_in_day % 3_600) / 60;
     let seconds = time_in_day % 60;
 
-    // Compute year/month/day from days since epoch (rough algorithm)
-    let (year, month, day) = days_to_date(days_since_epoch as i64);
+    let (year, month, day) = days_to_date(days_since_epoch);
 
     format!("{year:04}-{month:02}-{day:02}T{hours:02}:{minutes:02}:{seconds:02}Z")
 }
 
-/// Convert days since Unix epoch to (year, month, day).
-fn days_to_date(days: i64) -> (i64, u32, u32) {
-    // Algorithm from Howard Hinnant
-    let z = days + 719468;
-    let era = (if z >= 0 { z } else { z - 146096 }) / 146097;
-    let doe = z - era * 146097;
-    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+/// Convert days since Unix epoch to `(year, month, day)`.
+///
+/// Algorithm from Howard Hinnant.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+const fn days_to_date(days: u64) -> (i64, u32, u32) {
+    // Safety: current Unix timestamps (~2^31 seconds) fit easily in i64.
+    #[allow(clippy::cast_possible_wrap)]
+    let z = days as i64 + 719_468;
+    let era = (if z >= 0 { z } else { z - 146_096 }) / 146_097;
+    let doe = z - era * 146_097;
+    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
     let y = yoe + era * 400;
     let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
     let mp = (5 * doy + 2) / 153;
     let d = doy - (153 * mp + 2) / 5 + 1;
     let m = if mp < 10 { mp + 3 } else { mp - 9 };
     let y = if m <= 2 { y + 1 } else { y };
+    // Safety: month/day values are always in valid ranges
     (y, m as u32, d as u32)
 }
 
@@ -537,7 +550,7 @@ mod tests {
     }
 
     /// Days since Unix epoch for a given date.
-    fn days_since_ymd(year: i64, month: u32, day: u32) -> i64 {
+    fn days_since_ymd(year: i64, month: u32, day: u32) -> u64 {
         let (y, m) = if month <= 2 {
             (year - 1, month + 9)
         } else {
@@ -547,6 +560,6 @@ mod tests {
         let yoe = y - era * 400;
         let doy = (153 * i64::from(m) + 2) / 5 + i64::from(day) - 1;
         let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-        era * 146097 + doe - 719468
+        (era * 146_097 + doe - 719_468) as u64
     }
 }

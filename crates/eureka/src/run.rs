@@ -102,7 +102,7 @@ use crate::graph::node::PortMsg;
 /// Monotonically increasing revision for optimistic concurrency control.
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(transparent)]
-pub struct Revision(pub u64);
+pub struct Revision(pub i64);
 
 /// Errors returned by the versioned persistence APIs.
 #[derive(Debug, thiserror::Error)]
@@ -528,7 +528,7 @@ impl RunRepository for SqliteRunPersistence {
         let id = record.id;
         let id_text = id.to_string();
         self.blocking(move |connection| {
-            let actual: Option<u64> = connection
+            let actual: Option<i64> = connection
                 .query_row(
                     "SELECT revision FROM eureka_runs WHERE id = ?1",
                     [&id_text],
@@ -653,7 +653,7 @@ impl CheckpointStore for SqliteRunPersistence {
         let id = checkpoint.run_id;
         let id_text = id.to_string();
         self.blocking(move |connection| {
-            let current: Option<(String, u64)> = connection.query_row("SELECT checkpoint_json, revision FROM eureka_checkpoints WHERE run_id = ?1", [&id_text], |row| Ok((row.get(0)?, row.get(1)?))).optional()
+            let current: Option<(String, i64)> = connection.query_row("SELECT checkpoint_json, revision FROM eureka_checkpoints WHERE run_id = ?1", [&id_text], |row| Ok((row.get(0)?, row.get(1)?))).optional()
                 .map_err(|error| PersistenceError::Io(std::io::Error::other(error.to_string())))?;
             let actual = current.as_ref().map_or_else(Revision::default, |item| Revision(item.1));
             if let Some(expected) = expected { if actual != expected { return Err(PersistenceError::RevisionConflict { run_id: id, expected, actual }); } }

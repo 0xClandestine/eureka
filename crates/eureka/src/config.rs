@@ -240,10 +240,10 @@ impl AgentConfig {
     /// Return the per-agent override for `agent_id`, or `self` if none exists.
     #[must_use]
     pub fn resolve_for<'a>(
-        global: &'a AgentConfig,
-        overrides: &'a HashMap<String, AgentConfig>,
+        global: &'a Self,
+        overrides: &'a HashMap<String, Self>,
         agent_id: &str,
-    ) -> &'a AgentConfig {
+    ) -> &'a Self {
         overrides.get(agent_id).unwrap_or(global)
     }
 }

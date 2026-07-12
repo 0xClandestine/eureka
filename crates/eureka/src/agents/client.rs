@@ -11,7 +11,7 @@ use crate::run::RunEnvironment;
 use crate::scheduler::SchedulerEvent;
 use async_trait::async_trait;
 use rig_core::agent::AgentBuilder;
-use rig_core::completion::{CompletionModel, Prompt, ToolDefinition};
+use rig_core::completion::{CompletionModel, Prompt};
 use rig_core::tool::Tool;
 use tokio::sync::mpsc;
 
@@ -285,14 +285,14 @@ impl Tool for Submit {
     type Output = String;
     type Error = SubmitError;
 
-    async fn definition(&self, _prompt: String) -> ToolDefinition {
-        ToolDefinition {
-            name: Self::NAME.to_string(),
-            description: "Submit your final structured output. Call this exactly once \
+    fn description(&self) -> String {
+        "Submit your final structured output. Call this exactly once \
                           when your answer is complete."
-                .to_string(),
-            parameters: self.schema.clone(),
-        }
+            .to_string()
+    }
+
+    fn parameters(&self) -> serde_json::Value {
+        self.schema.clone()
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {

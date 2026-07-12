@@ -4,6 +4,7 @@
 //! inspect their status and outputs, pause/resume/cancel, inject inputs, and
 //! wait for completion.
 
+use std::io::Write;
 use std::path::Path;
 
 use anyhow::{Context, Result};
@@ -66,8 +67,8 @@ pub async fn execute_start(
     let result: Value = resp.json().await?;
     let id = result["id"]
         .as_str()
-        .map(|s| s.to_string())
-        .unwrap_or_else(|| "unknown".to_string());
+        .map_or_else(|| "unknown", |s| s)
+        .to_string();
 
     println!("Started run: {id}");
     Ok(())
@@ -101,8 +102,8 @@ pub async fn execute_list(data_dir: &Path) -> Result<()> {
     }
 
     println!(
-        "{:<38} {:<12} {:<8} {:<10} {}",
-        "ID", "Status", "Rounds", "Elapsed", "Goal"
+        "{:<38} {:<12} {:<8} {:<10} Goal",
+        "ID", "Status", "Rounds", "Elapsed"
     );
     println!("{}", "-".repeat(100));
 
@@ -149,7 +150,7 @@ pub async fn execute_status(data_dir: &Path, id: &str) -> Result<()> {
 
     let run: Value = resp.json().await?;
 
-    let status = run["status"].as_str().unwrap_or("unknown");
+    let run_status = run["status"].as_str().unwrap_or("unknown");
     let goal = run["goal"]["goal"]
         .as_str()
         .or_else(|| run["goal"].as_str())
@@ -158,10 +159,10 @@ pub async fn execute_status(data_dir: &Path, id: &str) -> Result<()> {
     let created = run["created_at"].as_str().unwrap_or("?");
     let error = run["error"].as_str();
 
-    let stats = &run["stats"];
+    let session_stats = &run["stats"];
 
     println!("Session:      {id}");
-    println!("Status:       {status}");
+    println!("Status:       {run_status}");
     println!("Goal:         {goal}");
     println!("Graph:        {graph}");
     println!("Created:      {created}");
@@ -170,12 +171,12 @@ pub async fn execute_status(data_dir: &Path, id: &str) -> Result<()> {
         println!("Error:        {err}");
     }
 
-    if !stats.is_null() {
-        let rounds = stats["rounds_completed"].as_u64().unwrap_or(0);
-        let elapsed = stats["elapsed_secs"].as_f64().unwrap_or(0.0);
-        let input_tokens = stats["total_input_tokens"].as_u64().unwrap_or(0);
-        let output_tokens = stats["total_output_tokens"].as_u64().unwrap_or(0);
-        let cost = stats["total_cost_usd"].as_f64().unwrap_or(0.0);
+    if !session_stats.is_null() {
+        let rounds = session_stats["rounds_completed"].as_u64().unwrap_or(0);
+        let elapsed = session_stats["elapsed_secs"].as_f64().unwrap_or(0.0);
+        let input_tokens = session_stats["total_input_tokens"].as_u64().unwrap_or(0);
+        let output_tokens = session_stats["total_output_tokens"].as_u64().unwrap_or(0);
+        let cost = session_stats["total_cost_usd"].as_f64().unwrap_or(0.0);
 
         println!();
         println!("Stats:");
@@ -230,14 +231,10 @@ pub async fn execute_output(
     }
 
     // Filter by node if requested
-    let filtered: Vec<&Value> = if let Some(node) = node_filter {
-        outputs
-            .iter()
-            .filter(|o| o["node_id"].as_str() == Some(node))
-            .collect()
-    } else {
-        outputs.iter().collect()
-    };
+    let filtered: Vec<&Value> = node_filter.map_or_else(
+        || outputs.iter().collect(),
+        |node| outputs.iter().filter(|o| o["node_id"].as_str() == Some(node)).collect(),
+    );
 
     if filtered.is_empty() {
         if let Some(node) = node_filter {
@@ -285,9 +282,8 @@ pub async fn execute_output(
                         let preview = serde_json::to_string(data).unwrap_or_default();
                         if preview.len() > 500 {
                             println!(
-                                "  data: {} {}",
-                                preview[..200].to_string(),
-                                "... (truncated)"
+                                "  data: {} ... (truncated)",
+                                &preview[..200]
                             );
                         } else {
                             println!("  data: {preview}");
@@ -337,27 +333,26 @@ pub async fn execute_wait(data_dir: &Path, id: &str, timeout_secs: Option<u64>) 
         }
 
         let run: Value = resp.json().await?;
-        let status = run["status"].as_str().unwrap_or("unknown");
+        let run_status = run["status"].as_str().unwrap_or("unknown");
 
-        match status {
+        match run_status {
             "Running" | "Paused" => {
                 let elapsed = run["stats"]["elapsed_secs"].as_f64().unwrap_or(0.0);
                 let rounds = run["stats"]["rounds_completed"].as_u64().unwrap_or(0);
                 print!(
-                    "\r  Status: {status:<12} Rounds: {rounds:<4} Elapsed: {}",
+                    "\r  Status: {run_status:<12} Rounds: {rounds:<4} Elapsed: {}",
                     format_elapsed(elapsed)
                 );
-                use std::io::Write;
                 std::io::stdout().flush()?;
                 tokio::time::sleep(std::time::Duration::from_secs(2)).await;
             }
             "Completed" | "Failed" | "Cancelled" => {
-                println!("\nSession {id} finished with status: {status}");
-                let stats = &run["stats"];
-                if !stats.is_null() {
-                    let rounds = stats["rounds_completed"].as_u64().unwrap_or(0);
-                    let elapsed = stats["elapsed_secs"].as_f64().unwrap_or(0.0);
-                    let cost = stats["total_cost_usd"].as_f64().unwrap_or(0.0);
+                println!("\nSession {id} finished with status: {run_status}");
+                let session_stats = &run["stats"];
+                if !session_stats.is_null() {
+                    let rounds = session_stats["rounds_completed"].as_u64().unwrap_or(0);
+                    let elapsed = session_stats["elapsed_secs"].as_f64().unwrap_or(0.0);
+                    let cost = session_stats["total_cost_usd"].as_f64().unwrap_or(0.0);
                     println!(
                         "  Rounds: {rounds}, Elapsed: {}, Cost: ${cost:.4}",
                         format_elapsed(elapsed)
@@ -512,6 +507,7 @@ fn parse_uuid(id: &str) -> Result<uuid::Uuid> {
 }
 
 /// Format elapsed seconds into a human-readable string.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
 fn format_elapsed(secs: f64) -> String {
     if secs < 60.0 {
         format!("{secs:.0}s")
