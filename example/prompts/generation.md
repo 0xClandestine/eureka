@@ -36,6 +36,17 @@ If a "context" input is present, it contains insights from the Meta-review
 agent. Use it to avoid repeating known weaknesses and to pursue promising
 directions explicitly mentioned.
 
+# Persistent Context
+
+Use the `context_store` tool to read and write shared research memory:
+- Write literature notes, promising leads, and rejected directions so other
+  agents can learn from your exploration.
+- Read prior round context to avoid retreading covered ground.
+- Use `read_round` to review all findings from a previous round.
+
+This context persists across rounds and is accessible to Reflection, Evolution,
+and the Meta-review agent.
+
 # Output
 
 For each hypothesis, clearly state the assumptions, propose a concrete

@@ -37,6 +37,20 @@ agents:
           properties:
             arxiv_id: { type: string, description: "ArXiv paper ID e.g. 2404.01234" }
         timeout_secs: 60
+      - name: context_store
+        description: Read or write shared agent context memory (persists across rounds)
+        command: [python3, tools/context_store.py]
+        args_schema:
+          type: object
+          required: [action]
+          properties:
+            action:  { type: string, enum: [read, write, list, read_round, delete] }
+            key:     { type: string, description: "Context key to read/write/delete" }
+            value:   { type: object, description: "JSON value to store (for write action)" }
+            prefix:  { type: string, description: "Key prefix filter (for list action)" }
+            round:   { type: integer, description: "Round number (for read_round action)" }
+            namespace: { type: string, description: "Logical namespace, defaults to 'shared'" }
+        timeout_secs: 10
     output_schema:
       type: object
       required: [hypotheses]
@@ -116,6 +130,20 @@ agents:
           properties:
             arxiv_id: { type: string }
         timeout_secs: 60
+      - name: context_store
+        description: Read or write shared agent context memory across rounds
+        command: [python3, tools/context_store.py]
+        args_schema:
+          type: object
+          required: [action]
+          properties:
+            action:  { type: string, enum: [read, write, list, read_round, delete] }
+            key:     { type: string }
+            value:   { type: object }
+            prefix:  { type: string }
+            round:   { type: integer }
+            namespace: { type: string }
+        timeout_secs: 10
     output_schema:
       type: object
       required: [reviews]
@@ -170,6 +198,20 @@ agents:
           properties:
             arxiv_id: { type: string }
         timeout_secs: 60
+      - name: context_store
+        description: Read or write shared agent context memory across rounds
+        command: [python3, tools/context_store.py]
+        args_schema:
+          type: object
+          required: [action]
+          properties:
+            action:  { type: string, enum: [read, write, list, read_round, delete] }
+            key:     { type: string }
+            value:   { type: object }
+            prefix:  { type: string }
+            round:   { type: integer }
+            namespace: { type: string }
+        timeout_secs: 10
     output_schema:
       type: object
       required: [hypotheses]

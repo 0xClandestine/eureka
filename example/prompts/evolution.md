@@ -48,3 +48,11 @@ For each offspring:
 
 Use your search tools to find supporting literature and verify citations before
 adding them. Produce a diverse set of improved hypotheses across all strategies.
+
+# Persistent Context
+
+Use the `context_store` tool:
+- Read literature notes and rejected directions from Generation.
+- Read review critiques from Reflection to understand what needs improvement.
+- Write your evolution results so Meta-review can analyse which strategies
+  worked best.
