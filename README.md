@@ -33,24 +33,18 @@ generation → reflection → ranking → evolution → proximity → supervisor
 - Feedback edges and synchronized execution rounds.
 - Cost, token, wall-clock, and round budget backstops.
 - Per-run SQLite paths for control-node and agent-tool state.
-- Durable lifecycle records through the JSON-backed `RunStore`.
+- Durable lifecycle records through the JSON-backed `RunStore` or SQLite.
+- Runtime-owned SQLite run/checkpoint tables with revision checks.
+- Durable scheduler checkpoints and process-restart resume at scheduler boundaries.
+- Terminal artifact persistence in checkpoints.
+- Human artifact injection into paused runs.
+- `RunManager` lifecycle service for background execution and recovery.
+- HTTP endpoints for graph data, live state, SSE events, durable status, and
+  managed run lifecycle (`/runs`).
 - Optional durable scheduler event traces in JSONL format.
-- HTTP endpoints for graph data, live state, SSE events, and durable run status.
 
-### In progress
-
-The persistence foundation is being expanded toward full application workflows:
-
-- Runtime-owned database abstractions and migrations.
-- Durable scheduler checkpoints.
-- Process-restart resume from pending graph state.
-- Human artifact injection and review steps.
-- A higher-level `RunManager` API.
-- Complete HTTP run lifecycle endpoints.
-- Durable terminal artifact/result retrieval.
-
-`GET /api/run` currently exposes durable lifecycle metadata. It is **not yet** a
-checkpoint-based resume API.
+The runtime does not resume an activation interrupted halfway through an LLM or
+subprocess call; recovery starts from the latest completed scheduler boundary.
 
 ## Quick start
 
