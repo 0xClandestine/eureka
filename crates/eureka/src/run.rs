@@ -92,6 +92,44 @@ use serde::{Deserialize, Serialize};
 
 use crate::config::RunStats;
 
+/// Monotonically increasing revision for optimistic concurrency control.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct Revision(pub u64);
+
+/// Errors returned by the versioned persistence APIs.
+#[derive(Debug, thiserror::Error)]
+pub enum PersistenceError {
+    /// The requested run does not exist.
+    #[error("run {0} was not found")]
+    NotFound(uuid::Uuid),
+    /// A run already exists with the requested identifier.
+    #[error("run {0} already exists")]
+    AlreadyExists(uuid::Uuid),
+    /// An optimistic-concurrency revision did not match.
+    #[error("revision conflict for run {run_id}: expected {expected:?}, actual {actual:?}")]
+    RevisionConflict {
+        /// The run whose revision conflicted.
+        run_id: uuid::Uuid,
+        /// The revision supplied by the caller.
+        expected: Revision,
+        /// The revision currently stored.
+        actual: Revision,
+    },
+    /// The persistence backend could not complete an operation.
+    #[error("persistence I/O error: {0}")]
+    Io(#[source] std::io::Error),
+    /// A persisted record was malformed.
+    #[error("invalid persisted run record: {0}")]
+    Serialization(String),
+}
+
+impl From<std::io::Error> for PersistenceError {
+    fn from(error: std::io::Error) -> Self {
+        Self::Io(error)
+    }
+}
+
 /// Lifecycle state persisted for a run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -121,6 +159,9 @@ pub struct RunRecord {
     pub goal: serde_json::Value,
     /// Current lifecycle status.
     pub status: RunStatus,
+    /// Revision used for optimistic concurrency control.
+    #[serde(default)]
+    pub revision: Revision,
     /// Most recent scheduler statistics, when available.
     pub stats: Option<RunStats>,
     /// Human-readable failure or cancellation reason.
@@ -136,13 +177,42 @@ impl RunRecord {
             graph: graph.into(),
             goal,
             status: RunStatus::Created,
+            revision: Revision::default(),
             stats: None,
             error: None,
         }
     }
 }
 
-/// Persistence interface for durable run records.
+/// Filter used when listing persisted runs.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct RunFilter {
+    /// Restrict results to one lifecycle status.
+    pub status: Option<RunStatus>,
+    /// Maximum number of records to return.
+    pub limit: Option<usize>,
+}
+
+/// Versioned persistence interface used by run managers and recovery code.
+#[async_trait]
+pub trait RunRepository: Send + Sync {
+    /// Insert a new run at revision zero.
+    async fn create(&self, record: RunRecord) -> Result<RunRecord, PersistenceError>;
+    /// Load a run by ID.
+    async fn get_versioned(&self, id: uuid::Uuid) -> Result<Option<RunRecord>, PersistenceError>;
+    /// Replace a run only when its current revision equals `expected`.
+    async fn save_if_revision(
+        &self,
+        record: RunRecord,
+        expected: Revision,
+    ) -> Result<RunRecord, PersistenceError>;
+    /// List records matching a filter.
+    async fn list(&self, filter: RunFilter) -> Result<Vec<RunRecord>, PersistenceError>;
+    /// Delete a run.
+    async fn delete_versioned(&self, id: uuid::Uuid) -> Result<(), PersistenceError>;
+}
+
+/// Compatibility persistence interface for existing callers.
 #[async_trait]
 pub trait RunStore: Send + Sync {
     /// Insert or replace a run record.
@@ -151,12 +221,15 @@ pub trait RunStore: Send + Sync {
     async fn get(&self, id: uuid::Uuid) -> std::io::Result<Option<RunRecord>>;
     /// Delete a run record.
     async fn delete(&self, id: uuid::Uuid) -> std::io::Result<()>;
+    /// List all run records.
+    async fn list(&self) -> std::io::Result<Vec<RunRecord>>;
 }
 
 /// JSON-file-backed [`RunStore`].
 #[derive(Debug, Clone)]
 pub struct FileRunStore {
     directory: Arc<PathBuf>,
+    lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 impl FileRunStore {
@@ -165,6 +238,7 @@ impl FileRunStore {
     pub fn new(directory: impl Into<PathBuf>) -> Self {
         Self {
             directory: Arc::new(directory.into()),
+            lock: Arc::new(tokio::sync::Mutex::new(())),
         }
     }
 
@@ -177,27 +251,8 @@ impl FileRunStore {
     fn path_for(&self, id: uuid::Uuid) -> PathBuf {
         self.directory.join(format!("{id}.json"))
     }
-}
 
-#[async_trait]
-impl RunStore for FileRunStore {
-    async fn save(&self, record: RunRecord) -> std::io::Result<()> {
-        let directory = self.directory.clone();
-        let path = self.path_for(record.id);
-        let temp_path = path.with_extension("json.tmp");
-        let bytes = serde_json::to_vec_pretty(&record)
-            .map_err(|error| std::io::Error::other(error.to_string()))?;
-
-        tokio::task::spawn_blocking(move || {
-            std::fs::create_dir_all(directory.as_path())?;
-            std::fs::write(&temp_path, bytes)?;
-            std::fs::rename(temp_path, path)
-        })
-        .await
-        .map_err(|error| std::io::Error::other(error.to_string()))?
-    }
-
-    async fn get(&self, id: uuid::Uuid) -> std::io::Result<Option<RunRecord>> {
+    async fn read_record(&self, id: uuid::Uuid) -> std::io::Result<Option<RunRecord>> {
         let path = self.path_for(id);
         tokio::task::spawn_blocking(move || match std::fs::read(path) {
             Ok(bytes) => serde_json::from_slice(&bytes)
@@ -210,7 +265,47 @@ impl RunStore for FileRunStore {
         .map_err(|error| std::io::Error::other(error.to_string()))?
     }
 
-    async fn delete(&self, id: uuid::Uuid) -> std::io::Result<()> {
+    async fn write_record(&self, record: &RunRecord) -> std::io::Result<()> {
+        let directory = self.directory.clone();
+        let path = self.path_for(record.id);
+        let temp_path = path.with_extension("json.tmp");
+        let bytes = serde_json::to_vec_pretty(record)
+            .map_err(|error| std::io::Error::other(error.to_string()))?;
+        tokio::task::spawn_blocking(move || {
+            std::fs::create_dir_all(directory.as_path())?;
+            std::fs::write(&temp_path, bytes)?;
+            std::fs::rename(temp_path, path)
+        })
+        .await
+        .map_err(|error| std::io::Error::other(error.to_string()))?
+    }
+
+    async fn list_records(&self) -> std::io::Result<Vec<RunRecord>> {
+        let directory = self.directory.clone();
+        tokio::task::spawn_blocking(move || {
+            let entries = match std::fs::read_dir(directory.as_path()) {
+                Ok(entries) => entries,
+                Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(Vec::new()),
+                Err(error) => return Err(error),
+            };
+            let mut records = Vec::new();
+            for entry in entries {
+                let path = entry?.path();
+                if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                    continue;
+                }
+                let bytes = std::fs::read(path)?;
+                let record = serde_json::from_slice(&bytes)
+                    .map_err(|error| std::io::Error::other(error.to_string()))?;
+                records.push(record);
+            }
+            Ok(records)
+        })
+        .await
+        .map_err(|error| std::io::Error::other(error.to_string()))?
+    }
+
+    async fn delete_record(&self, id: uuid::Uuid) -> std::io::Result<()> {
         let path = self.path_for(id);
         tokio::task::spawn_blocking(move || match std::fs::remove_file(path) {
             Ok(()) => Ok(()),
@@ -219,6 +314,96 @@ impl RunStore for FileRunStore {
         })
         .await
         .map_err(|error| std::io::Error::other(error.to_string()))?
+    }
+}
+
+#[async_trait]
+impl RunRepository for FileRunStore {
+    async fn create(&self, mut record: RunRecord) -> Result<RunRecord, PersistenceError> {
+        let _guard = self.lock.lock().await;
+        if self
+            .read_record(record.id)
+            .await
+            .map_err(PersistenceError::from)?
+            .is_some()
+        {
+            return Err(PersistenceError::AlreadyExists(record.id));
+        }
+        record.revision = Revision::default();
+        self.write_record(&record)
+            .await
+            .map_err(PersistenceError::from)?;
+        Ok(record)
+    }
+
+    async fn get_versioned(&self, id: uuid::Uuid) -> Result<Option<RunRecord>, PersistenceError> {
+        self.read_record(id).await.map_err(PersistenceError::from)
+    }
+
+    async fn save_if_revision(
+        &self,
+        mut record: RunRecord,
+        expected: Revision,
+    ) -> Result<RunRecord, PersistenceError> {
+        let _guard = self.lock.lock().await;
+        let current = self
+            .read_record(record.id)
+            .await
+            .map_err(PersistenceError::from)?
+            .ok_or(PersistenceError::NotFound(record.id))?;
+        if current.revision != expected {
+            return Err(PersistenceError::RevisionConflict {
+                run_id: record.id,
+                expected,
+                actual: current.revision,
+            });
+        }
+        record.revision = Revision(expected.0.saturating_add(1));
+        self.write_record(&record)
+            .await
+            .map_err(PersistenceError::from)?;
+        Ok(record)
+    }
+
+    async fn list(&self, filter: RunFilter) -> Result<Vec<RunRecord>, PersistenceError> {
+        let _guard = self.lock.lock().await;
+        let mut records = self.list_records().await.map_err(PersistenceError::from)?;
+        if let Some(status) = filter.status {
+            records.retain(|record| record.status == status);
+        }
+        records.sort_by_key(|record| record.id);
+        if let Some(limit) = filter.limit {
+            records.truncate(limit);
+        }
+        Ok(records)
+    }
+
+    async fn delete_versioned(&self, id: uuid::Uuid) -> Result<(), PersistenceError> {
+        let _guard = self.lock.lock().await;
+        self.delete_record(id).await.map_err(PersistenceError::from)
+    }
+}
+
+#[async_trait]
+impl RunStore for FileRunStore {
+    async fn save(&self, record: RunRecord) -> std::io::Result<()> {
+        let _guard = self.lock.lock().await;
+        self.write_record(&record).await
+    }
+
+    async fn get(&self, id: uuid::Uuid) -> std::io::Result<Option<RunRecord>> {
+        let _guard = self.lock.lock().await;
+        self.read_record(id).await
+    }
+
+    async fn delete(&self, id: uuid::Uuid) -> std::io::Result<()> {
+        let _guard = self.lock.lock().await;
+        self.delete_record(id).await
+    }
+
+    async fn list(&self) -> std::io::Result<Vec<RunRecord>> {
+        let _guard = self.lock.lock().await;
+        self.list_records().await
     }
 }
 
@@ -262,5 +447,33 @@ mod tests {
         assert_eq!(loaded.goal, record.goal);
         store.delete(id).await.unwrap();
         assert!(store.get(id).await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn versioned_file_store_rejects_stale_updates_and_lists_runs() {
+        let directory = tempfile::tempdir().unwrap();
+        let store = FileRunStore::new(directory.path());
+        let id = uuid::Uuid::now_v7();
+        let created = RunRepository::create(
+            &store,
+            RunRecord::new(id, "graph.yml", serde_json::json!({})),
+        )
+        .await
+        .unwrap();
+        let mut updated = created.clone();
+        updated.status = RunStatus::Running;
+        let updated = RunRepository::save_if_revision(&store, updated, created.revision)
+            .await
+            .unwrap();
+        let mut stale = created;
+        stale.status = RunStatus::Failed;
+        let error = RunRepository::save_if_revision(&store, stale, Revision(0))
+            .await
+            .unwrap_err();
+        assert!(matches!(error, PersistenceError::RevisionConflict { .. }));
+        let records = RunRepository::list(&store, RunFilter::default())
+            .await
+            .unwrap();
+        assert_eq!(records, vec![updated]);
     }
 }
