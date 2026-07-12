@@ -1,68 +1,99 @@
 # Eureka
 
-A graph-based **AI co-scientist** runtime written in Rust. A research run is a
-directed graph of *nodes* — LLM agents and subprocess control nodes — connected
-by typed *edges*. The topology, prompts, tools, and control-node definitions
-all live in a single YAML manifest; the runtime loads it, validates the graph
-structurally, and executes it with a concurrent, budget-aware scheduler. There
-is no per-agent Rust code — agents are data.
+Eureka is a graph-based AI runtime for autonomous research and long-running
+application workflows. A run is a directed graph of LLM agents and subprocess
+control nodes connected by typed ports and artifacts. The graph topology,
+prompts, tools, and control-node commands are defined in one YAML manifest;
+the Rust runtime validates and executes it with a concurrent, budget-aware
+scheduler.
 
-Eureka ships with a reproduction of Google Research's [AI co-scientist](https://research.google/blog/ai-co-scientist/)
-topology (`example/coscientist.yml`): generation → reflection → ranking →
-evolution → proximity → supervisor, with feedback loops that let the system
-refine hypotheses across rounds.
+Eureka is designed for workflows such as:
 
-## Features
+```text
+intake → classify → review → summarize
+```
 
-- **Topology is data.** Adding an agent or control node never requires Rust
-  changes — only a YAML edit.
-- **Build-time validation.** Before any model call, every graph is checked for
-  port-kind matching, dangling required inputs, reachability, governed cycles
-  (every SCC must contain a node with a `halt` output), and sink presence.
-- **Concurrent execution.** Activations run as tokio tasks capped by
-  `scheduler.max_in_flight`; the semaphore now actually parallelizes node
-  execution. Cancellation aborts in-flight LLM calls cleanly.
-- **Input joining.** A multi-input node fires once with *all* its available
-  inputs (required first, then any optional that arrived) — not once per input.
-- **Budget backstops.** Token usage flows back from each provider call (via
-  rig's normalized `Usage`) and is aggregated into `RunStats`, so
-  `max_cost_usd` / `max_tokens` / `max_wallclock` / `max_rounds` actually fire.
-  Cost uses per-input/per-output rates.
-- **Subprocess control nodes.** External programs (Python, shell, any
-  executable) act as graph nodes via a simple JSON-envelope stdin/stdout
-  protocol, with `EUREKA_DB_PATH` for cross-round SQLite persistence.
-- **Real-time observability.** An axum server streams `SchedulerEvent`s over
-  SSE (`/api/graph`, `/api/state`, `/api/events`).
-- **12 LLM providers** via [`rig`](https://crates.io/crates/rig-core):
-  Anthropic, OpenAI, OpenRouter, Gemini, Groq, Mistral, Cohere, DeepSeek,
-  Perplexity, Together, xAI, and Ollama (local).
+as well as iterative research loops such as the shipped co-scientist graph:
+
+```text
+generation → reflection → ranking → evolution → proximity → supervisor
+     ↑___________________________________________________________|
+```
+
+## Current status
+
+### Implemented
+
+- YAML-defined graph topology with typed ports and JSON artifacts.
+- LLM agent nodes with configurable prompts, output schemas, models, and tools.
+- Python, shell, or arbitrary executable control nodes using JSON stdin/stdout.
+- Port-kind validation, reachability checks, sink checks, governed-cycle checks,
+  and optional input ports.
+- Concurrent node activation with configurable in-flight limits.
+- Feedback edges and synchronized execution rounds.
+- Cost, token, wall-clock, and round budget backstops.
+- Per-run SQLite paths for control-node and agent-tool state.
+- Durable lifecycle records through the JSON-backed `RunStore`.
+- Optional durable scheduler event traces in JSONL format.
+- HTTP endpoints for graph data, live state, SSE events, and durable run status.
+
+### In progress
+
+The persistence foundation is being expanded toward full application workflows:
+
+- Runtime-owned database abstractions and migrations.
+- Durable scheduler checkpoints.
+- Process-restart resume from pending graph state.
+- Human artifact injection and review steps.
+- A higher-level `RunManager` API.
+- Complete HTTP run lifecycle endpoints.
+- Durable terminal artifact/result retrieval.
+
+`GET /api/run` currently exposes durable lifecycle metadata. It is **not yet** a
+checkpoint-based resume API.
 
 ## Quick start
 
+Build the release binary:
+
 ```bash
-# Build (binary is target/release/eureka-cli)
 cargo build --release
-
-# Validate the shipped graph
-./target/release/eureka-cli validate example/coscientist.yml
-
-# List the agents/control-nodes/tools declared by the configured graph
-./target/release/eureka-cli list
-
-# Run a research session (needs an API key — OpenRouter by default)
-export OPENROUTER_API_KEY=sk-or-...
-./target/release/eureka-cli run "Identify novel catalysts for CO₂ reduction" \
-  --domain chemistry --port 7773
 ```
 
-Then open `http://127.0.0.1:7773` for the live UI (graph topology, active
-nodes, per-node outputs, SSE event stream). Pass `--port 0` to disable it.
+Validate the shipped graph before making a model call:
+
+```bash
+cargo run --release -- validate example/coscientist.yml
+```
+
+Run a research session. The default provider is OpenRouter:
+
+```bash
+export OPENROUTER_API_KEY=sk-or-...
+cargo run --release -- run \
+  "Identify novel catalysts for CO₂ reduction" \
+  --domain chemistry \
+  --port 7773
+```
+
+Open `http://127.0.0.1:7773` for the live UI. Use `--port 0` to disable the
+HTTP server.
+
+The release binary is:
+
+```text
+target/release/eureka-cli
+```
 
 ## Configuration
 
-Eureka uses layered config: `DEFAULT_TOML` (bundled) → `eureka.toml` (or
-`--config`) → `EUREKA_*` environment variables → CLI flags. The shipped
-`eureka.toml`:
+Configuration is layered in this order:
+
+```text
+built-in defaults → eureka.toml → EUREKA_* environment variables → CLI flags
+```
+
+A minimal configuration looks like:
 
 ```toml
 graph = "example/coscientist.yml"
@@ -71,13 +102,9 @@ graph = "example/coscientist.yml"
 kind = "openrouter"
 generation_model = "deepseek/deepseek-v4-flash"
 
-# Per-agent model overrides (optional)
-# [provider.agent_models]
-# reflection  = "anthropic/claude-opus-4-5"
-
-# Per-input/per-output pricing so the cost backstop can fire (optional)
+# Optional per-model pricing used by the cost budget backstop.
 # [provider.pricing]
-# input_per_million  = 0.27
+# input_per_million = 0.27
 # output_per_million = 1.10
 
 [scheduler]
@@ -86,161 +113,257 @@ max_in_flight = 8
 [budget]
 max_cost_usd = 25.0
 max_tokens = 5_000_000
-max_wallclock = "45m"   # accepts "30s", "45m", "2h", or a float
+max_wallclock = "45m"
 max_rounds = 100
+
+[tracing]
+enabled = false
+include_artifacts = true
 ```
 
-Set the matching `*_API_KEY` env var for your provider. Other providers:
+Set the API key matching the provider configured in `[provider]`:
 
-| `kind` | Env var | Example model |
+| Provider | Environment variable | Example model |
 |---|---|---|
 | `anthropic` | `ANTHROPIC_API_KEY` | `claude-sonnet-4-20250514` |
 | `openai` | `OPENAI_API_KEY` | `gpt-4o` |
+| `openrouter` | `OPENROUTER_API_KEY` | `deepseek/deepseek-v4-flash` |
 | `gemini` | `GEMINI_API_KEY` | `gemini-2.0-flash` |
 | `groq` | `GROQ_API_KEY` | `llama-3.3-70b-versatile` |
 | `deepseek` | `DEEPSEEK_API_KEY` | `deepseek-chat` |
-| `xai` | `XAI_API_KEY` | `grok-3-mini` |
-| `ollama` | _(none)_ | `llama3.1:8b` |
-
-…and `mistral`, `cohere`, `perplexity`, `together`.
-
-> **Env-var note:** figment splits `EUREKA_*` keys on `_`, so
-> `EUREKA_PROVIDER_KIND` → `provider.kind`. The `budget.max_wallclock` field
-> contains an underscore, so set it via `EUREKA_BUDGET_MAXWALLCLOCK` (the
-> underscore-free alias) or via the config file.
+| `mistral` | `MISTRAL_API_KEY` | provider-specific |
+| `cohere` | `COHERE_API_KEY` | provider-specific |
+| `perplexity` | `PERPLEXITY_API_KEY` | provider-specific |
+| `together` | `TOGETHER_API_KEY` | provider-specific |
+| `xai` | `XAI_API_KEY` | provider-specific |
+| `ollama` | none | `llama3.1:8b` |
 
 ## Graph manifests
 
-A graph is one YAML file. Agents are LLM nodes (prompt + ports + JSON-schema
-output + shell tools); control nodes are subprocess-backed. Example:
+A manifest defines agents, control nodes, and edges. A compact example:
 
 ```yaml
-name: My Graph
+name: Review workflow
+
 agents:
-  - id: generation
-    prompt: prompts/generation.md
+  - id: classifier
+    prompt: prompts/classifier.md
     inputs:
-      - { port: in, kind: Goal }
-      - { port: context, kind: Insights, required: false }   # optional input
+      - { port: in, kind: Intake }
     outputs:
-      - { port: out, kind: Hypotheses }
-    config:
-      temperature: 0.9
-      max_iterations: 15
-    tools:
-      - name: search_literature
-        description: Search arXiv for papers matching a query
-        command: [python3, tools/arxiv_search.py]
-        args_schema: { type: object, required: [query], properties: { query: { type: string } } }
-        timeout_secs: 30
+      - { port: out, kind: Classification }
     output_schema:
       type: object
-      required: [hypotheses]
+      required: [category]
       properties:
-        hypotheses: { type: array, items: { type: object } }
+        category: { type: string }
 
 control:
-  - id: supervisor
-    kind: supervisor
-    command: [python3, control/supervisor.py]
-    inputs:  [{ port: in, kind: Hypotheses }]
+  - id: review
+    kind: human_review
+    command: [python3, control/review.py]
+    inputs:
+      - { port: in, kind: Classification }
     outputs:
-      - { port: continue, kind: Hypotheses }
-      - { port: halt, kind: Control }
-    config: { max_rounds: 5 }
+      - { port: approved, kind: Decision }
+      - { port: rejected, kind: Decision }
 
 edges:
-  - { from_node: generation, from_port: out, to_node: supervisor, to_port: in }
-  - { from_node: supervisor, from_port: continue, to_node: generation, to_port: in, feedback: true }
+  - { from_node: classifier, from_port: out,
+      to_node: review, to_port: in }
 ```
 
-Key concepts:
+Important concepts:
 
-- **Artifact** = `(kind: String, data: JSON)`. Kinds are opaque strings matched
-  at edge endpoints by the validator — there is no central enum.
-- **Feedback edges** (`feedback: true`) close cycles and are excluded from
-  source-node detection so cyclic-but-source nodes still receive the initial
-  goal. They deliver to `round + 1`.
-- **Optional inputs** use `required: false`; inputs are required by default.
-- **Sink** = a node emitting an artifact kind no other node consumes.
+- An **artifact** is `{ kind, data }`. Artifact kinds are opaque strings.
+- A **port** declares the artifact kind accepted or emitted at that endpoint.
+- Inputs are required by default; use `required: false` for optional inputs.
+- A **forward edge** delivers work in the current round.
+- A **feedback edge** delivers work in the next round and closes an iterative
+  cycle.
+- A **source node** receives the initial `Goal` artifact supplied to the run.
+- A **sink node** has no downstream consumer for its emitted artifact.
 
-See `example/coscientist.yml` for a full topology, and
-[`AGENTS.md`](AGENTS.md) for the detailed architecture, build/test commands,
-and invariants.
+See [`example/coscientist.yml`](example/coscientist.yml) for the complete
+shipped graph.
 
 ## Control-node protocol
 
-Control nodes communicate via JSON on stdin/stdout:
+A control node is an executable declared in the manifest. Eureka starts it for
+an activation, writes one JSON call envelope to stdin, and reads zero or more
+JSON emit envelopes from stdout.
 
-- **Call** (stdin): one JSON envelope. Carries a backward-compatible top-level
-  `port`/`artifact` (the first input) **and** an `inputs` array of
-  `{port, artifact}` objects, one per populated input port:
-  ```json
-  {"port": "in", "artifact": {"kind": "Goal", "data": {...}},
-   "inputs": [{"port": "in", "artifact": {...}}, {"port": "context", "artifact": {...}}]}
-  ```
-- **Emit** (stdout): zero or more envelopes, one per line:
-  `{"port": "out", "artifact": {"kind": "...", "data": {...}}}`
+Call envelope:
 
-Environment variables: `EUREKA_SESSION_ID`, `EUREKA_NODE_ID`, `EUREKA_ROUND`,
-`EUREKA_CONFIG` (JSON-encoded node config), `EUREKA_DB_PATH` (per-session
-SQLite path for cross-round persistence). See `example/control/*.py` for
-reference implementations (Elo ranker, proximity graph, supervisor).
+```json
+{
+  "port": "in",
+  "artifact": { "kind": "Intake", "data": { "text": "..." } },
+  "inputs": [
+    { "port": "in", "artifact": { "kind": "Intake", "data": { "text": "..." } } }
+  ]
+}
+```
+
+Emit envelope, one per output line:
+
+```json
+{
+  "port": "out",
+  "artifact": { "kind": "Classification", "data": { "category": "..." } }
+}
+```
+
+Each control node receives these run-scoped environment variables:
+
+```text
+EUREKA_SESSION_ID       stable run identifier
+EUREKA_NODE_ID          manifest node ID
+EUREKA_ROUND            current scheduler round
+EUREKA_CONFIG           JSON-encoded node config
+EUREKA_DB_PATH          optional per-run SQLite path
+EUREKA_DB_SCHEMA_VERSION runtime database contract version
+EUREKA_DB_NAMESPACE     advisory plugin namespace, normally the node ID
+```
+
+Agent shell tools receive the same run-scoped environment. This allows both
+control nodes and tools to use the per-run SQLite database consistently.
+
+Plugins should keep their own tables namespaced and must not modify tables
+owned by the future runtime persistence layer, which will use the `eureka_*`
+namespace.
+
+Reference implementations are in [`example/control/`](example/control/):
+
+- `supervisor.py` — cross-round context and supervisor state.
+- `ranker.py` — Elo ratings and ranking state.
+- `proximity.py` — in-memory proximity graph generation.
+
+## Persistence and run files
+
+The CLI stores run files under:
+
+```text
+<graph directory>/.eureka/sessions/
+```
+
+A run may contain:
+
+```text
+<run_id>.sqlite        # control/plugin and tool state
+<run_id>.json          # durable lifecycle metadata
+<run_id>.traces.jsonl  # optional scheduler event trace
+```
+
+The current SQLite integration provides a shared per-run database path to
+executable nodes. The Rust scheduler does not yet persist its activation
+queues, input buffers, or checkpoints in SQLite. Consequently, the database
+currently provides cross-round plugin memory, not full scheduler recovery.
+
+See [`docs/db-session-spec.md`](docs/db-session-spec.md) for the planned
+persistence abstractions, runtime-owned schema, checkpoint model, pause/resume
+semantics, human input, and application service API.
+
+## HTTP and observability
+
+When started with `--port PORT`, the CLI server exposes:
+
+| Endpoint | Purpose |
+|---|---|
+| `GET /api/graph` | Validated graph topology. |
+| `GET /api/state` | In-memory live state for the active run. |
+| `GET /api/events` | Server-sent event stream of scheduler events. |
+| `GET /api/run` | Durable lifecycle metadata for the run. |
+
+The live state and SSE endpoints are intended for active-run UIs. The durable
+run endpoint is suitable for status polling after the process or UI restarts,
+but does not currently restore execution.
+
+Enable JSONL tracing with:
+
+```toml
+[tracing]
+enabled = true
+include_artifacts = false
+```
+
+Trace files are written next to the run database as:
+
+```text
+.eureka/sessions/<run_id>.traces.jsonl
+```
+
+See [`docs/tracing-spec.md`](docs/tracing-spec.md) for the file format,
+configuration, durability behavior, and planned extensions.
+
+## Library entry point
+
+The primary library entry point is `Session`:
+
+```rust,no_run
+use eureka::config::EurekaConfig;
+use eureka::Session;
+
+# async fn example() -> Result<(), Box<dyn std::error::Error>> {
+let config = EurekaConfig::load(Some(std::path::Path::new("eureka.toml")))?;
+let mut session = Session::new(
+    config,
+    &uuid::Uuid::now_v7().to_string(),
+    None,
+)?;
+
+let stats = session
+    .run(serde_json::json!({
+        "goal": "Find promising catalysts for CO₂ reduction",
+        "domain": "chemistry"
+    }))
+    .await?;
+
+println!("completed {} rounds", stats.rounds_completed);
+# Ok(())
+# }
+```
+
+For lifecycle metadata, use `Session::run_with_store` with a `RunStore`. For
+HTTP applications, prefer the higher-level run-management abstractions as they
+are implemented from [`docs/db-session-spec.md`](docs/db-session-spec.md).
+
+## Development
+
+Run the test suite:
+
+```bash
+cargo test --release
+```
+
+Build the library and CLI:
+
+```bash
+cargo build --release
+```
+
+Run linting:
+
+```bash
+cargo clippy --all-targets --release
+```
+
+The repository has two complementary contributor references:
+
+- [`AGENTS.md`](AGENTS.md) — architecture, invariants, repository conventions,
+  and troubleshooting notes.
+- [`example/COSCIENTIST.md`](example/COSCIENTIST.md) — design notes for the
+  shipped AI co-scientist graph.
 
 ## Repository layout
 
+```text
+crates/eureka/       runtime library
+crates/eureka-cli/   CLI and HTTP server
+example/             shipped graph, prompts, controls, and tools
+docs/                HTTP, persistence, and tracing specifications
+eureka.toml          example runtime configuration
 ```
-crates/
-  eureka/        # the library: graph, scheduler, agents, control, manifest, session, config
-  eureka-cli/    # the `eureka-cli` binary (run | validate | list) + UI server
-example/         # shipped co-scientist graph (manifest, prompts, control nodes, tools)
-eureka.toml      # example runtime config
-AGENTS.md        # deep guide for contributors and AI agents
-```
-
-## Build, test, lint
-
-```bash
-cargo build --release                  # binary: target/release/eureka-cli
-cargo test --release                   # 71 tests
-cargo clippy --all-targets --release  # zero errors (unwrap/expect allowed in tests)
-```
-
-The workspace sets `pedantic`/`nursery` to `warn`, `unwrap_used`/`expect_used`
-to `deny` in production code (allowed in `#[cfg(test)]`), and
-`unsafe_code` to `forbid`. Rust toolchain is pinned to 1.96.
-
-## Architecture
-
-```
-config ──► manifest (YAML) ──► GraphSpec ──► validate ──► Session ──► Scheduler
-                                                                │
-                                              ┌─────────────────┴────────────────┐
-                                              ▼                                  ▼
-                                         LlmAgentNode                       ControlNode
-                                         (rig agent loop)                   (subprocess)
-```
-
-- **`graph`** — pure topology primitives (no I/O, no domain): nodes, ports,
-  artifacts, edges, spec, validator.
-- **`scheduler`** — event-driven executor: input joining, concurrent
-  activations (JoinSet), synchronized round model, budget backstops.
-- **`agents`** — LLM-backed nodes: `AgentDef`, `RigClient` (type-erased agentic
-  loop via rig), `CommandTool` (shell tools).
-- **`control`** — subprocess-backed nodes + the shared process runner.
-- **`manifest`** — YAML loader (graph, agent, control, prompt paths).
-- **`session`** — assembles all of the above; single entry point.
-
-See [`AGENTS.md`](AGENTS.md) for the module map, key invariants, and a catalog
-of resolved issues.
-
-## Status
-
-Early. The runtime is feature-complete and all known gotchas are resolved (see
-`AGENTS.md`), but the system has not been validated end-to-end against a live
-LLM provider beyond smoke tests. Token/cost backstops depend on the provider
-reporting usage via rig's normalized `Usage`; providers that don't report usage
-report 0, in which case only the wall-clock and round backstops fire.
 
 ## License
 

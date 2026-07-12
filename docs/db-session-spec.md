@@ -1,6 +1,6 @@
 # Eureka Durable Runs, Database Access, and Resume — Specification
 
-**Status:** Proposed
+**Status:** Proposed (database-environment contract partially implemented)
 
 **Scope:** Eureka runtime library, scheduler, control-node protocol, agent tools,
 CLI, and application HTTP integration.
@@ -87,20 +87,26 @@ The CLI currently creates:
 <graph_dir>/.eureka/sessions/<run_id>.sqlite
 ```
 
-and passes the path to every `ControlNode` as:
+and passes the path to every executable node as:
 
 ```text
 EUREKA_DB_PATH=<path>
 ```
 
-The environment also contains:
+The shared `RunEnvironment` contract also provides:
 
 ```text
 EUREKA_SESSION_ID
 EUREKA_NODE_ID
 EUREKA_ROUND
 EUREKA_CONFIG
+EUREKA_DB_SCHEMA_VERSION
+EUREKA_DB_NAMESPACE
 ```
+
+Control nodes and LLM agent shell tools receive this same environment
+contract. `EUREKA_DB_NAMESPACE` defaults to the invoking node ID and is an
+advisory plugin namespace; runtime-owned tables remain reserved.
 
 The Python controls use SQLite directly and define their own tables. This is
 already sufficient for cross-round domain memory.
@@ -124,7 +130,7 @@ optional error. It does not contain scheduler buffers or pending artifacts.
 - `FileRunStore` and the SQLite file have no shared transaction boundary.
 - A process restart loses the scheduler's in-memory activation state.
 - `Resume` is not a complete persisted resume operation.
-- Agent shell tools do not receive `EUREKA_DB_PATH` consistently.
+- Rust does not yet run migrations or expose runtime-owned database tables.
 - There is no version/compare-and-swap protection for run updates.
 - There is no run listing/query API.
 - Final artifacts are not persisted as a first-class result.
@@ -498,7 +504,7 @@ be resumed explicitly or automatically according to application policy.
 
 ### 10.1 Control nodes
 
-Keep the existing variables:
+Keep the existing variables, now assembled by `RunEnvironment`:
 
 ```text
 EUREKA_DB_PATH
@@ -520,12 +526,14 @@ own table namespace and must not modify `eureka_*` tables.
 
 ### 10.2 Agent tools
 
-Agent shell tools should receive the same run-scoped environment values as
-control nodes, including `EUREKA_DB_PATH`. This makes a tool's capabilities
-consistent regardless of whether it is invoked by a control node or an LLM.
+Agent shell tools now receive the same run-scoped environment values as control
+nodes, including `EUREKA_DB_PATH`. This makes a tool's capabilities consistent
+regardless of whether it is invoked by a control node or an LLM.
 
-The tool environment must be explicit and documented. Do not silently inherit
-all of the Rust process environment.
+The tool environment is explicit and documented. It does not silently inherit
+all of the Rust process environment. The environment-aware `LlmClient` method
+retains a compatibility default for custom clients; the built-in `RigClient`
+passes the environment to `CommandTool`.
 
 ### 10.3 Rust nodes
 

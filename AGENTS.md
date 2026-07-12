@@ -93,12 +93,15 @@ allowing `unwrap_used` in `#[cfg(test)]` modules or switching tests to
    returned JSON across the agent's output ports.
 7. **Control node** (`control/node.rs` + `control/process.rs`): spawns a
    subprocess, writes a JSON call envelope to stdin, reads line-delimited JSON
-   emit envelopes from stdout. Env vars `EUREKA_SESSION_ID`, `EUREKA_NODE_ID`,
-   `EUREKA_ROUND`, `EUREKA_CONFIG`, `EUREKA_DB_PATH` are injected.
+   emit envelopes from stdout. Run-scoped env vars `EUREKA_SESSION_ID`,
+   `EUREKA_NODE_ID`, `EUREKA_ROUND`, `EUREKA_CONFIG`, `EUREKA_DB_PATH`,
+   `EUREKA_DB_SCHEMA_VERSION`, and `EUREKA_DB_NAMESPACE` are injected through
+   `RunEnvironment`. Agent shell tools receive the same environment contract.
 8. **Observability** (`eureka-cli/src/server.rs`): an axum server on
    `127.0.0.1:{port}` exposes `/api/graph`, `/api/state`, and `/api/events`
    (SSE). A background task (`track_live_state`) folds scheduler events into a
-   `LiveState` snapshot.
+   `LiveState` snapshot. Opt-in JSONL tracing writes durable scheduler events
+   to `.eureka/sessions/{session_id}.traces.jsonl`.
 
 ## Key concepts / invariants
 
@@ -107,10 +110,9 @@ allowing `unwrap_used` in `#[cfg(test)]` modules or switching tests to
   agent `id` (for agents) or the control node's `kind` (for control nodes).
 - **Artifact = `(kind: String, data: JSON)`.** Kinds are opaque strings
   matched at edge endpoints by the validator. There is no central enum of kinds.
-- **Ports**: `PortDef` in YAML is `{port, kind}`. `to_input_spec` marks every
-  input `required: true`; there is currently no way to declare an optional
-  input via the manifest (the `required` field exists on `PortSpecEntry` but is
-  never set false through the manifest path).
+- **Ports**: `PortDef` in YAML is `{port, kind}`. Inputs are required by
+  default; manifests may declare `required: false` for optional inputs, and
+  that flag is preserved through graph construction and validation.
 - **Feedback edges** (`feedback: true`) close cycles and are excluded from
   source-node detection so cyclic-but-source nodes (e.g. `generation`) still
   receive the initial goal.

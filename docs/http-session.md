@@ -20,7 +20,7 @@ let config = EurekaConfig::load(Some("eureka.toml".as_ref()))?;
 let run_id = uuid::Uuid::now_v7();
 let sessions_dir = std::path::Path::new(".eureka/sessions");
 let store: Arc<dyn RunStore> = Arc::new(FileRunStore::new(sessions_dir));
-let mut session = Session::new(&config, &run_id.to_string(), None)?;
+let mut session = Session::new(config.clone(), &run_id.to_string(), None)?;
 
 let goal = serde_json::json!({
     "goal": "Find promising catalysts for CO2 reduction",
@@ -66,17 +66,35 @@ Example response:
 ```
 
 `GET /api/state` remains the low-latency in-memory view for active nodes and
-latest outputs. `GET /api/run` is the durable lifecycle view and is suitable
-for recovery after the UI process restarts.
+latest outputs. `GET /api/run` is the durable lifecycle metadata view and
+remains available after the UI process restarts. It does **not** yet restore
+scheduler queues or resume a graph from a checkpoint; true durable recovery is
+specified in [`db-session-spec.md`](db-session-spec.md) but is not implemented.
+
+## Database and trace files
+
+The CLI co-locates per-run files under `.eureka/sessions/`:
+
+```text
+<run_id>.sqlite        # control-node/plugin state
+<run_id>.json          # lifecycle metadata compatibility record
+<run_id>.traces.jsonl  # optional scheduler event trace
+```
+
+Control nodes and agent shell tools receive the run-scoped environment
+contract, including `EUREKA_DB_PATH`, `EUREKA_DB_SCHEMA_VERSION`, and
+`EUREKA_DB_NAMESPACE`. See [`db-session-spec.md`](db-session-spec.md) for the
+planned runtime-owned database/checkpoint abstraction and
+[`tracing-spec.md`](tracing-spec.md) for JSONL tracing configuration.
 
 ## Pause and resume signals
 
 The scheduler exposes `SchedulerSignal::Pause` and `SchedulerSignal::Resume`.
 A pause emits `RunPaused`, stops in-flight work, and records the run as
-`paused`. Applications should treat that record as the authoritative state and
-present a resume action to the user. The resume signal is available to
-long-lived scheduler integrations; a new scheduler invocation is the normal
-boundary for a persisted run.
+`paused`. The current `Resume` signal is an observability/lifecycle signal; it
+does not reconstruct scheduler state. Applications should not advertise true
+restart recovery yet. Checkpoint-backed resume is specified in
+[`db-session-spec.md`](db-session-spec.md).
 
 For production services, serialize requests for the same run ID. The file
 store prevents torn writes, but it does not provide optimistic locking between
