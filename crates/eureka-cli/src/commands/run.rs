@@ -6,7 +6,7 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use eureka::config::{Budget, EurekaConfig};
 use eureka::run::{CheckpointStore, FileRunStore, RunStore, SqliteRunPersistence};
-use eureka::Session;
+use eureka::{RunManager, Session};
 use tokio::sync::broadcast;
 
 /// Arguments for the `run` command.
@@ -98,6 +98,13 @@ pub async fn execute(args: RunArgs) -> Result<()> {
         (file.clone(), file)
     };
 
+    let manager = RunManager::new(
+        config.clone(),
+        Arc::clone(&run_store),
+        Arc::clone(&checkpoint_store),
+        Some(sessions_dir.clone()),
+    );
+
     let goal = serde_json::json!({
         "goal": args.goal,
         "description": args.description.clone().unwrap_or_default(),
@@ -130,13 +137,14 @@ pub async fn execute(args: RunArgs) -> Result<()> {
         }));
         _tracker_handle =
             crate::server::track_live_state(event_tx.subscribe(), Arc::clone(&live_state));
-        _server_handle = crate::server::start_server_with_run_store(
+        _server_handle = crate::server::start_server_with_manager(
             session.spec().clone(),
             event_tx,
             live_state,
             args.port,
             Some(Arc::clone(&run_store)),
             Some(session_id),
+            Some(manager.clone()),
         );
     } else {
         drop(event_tx);
