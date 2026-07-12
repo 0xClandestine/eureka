@@ -55,6 +55,33 @@ agents:
               proposed_experiment:  { type: string, description: "Concrete experimental design for validation" }
               citations:            { type: array, items: { type: object }, description: "Supporting literature references" }
 
+  - id: safety_review
+    description: Screens hypotheses for dual-use risk, ethical compliance,
+                 experimental safety, and regulatory alignment before review
+    prompt: prompts/safety_review.md
+    inputs:
+      - port: in
+        kind: Hypotheses
+    outputs:
+      - port: out
+        kind: Hypotheses
+    output_schema:
+      type: object
+      required: [hypotheses]
+      properties:
+        hypotheses:
+          type: array
+          description: Filtered set of safe hypotheses with safety assessments attached
+          items:
+            type: object
+            required: [hypothesis, safe, recommendation]
+            properties:
+              hypothesis:     { type: object, description: "Full hypothesis object pass-through" }
+              safe:           { type: boolean, description: "True if hypothesis passes all safety checks" }
+              safety_concerns: { type: array, items: { type: string } }
+              recommendation: { type: string, enum: [proceed, revise, reject] }
+              rationale:      { type: string }
+
   - id: reflection
     description: Multi-type peer review — initial, full, deep verification,
                  observation, simulation, and recurrent review
@@ -278,13 +305,18 @@ control:
     timeout_secs: 10
 
 # ── Graph topology ─────────────────────────────────────────────────────
-# Forward pipeline: generation → reflection → ranking → evolution → proximity → supervisor
+# Forward pipeline: generation → safety_review → reflection → ranking → evolution → proximity → supervisor
 # Feedback loops: supervisor → reflection (continue), proximity.graph → ranking,
 #                 meta_review.insights → generation, reflection, evolution
 #                 ranking.state → supervisor (statistics)
 edges:
   # ── Forward pipeline ──
   - from_node: generation
+    from_port: out
+    to_node: safety_review
+    to_port: in
+
+  - from_node: safety_review
     from_port: out
     to_node: reflection
     to_port: in

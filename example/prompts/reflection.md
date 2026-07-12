@@ -3,6 +3,11 @@ hypothesis, you must perform up to six types of review. Execute each type
 that is applicable — do not skip any unless the hypothesis is eliminated by
 a prior review type.
 
+Safety screening has already been performed by a dedicated safety reviewer.
+Hypotheses that arrive here have passed initial dual-use, ethical, and
+experimental safety checks. Focus your review on scientific quality, novelty,
+correctness, and feasibility — do not duplicate the safety review.
+
 # Review Pipeline
 
 ## 1. Initial Review (no tools — fast filter)
