@@ -61,6 +61,8 @@ pub struct Session {
     checkpoint_store: Option<Arc<dyn CheckpointStore>>,
     /// Signal sender for the active scheduler, when a run is executing.
     scheduler_signal: Option<mpsc::Sender<SchedulerSignal>>,
+    /// Optional shared sink used by a run manager to observe the active sender.
+    scheduler_signal_sink: Option<Arc<tokio::sync::Mutex<Option<mpsc::Sender<SchedulerSignal>>>>>,
 }
 
 impl Session {
@@ -148,6 +150,7 @@ impl Session {
             node_overrides: HashMap::new(),
             checkpoint_store: None,
             scheduler_signal: None,
+            scheduler_signal_sink: None,
         })
     }
 
@@ -239,6 +242,7 @@ impl Session {
             node_overrides: nodes,
             checkpoint_store: None,
             scheduler_signal: None,
+            scheduler_signal_sink: None,
         })
     }
 
@@ -261,6 +265,39 @@ impl Session {
     /// Configure durable scheduler checkpoints for this session.
     pub fn set_checkpoint_store(&mut self, store: Arc<dyn CheckpointStore>) {
         self.checkpoint_store = Some(store);
+    }
+
+    /// Install a shared sink for application run managers.
+    pub fn set_scheduler_signal_sink(
+        &mut self,
+        sink: Arc<tokio::sync::Mutex<Option<mpsc::Sender<SchedulerSignal>>>>,
+    ) {
+        self.scheduler_signal_sink = Some(sink);
+    }
+
+    /// Validate an artifact kind against a manifest input port.
+    pub fn validate_input(&self, node_id: &str, port: &str, kind: &str) -> Result<(), EngineError> {
+        let registry = build_port_registry(&self.manifest);
+        let Some(node_spec) = self.spec.nodes.iter().find(|node| node.id == node_id) else {
+            return Err(EngineError::Run(format!("unknown node '{node_id}'")));
+        };
+        let Some(spec) = registry.get(&node_spec.kind) else {
+            return Err(EngineError::Run(format!(
+                "unknown node kind '{}'",
+                node_spec.kind
+            )));
+        };
+        let Some(expected) = spec.input_kind(port) else {
+            return Err(EngineError::Run(format!(
+                "unknown input port '{node_id}.{port}'"
+            )));
+        };
+        if expected != kind {
+            return Err(EngineError::Graph(GraphError::PortKindMismatch(format!(
+                "{node_id}.{port} expects {expected}, received {kind}"
+            ))));
+        }
+        Ok(())
     }
 
     /// Return a signal sender for the active scheduler, if any.
@@ -408,6 +445,9 @@ impl Session {
             scheduler
         };
         self.scheduler_signal = Some(scheduler.signal_sender());
+        if let Some(sink) = &self.scheduler_signal_sink {
+            *sink.lock().await = self.scheduler_signal.clone();
+        }
 
         let mut events = scheduler.event_receiver();
 
@@ -560,6 +600,9 @@ impl Session {
         }
         event_handle.abort();
         self.scheduler_signal = None;
+        if let Some(sink) = &self.scheduler_signal_sink {
+            *sink.lock().await = None;
+        }
 
         // Close the trace writer with final stats (best-effort).
         if let Ok(mut guard) = trace_writer.lock() {

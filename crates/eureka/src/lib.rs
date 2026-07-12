@@ -27,6 +27,7 @@ pub mod config;
 pub mod control;
 pub mod error;
 pub mod graph;
+pub mod manager;
 pub mod manifest;
 pub mod run;
 pub mod scheduler;
@@ -34,6 +35,7 @@ pub mod session;
 pub mod tracing;
 
 pub use error::EngineError;
+pub use manager::{CreateRunRequest, RunManager};
 pub use run::{
     ActivationSnapshot, CheckpointReason, CheckpointStore, FileRunStore, InMemoryRunPersistence,
     PendingInput, PersistenceError, Revision, RunCheckpoint, RunEnvironment, RunFilter, RunOutput,

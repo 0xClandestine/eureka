@@ -282,6 +282,37 @@ impl Scheduler {
         // round drains).
         let mut max_dispatched_round: u32 = 0;
 
+        // A checkpoint may contain a partially joined input bucket. Re-submit
+        // its buffered ports through the normal delivery path so an externally
+        // injected human artifact can complete the join and dispatch the node.
+        if checkpoint.is_some() {
+            let restored_inputs: Vec<_> = input_buffer
+                .drain()
+                .flat_map(|((node_id, round), ports)| {
+                    ports
+                        .into_iter()
+                        .map(move |(port, artifact)| (node_id.clone(), round, port, artifact))
+                })
+                .collect();
+            for (node_id, round, port, artifact) in restored_inputs {
+                let dispatched = self.deliver_input(
+                    &node_id,
+                    &port,
+                    artifact,
+                    round,
+                    &mut input_buffer,
+                    &mut in_flight,
+                    &mut next_activation_id,
+                    &handles,
+                    &mut tasks,
+                )?;
+                if dispatched > 0 {
+                    *round_pending.entry(round).or_insert(0) += dispatched;
+                    max_dispatched_round = max_dispatched_round.max(round);
+                }
+            }
+        }
+
         for (source_id, artifacts) in &initial_artifacts {
             if self.nodes.get(source_id).is_some() {
                 for artifact in artifacts {
