@@ -18,14 +18,14 @@ use crate::graph::spec::{GraphError, GraphNodeSpec, GraphSpec};
 use crate::graph::validate::{validate_graph, PortRegistry};
 use crate::manifest::{AgentSpec, ControlSpec, GraphManifest};
 use crate::run::{CheckpointStore, RunEnvironment, RunRecord, RunStatus, RunStore};
-use crate::scheduler::{Scheduler, SchedulerError, SchedulerEvent};
+use crate::scheduler::{Scheduler, SchedulerError, SchedulerEvent, SchedulerSignal};
 use anyhow::Context;
 use rig_core::client::{CompletionClient, ProviderClient};
 use rig_core::providers::{
     anthropic, cohere, deepseek, gemini, groq, mistral, ollama, openai, openrouter, perplexity,
     together, xai,
 };
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 use tracing::{error, info, warn};
 
 use crate::control::node::{ControlNode, ControlNodeDef};
@@ -59,6 +59,8 @@ pub struct Session {
     node_overrides: HashMap<String, BoxedNode>,
     /// Optional durable scheduler checkpoint backend.
     checkpoint_store: Option<Arc<dyn CheckpointStore>>,
+    /// Signal sender for the active scheduler, when a run is executing.
+    scheduler_signal: Option<mpsc::Sender<SchedulerSignal>>,
 }
 
 impl Session {
@@ -145,6 +147,7 @@ impl Session {
             event_broadcaster: None,
             node_overrides: HashMap::new(),
             checkpoint_store: None,
+            scheduler_signal: None,
         })
     }
 
@@ -235,6 +238,7 @@ impl Session {
             event_broadcaster: None,
             node_overrides: nodes,
             checkpoint_store: None,
+            scheduler_signal: None,
         })
     }
 
@@ -246,6 +250,12 @@ impl Session {
     /// Configure durable scheduler checkpoints for this session.
     pub fn set_checkpoint_store(&mut self, store: Arc<dyn CheckpointStore>) {
         self.checkpoint_store = Some(store);
+    }
+
+    /// Return a signal sender for the active scheduler, if any.
+    #[must_use]
+    pub fn scheduler_signal(&self) -> Option<mpsc::Sender<SchedulerSignal>> {
+        self.scheduler_signal.clone()
     }
 
     /// Get the session ID.
@@ -349,6 +359,7 @@ impl Session {
         } else {
             scheduler
         };
+        self.scheduler_signal = Some(scheduler.signal_sender());
 
         let mut events = scheduler.event_receiver();
 
@@ -496,6 +507,7 @@ impl Session {
                 .map_err(|e| EngineError::Store(e.to_string()))?;
         }
         event_handle.abort();
+        self.scheduler_signal = None;
 
         // Close the trace writer with final stats (best-effort).
         if let Ok(mut guard) = trace_writer.lock() {
