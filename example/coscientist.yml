@@ -301,11 +301,6 @@ control:
       id_field: statement
       output_field: hypotheses
       top_k: 5
-      # Enable LLM-driven pairwise debates for more accurate tournament ranking.
-      # Falls back to review-score comparison when disabled or API is unavailable.
-      llm_debate: false
-      # llm_model: "openai/gpt-4o-mini"
-      # llm_api_base: "https://openrouter.ai/api/v1"
     timeout_secs: 15
 
   - id: proximity
