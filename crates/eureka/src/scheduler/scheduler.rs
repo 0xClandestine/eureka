@@ -1013,6 +1013,93 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn test_pause_checkpoint_can_restore_and_finish() {
+        struct SlowNode;
+
+        #[async_trait]
+        impl Node for SlowNode {
+            fn ports(&self) -> PortSpec {
+                PortSpec::new(
+                    vec![PortSpecEntry {
+                        name: "in".into(),
+                        direction: PortDirection::Input,
+                        kind: "Goal".into(),
+                        required: true,
+                    }],
+                    vec![],
+                )
+            }
+
+            async fn process(
+                &self,
+                _ctx: &NodeCtx,
+                _inputs: Vec<PortMsg>,
+            ) -> Result<(Vec<Emit>, NodeUsage), NodeError> {
+                tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+                Ok((vec![], NodeUsage::default()))
+            }
+        }
+
+        let run_id = uuid::Uuid::now_v7();
+        let spec = GraphSpec {
+            name: Some("checkpoint".into()),
+            description: None,
+            nodes: vec![GraphNodeSpec {
+                id: "source".into(),
+                kind: "test.node".into(),
+                config: serde_json::Value::Null,
+                description: None,
+            }],
+            edges: vec![],
+            metadata: serde_json::Value::Null,
+        };
+        let mut nodes = HashMap::new();
+        nodes.insert("source".into(), BoxedNode::new(SlowNode));
+        let store = Arc::new(crate::run::InMemoryRunPersistence::new());
+        let mut scheduler = Scheduler::new(spec.clone(), nodes, Budget::default(), 1)
+            .with_checkpoint_store(
+                Arc::clone(&store) as Arc<dyn CheckpointStore>,
+                run_id,
+                "graph",
+                "config",
+            );
+        let signal_tx = scheduler.signal_sender();
+        signal_tx.send(SchedulerSignal::Pause).await.unwrap();
+        let input = HashMap::from([(
+            "source".into(),
+            vec![Artifact {
+                kind: "Goal".into(),
+                data: serde_json::json!({"value": 1}),
+            }],
+        )]);
+        assert!(matches!(
+            scheduler.run(input).await,
+            Err(SchedulerError::Paused(_))
+        ));
+        let checkpoint = CheckpointStore::load_checkpoint(&*store, run_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(checkpoint.round_pending.get(&0), Some(&1));
+
+        let mut restored_nodes = HashMap::new();
+        restored_nodes.insert("source".into(), BoxedNode::new(SlowNode));
+        let mut restored = Scheduler::new(spec, restored_nodes, Budget::default(), 1)
+            .with_checkpoint_store(
+                Arc::clone(&store) as Arc<dyn CheckpointStore>,
+                run_id,
+                "graph",
+                "config",
+            );
+        let stats = restored.run_from_checkpoint(checkpoint).await.unwrap();
+        assert_eq!(stats.rounds_completed, 0);
+        assert!(CheckpointStore::load_checkpoint(&*store, run_id)
+            .await
+            .unwrap()
+            .is_some());
+    }
+
+    #[tokio::test]
     async fn test_run_terminates_with_no_work() {
         let spec = GraphSpec {
             name: None,
