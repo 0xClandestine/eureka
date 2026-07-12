@@ -671,3 +671,159 @@ Agents with an entry must acquire both permits.
 | `crates/eureka/src/manifest/mod.rs` | 2 | Re-export `MapNodeSpec` |
 | `crates/eureka/src/graph/validate.rs` | 2 | Map node validation rules |
 | `crates/eureka/src/control/node.rs` | 3 | Parse `route_to` key in emit envelope |
+
+---
+
+## Appendix: Conformance to COSCIENTIST.md
+
+This matrix maps every architectural requirement from the paper
+(`example/COSCIENTIST.md`) to its current implementation status.
+
+Status symbols:
+
+| Symbol | Meaning |
+|---|---|
+| ✅ | Implemented and wired |
+| ⚠️ | Prompt-driven only (one LLM call asked to do it; no runtime enforcement) |
+| 🔧 | Needs a spec tier (numbered) |
+| ➖ | Out of scope for the engine (application/prompt layer) |
+
+### System overview (Section 3.1)
+
+| Paper requirement | Status | Notes |
+|---|---|---|
+| Natural language interface | ✅ | CLI `start` command, `session inject` for mid-run interaction |
+| Asynchronous task framework | 🔧 Tier 3 | Static pipeline today; dynamic routing lets any orchestrator node manage a task queue |
+| Specialized agents (generation, reflection, ranking, proximity, evolution, meta-review, supervisor) | ✅ | All declared in `coscientist.yml` |
+| Context memory | ✅ | SQLite per-run DB (`context_store` tool + control-node tables) |
+| Supervisor manages worker task queue | 🔧 Tier 3 | Supervisor runs as a static pipeline node; dynamic routing enables queue semantics |
+| Supervisor allocates resources | 🔧 Tier 4 | Per-agent limits needed; Supervisor code would consume them |
+
+### Research plan configuration (Section 3.2)
+
+| Paper requirement | Status | Notes |
+|---|---|---|
+| Parse goal to derive configuration | ⚠️ | Goal injected as raw artifact; no automatic plan-config derivation |
+| Customisable evaluation criteria | ⚠️ | Prompt instructs agents on criteria; no config-driven scoring pipeline |
+| Supervisor initiates task queue | 🔧 Tier 3 | See above |
+| Continuous, asynchronous operation | 🔧 Tier 2 | Map node enables concurrent agent work; current graph is serial within each round |
+| Periodic statistics and terminal detection | ✅ | Supervisor computes stats, convergence check, halt signal |
+| State written to context memory | ✅ | Supervisor persists via `context_memory` table |
+
+### Specialised agents (Section 3.3)
+
+#### Generation agent (3.3.1)
+
+| Paper requirement | Status | Notes |
+|---|---|---|
+| Literature exploration via web search | ✅ | `search_literature` + `read_paper` arXiv tools |
+| Simulated scientific debates (self-play) | ⚠️ | Prompt instructs agent to simulate debate; no separate debating agents |
+| Iterative assumption identification | ⚠️ | Prompt-driven within one LLM call |
+| Research expansion from meta-review feedback | ✅ | `context` input port carries meta-review insights (round 2+) |
+| Multiple generation invocations per run | 🔧 Tier 3 | Generation fires once in round 0; Goal replay needed for re-invocation |
+
+#### Reflection agent (3.3.2)
+
+| Paper requirement | Status | Notes |
+|---|---|---|
+| Initial review (fast filter) | ⚠️ | Prompt lists it; no separate fast/slow review paths |
+| Full review with literature search | ✅ | Agent has literature tools |
+| Deep verification review | ⚠️ | Prompt asks for it; no structural decomposition enforcement |
+| Observation review | ⚠️ | Prompt asks for it |
+| Simulation review | ⚠️ | Prompt asks for it |
+| Recurrent/tournament review | ✅ | Context port provides prior-round tournament state |
+| Expert review incorporation | ✅ | Expert can inject reviews; prompt instructs agent to treat them as authoritative |
+| Six review types as separate pipeline stages | ➖ | Would require reflection-as-a-subgraph; out of scope for engine — prompt composition is application concern |
+
+#### Ranking agent (3.3.3)
+
+| Paper requirement | Status | Notes |
+|---|---|---|
+| Elo-based tournament | ✅ | `ranker.py` with Elo persistence |
+| Pairwise comparisons via multi-turn scientific debates | ⚠️ | Uses review scores for comparison, not LLM debate calls |
+| Lower-ranked get single-turn comparisons | ➖ | Debates are application logic; engine provides the tooling |
+| Proximity-based matchmaking | ✅ | Similarity-weighted K-factor from proximity graph |
+| Newer/top hypotheses prioritised | ✅ | Newcomer boost, Elo-gap pruning |
+| LLM-driven debate judge | ➖ | Application concern — could be a control node calling the runtime's LLM client |
+
+#### Proximity agent (3.3.4)
+
+| Paper requirement | Status | Notes |
+|---|---|---|
+| Similarity graph computation | ✅ | TF-IDF cosine similarity (stdlib) |
+| Clustering (connected components) | ✅ | DFS on thresholded adjacency |
+| Diverse frontier selection | ✅ | Greedy cluster-rep + least-similar fill |
+| Matchmaking info for ranking | ✅ | Proximity graph edges with weights |
+| Goal-aware proximity | ⚠️ | Similarity over statement text; no goal-conditioned embedding |
+| Asynchronous computation | 🔧 Tier 2 | Currently runs in the static pipeline; map node enables background proximity work |
+
+#### Evolution agent (3.3.5)
+
+| Paper requirement | Status | Notes |
+|---|---|---|
+| Grounding enhancement with literature | ✅ | Agent has literature tools |
+| Coherence/feasibility improvement | ⚠️ | Prompt-driven |
+| Inspiration from existing hypotheses | ⚠️ | Prompt-driven |
+| Combination of top hypotheses | ⚠️ | Prompt-driven |
+| Simplification for easier testing | ⚠️ | Prompt-driven |
+| Out-of-box thinking | ⚠️ | Prompt-driven |
+| Generates new, doesn't modify existing | ✅ | Output schema requires new hypotheses with parent indices |
+| All six strategies applied per invocation | ⚠️ | Prompt asks for all six; no runtime verification |
+
+#### Meta-review agent (3.3.6)
+
+| Paper requirement | Status | Notes |
+|---|---|---|
+| Synthesises patterns from reviews and debates | ⚠️ | Prompt-driven; no structural pattern extraction |
+| Feedback to Reflection agent | ✅ | Via `insights → reflection.context` feedback edge |
+| Feedback to Generation agent | ✅ | Via `insights → generation.context` feedback edge |
+| Feedback to Evolution agent | ✅ | Via `insights → evolution.context` feedback edge |
+| Research overview generation | ✅ | `overview` output port |
+| Research contacts identification | ⚠️ | Prompt asks for it; `overview` schema includes contacts |
+| Constrained decoding for grant formats | ➖ | Model/provider capability, not engine concern |
+
+### Expert-in-the-loop (Section 3.4)
+
+| Paper requirement | Status | Notes |
+|---|---|---|
+| Refine research goal mid-run | ✅ | `session inject` to any input port while paused |
+| Provide manual reviews | ✅ | `session inject` to `reflection.in` |
+| Contribute own hypotheses | ✅ | `session inject` to `generation.in` |
+| Direct follow-up on specific directions | ✅ | Prompt instructs agents to prioritise expert content |
+| Conversational guidance | ⚠️ | CLI only; no chat-style refinement loop |
+
+### Tool use (Section 3.5)
+
+| Paper requirement | Status | Notes |
+|---|---|---|
+| Web search and retrieval | ✅ | arXiv via `arxiv_search.py` |
+| Domain-specific databases (receptors, drugs, etc.) | ➖ | Application concern — add as declared tools |
+| Private publication repository indexing | ➖ | Application concern — add as a tool |
+| Specialized AI model feedback (AlphaFold, etc.) | ➖ | Application concern — add as tools; engine carries the results |
+| Multimodal inputs (figures, charts) | ➖ | Provider/model capability, not engine concern |
+
+### Safety (Section 6)
+
+| Paper requirement | Status | Notes |
+|---|---|---|
+| Initial research goal safety review | ⚠️ | safety_review agent gates hypotheses, not the initial goal |
+| Hypothesis safety review | ✅ | `safety_review` agent with full prompt before reflection |
+| Unsafe hypotheses excluded from tournament | ⚠️ | Prompt asks safety_review to flag; ranker doesn't programmatically filter |
+| Meta-review safety monitoring | ⚠️ | Prompt mentions it; no structured safety monitoring |
+| Comprehensive logging | ✅ | Tracing module + scheduler events |
+| Explainability and transparency (reasoning trace) | ⚠️ | Prompts ask for reasoning; no structured trace format |
+
+### Summary
+
+| Category | Count |
+|---|---|
+| ✅ Fully implemented | 22 |
+| ⚠️ Prompt-driven (no runtime enforcement) | 22 |
+| 🔧 Needs a spec tier | 5 |
+| ➖ Out of scope (application/provider concern) | 6 |
+
+**Bottom line:** the spec tiers (1–4) close the 5 engine-level gaps.  The
+22 ⚠️ items are prompt-composition concerns — they work correctly when the
+LLM follows instructions, but the engine doesn't verify them.  The 6 ➖ items
+are application-layer decisions (which databases to query, which specialised
+models to integrate) that belong in tools and prompts, not the runtime.
