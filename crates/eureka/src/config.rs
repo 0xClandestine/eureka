@@ -10,6 +10,7 @@
 //!
 //! Configuration is loaded from: defaults → file → env → CLI.
 
+use std::collections::HashMap;
 use std::path::Path;
 
 use figment::{
@@ -224,15 +225,27 @@ impl std::fmt::Display for ControlSignal {
 
 /// Global defaults for per-agent LLM configuration.
 ///
-/// These values are used when an agent's YAML spec does not explicitly set
-/// `temperature` or `max_iterations`. Override globally via `[agent]` in
-/// `eureka.toml` or per-agent via the agent's `config:` block in the manifest.
+/// These values apply to every agent that does not have an entry in
+/// `[agent.overrides]` in the TOML config. Override per-agent under
+/// `[agent.overrides.<agent_id>]` in `eureka.toml`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentConfig {
     /// Sampling temperature (higher = more diverse output).
     pub temperature: f64,
     /// Maximum number of loop iterations before the agent is forcibly halted.
     pub max_iterations: u32,
+}
+
+impl AgentConfig {
+    /// Return the per-agent override for `agent_id`, or `self` if none exists.
+    #[must_use]
+    pub fn resolve_for<'a>(
+        global: &'a AgentConfig,
+        overrides: &'a HashMap<String, AgentConfig>,
+        agent_id: &str,
+    ) -> &'a AgentConfig {
+        overrides.get(agent_id).unwrap_or(global)
+    }
 }
 
 impl Default for AgentConfig {
@@ -354,7 +367,7 @@ pub struct ProviderConfig {
     /// Per-agent model overrides. Keys are agent names (e.g. `"reflection"`);
     /// values are model IDs. Falls back to `generation_model` when absent.
     #[serde(default)]
-    pub agent_models: std::collections::HashMap<String, String>,
+    pub agent_models: HashMap<String, String>,
     /// Per-input/per-output pricing (USD per million tokens) for the cost
     /// budget backstop. Most providers charge different rates for input
     /// (prompt) vs output (completion) tokens, so set both fields. When
@@ -405,6 +418,16 @@ max_rounds = 12
 temperature = 0.7
 max_iterations = 10
 
+# Per-agent overrides (optional). Set different temperature/max_iterations
+# for specific agents by their ID. Falls back to [agent] globals when absent.
+# [agent.overrides.generation]
+# temperature = 0.9
+# max_iterations = 15
+#
+# [agent.overrides.reflection]
+# temperature = 0.7
+# max_iterations = 12
+
 [tracing]
 enabled = false
 max_file_bytes = 0
@@ -448,8 +471,14 @@ pub struct EurekaConfig {
     pub scheduler: SchedulerConfig,
     /// Budget configuration.
     pub budget: Budget,
-    /// Global agent LLM defaults (overridable per-agent in the manifest).
+    /// Global agent LLM defaults (overridable per-agent via `agent_overrides`).
     pub agent: AgentConfig,
+    /// Per-agent LLM configuration overrides keyed by agent ID.
+    ///
+    /// Set in `eureka.toml` under `[agent.overrides.<agent_id>]`.
+    /// Falls back to `agent` (the global default) when an agent has no match.
+    #[serde(default)]
+    pub agent_overrides: HashMap<String, AgentConfig>,
     /// Tracing configuration for durable JSONL event logs.
     pub tracing: TracingConfig,
 }

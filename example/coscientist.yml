@@ -15,9 +15,6 @@ agents:
     outputs:
       - port: out
         kind: Hypotheses
-    config:
-      temperature: 0.9
-      max_iterations: 15
     tools:
       - name: search_literature
         description: Search arXiv for papers matching a query
@@ -69,9 +66,6 @@ agents:
     outputs:
       - port: out
         kind: Reviews
-    config:
-      temperature: 0.7
-      max_iterations: 12
     tools:
       - name: search_literature
         description: Search arXiv for papers matching a query
@@ -125,9 +119,6 @@ agents:
     outputs:
       - port: out
         kind: Hypotheses
-    config:
-      temperature: 0.85
-      max_iterations: 12
     tools:
       - name: search_literature
         description: Search arXiv for papers matching a query
@@ -182,9 +173,6 @@ agents:
         kind: Insights
       - port: overview
         kind: Overview
-    config:
-      temperature: 0.7
-      max_iterations: 10
     output_schema:
       type: object
       required: [insights, overview]

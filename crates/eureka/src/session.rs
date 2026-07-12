@@ -711,21 +711,11 @@ impl Session {
                     required: p.required,
                 })
                 .collect(),
-            config: AgentConfig {
-                temperature: agent_spec
-                    .config
-                    .get("temperature")
-                    .and_then(serde_json::Value::as_f64)
-                    .unwrap_or(self.config.agent.temperature),
-                max_iterations: u32::try_from(
-                    agent_spec
-                        .config
-                        .get("max_iterations")
-                        .and_then(serde_json::Value::as_u64)
-                        .unwrap_or_else(|| u64::from(self.config.agent.max_iterations)),
-                )
-                .unwrap_or(self.config.agent.max_iterations),
-            },
+            config: AgentConfig::resolve_for(
+                &self.config.agent,
+                &self.config.agent_overrides,
+                &agent_spec.id,
+            ).clone(),
             output_schema: agent_spec.output_schema.clone(),
             tools: agent_spec
                 .tools

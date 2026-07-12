@@ -18,7 +18,7 @@ generation_model = "deepseek/deepseek-v4-flash"
 # reflection  = "anthropic/claude-opus-4-5"
 # meta_review = "anthropic/claude-opus-4-5"
 # evolution   = "deepseek/deepseek-v4-flash"
-#
+
 # Per-input/per-output pricing (USD per million tokens) so the
 # budget.max_cost_usd backstop can fire. Most providers charge different
 # rates for prompt vs completion tokens; set both. When omitted, cost is not
@@ -40,6 +40,31 @@ generation_model = "deepseek/deepseek-v4-flash"
 # kind = "perplexity"   PERPLEXITY_API_KEY  model = "sonar-pro"
 # kind = "cohere"       COHERE_API_KEY      model = "command-r-plus"
 # kind = "ollama"       (no key needed)     model = "llama3.1:8b"
+
+[agent]
+# Global defaults for all agents. Override per-agent below under
+# [agent.overrides.<agent_id>].
+temperature = 0.7
+max_iterations = 10
+
+# Per-agent LLM config overrides. Each agent not listed here falls back
+# to the [agent] global defaults above.
+#
+# [agent.overrides.generation]
+# temperature = 0.9
+# max_iterations = 15
+#
+# [agent.overrides.reflection]
+# temperature = 0.7
+# max_iterations = 12
+#
+# [agent.overrides.evolution]
+# temperature = 0.85
+# max_iterations = 12
+#
+# [agent.overrides.meta_review]
+# temperature = 0.7
+# max_iterations = 10
 
 [scheduler]
 max_in_flight = 8
