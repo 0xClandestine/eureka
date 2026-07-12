@@ -95,8 +95,11 @@ impl JsonlTraceWriter {
             },
         });
 
-        if let Err(e) = writeln!(writer, "{}", serde_json::to_string(&header).unwrap_or_default())
-        {
+        if let Err(e) = writeln!(
+            writer,
+            "{}",
+            serde_json::to_string(&header).unwrap_or_default()
+        ) {
             tracing::warn!(
                 error = %e,
                 "Failed to write trace header; tracing disabled"
@@ -349,7 +352,10 @@ mod tests {
         assert_eq!(header["config"]["provider"], "openrouter");
         assert_eq!(header["config"]["model"], "deepseek/deepseek-v4-flash");
         assert_eq!(header["config"]["maxInFlight"], 8);
-        assert!((header["config"]["budget"]["maxCostUsd"].as_f64().unwrap() - 25.0).abs() < f64::EPSILON);
+        assert!(
+            (header["config"]["budget"]["maxCostUsd"].as_f64().unwrap() - 25.0).abs()
+                < f64::EPSILON
+        );
         assert_eq!(header["config"]["budget"]["maxRounds"], 12);
     }
 
