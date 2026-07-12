@@ -567,9 +567,13 @@ impl Session {
                         record.error = Some(error.clone());
                         RunStatus::Failed
                     }
-                    _ => {
+                    SchedulerError::Cancelled => {
                         record.error = Some(error.to_string());
                         RunStatus::Cancelled
+                    }
+                    _ => {
+                        record.error = Some(error.to_string());
+                        RunStatus::Failed
                     }
                 };
                 if let SchedulerError::Paused(stats) = &error {

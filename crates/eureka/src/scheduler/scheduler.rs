@@ -394,7 +394,15 @@ impl Scheduler {
                     info!("Run cancelled");
                     tasks.abort_all();
                     self.stats.elapsed_secs = start.elapsed().as_secs_f64();
-                    return Ok(self.stats.clone());
+                    self.persist_checkpoint(
+                        current_round,
+                        &round_pending,
+                        &input_buffer,
+                        &in_flight,
+                        &outputs,
+                        CheckpointReason::Cancellation,
+                    ).await?;
+                    return Err(SchedulerError::Cancelled);
                 }
 
                 maybe_signal = async {
@@ -408,6 +416,17 @@ impl Scheduler {
                         Some(SchedulerSignal::Cancel) => {
                             info!("Run cancelled via signal");
                             self.cancel.cancel();
+                            tasks.abort_all();
+                            self.stats.elapsed_secs = start.elapsed().as_secs_f64();
+                            self.persist_checkpoint(
+                                current_round,
+                                &round_pending,
+                                &input_buffer,
+                                &in_flight,
+                                &outputs,
+                                CheckpointReason::Cancellation,
+                            ).await?;
+                            return Err(SchedulerError::Cancelled);
                         }
                         Some(SchedulerSignal::Pause) => {
                             info!(round = current_round, "Run paused");
