@@ -17,7 +17,7 @@ use crate::graph::port::{PortDef, PortDirection, PortSpec, PortSpecEntry};
 use crate::graph::spec::{GraphError, GraphNodeSpec, GraphSpec};
 use crate::graph::validate::{validate_graph, PortRegistry};
 use crate::manifest::{AgentSpec, ControlSpec, GraphManifest};
-use crate::run::{CheckpointStore, RunEnvironment, RunRecord, RunStatus, RunStore};
+use crate::run::{CheckpointStore, RunCheckpoint, RunEnvironment, RunRecord, RunStatus, RunStore};
 use crate::scheduler::{Scheduler, SchedulerError, SchedulerEvent, SchedulerSignal};
 use anyhow::Context;
 use rig_core::client::{CompletionClient, ProviderClient};
@@ -247,6 +247,17 @@ impl Session {
         self.event_broadcaster = Some(tx);
     }
 
+    /// Load the latest durable checkpoint for this session.
+    pub async fn latest_checkpoint(&self) -> Result<Option<RunCheckpoint>, EngineError> {
+        let Some(store) = &self.checkpoint_store else {
+            return Ok(None);
+        };
+        store
+            .load_checkpoint(self.session_id)
+            .await
+            .map_err(|error| EngineError::Store(error.to_string()))
+    }
+
     /// Configure durable scheduler checkpoints for this session.
     pub fn set_checkpoint_store(&mut self, store: Arc<dyn CheckpointStore>) {
         self.checkpoint_store = Some(store);
@@ -298,13 +309,50 @@ impl Session {
         goal: serde_json::Value,
         store: Option<&dyn RunStore>,
     ) -> Result<RunStats, EngineError> {
+        self.run_internal(goal, store, None).await
+    }
+
+    /// Resume this session from a previously persisted scheduler checkpoint.
+    ///
+    /// The checkpoint must have been created for the same graph and runtime
+    /// configuration. The scheduler validates both identities before dispatch.
+    pub async fn resume_with_store(
+        &mut self,
+        goal: serde_json::Value,
+        store: Option<&dyn RunStore>,
+        checkpoint: RunCheckpoint,
+    ) -> Result<RunStats, EngineError> {
+        self.run_internal(goal, store, Some(checkpoint)).await
+    }
+
+    async fn run_internal(
+        &mut self,
+        goal: serde_json::Value,
+        store: Option<&dyn RunStore>,
+        checkpoint: Option<RunCheckpoint>,
+    ) -> Result<RunStats, EngineError> {
         info!(
             session_id = %self.session_id,
             goal = %goal.get("goal").and_then(|v| v.as_str()).unwrap_or("(no goal)"),
             "Starting Eureka session"
         );
 
-        let mut record = RunRecord::new(self.session_id, self.config.graph.clone(), goal.clone());
+        let mut record = if checkpoint.is_some() {
+            if let Some(store) = store {
+                store
+                    .get(self.session_id)
+                    .await
+                    .map_err(|error| EngineError::Store(error.to_string()))?
+                    .unwrap_or_else(|| {
+                        RunRecord::new(self.session_id, self.config.graph.clone(), goal.clone())
+                    })
+            } else {
+                RunRecord::new(self.session_id, self.config.graph.clone(), goal.clone())
+            }
+        } else {
+            RunRecord::new(self.session_id, self.config.graph.clone(), goal.clone())
+        };
+        record.goal = goal.clone();
         record.status = RunStatus::Running;
         if let Some(store) = store {
             store
@@ -463,7 +511,11 @@ impl Session {
             initial_artifacts.insert(source_id.clone(), vec![artifact]);
         }
 
-        let stats = match scheduler.run(initial_artifacts).await {
+        let stats = match if let Some(checkpoint) = checkpoint {
+            scheduler.run_from_checkpoint(checkpoint).await
+        } else {
+            scheduler.run(initial_artifacts).await
+        } {
             Ok(stats) => stats,
             Err(error) => {
                 record.status = match &error {
