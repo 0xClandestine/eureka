@@ -6,9 +6,9 @@ Agent guide to the Eureka runtime. Covers architecture, module layout, key invar
 
 ## What this is
 
-Eureka is a **graph-based AI co-scientist runtime** written in Rust. A research run is a directed graph of *nodes* (LLM agents + subprocess control nodes) connected by typed *edges*. Topology, prompts, tools, and control-node definitions all live in a single YAML manifest (`<graph_dir>/<graph>.yml`). The Rust runtime loads the manifest, validates the graph, and executes it with an event-driven scheduler. There is no per-agent Rust code — agents are data.
+Eureka is a **graph-based execution engine** written in Rust. A run is a directed graph of *nodes* (LLM agents, subprocess control nodes) connected by typed *edges* carrying JSON artifacts. The topology, prompts, tools, and control-node definitions live in a single YAML manifest (`<graph_dir>/<graph>.yml`). The runtime loads the manifest, validates the graph, and executes it with an event-driven scheduler. There is no per-node Rust code — node types are data.
 
-This repo reproduces Google Research's "AI co-scientist" topology as the shipped example: `example/coscientist.yml` with Python control nodes under `example/control/` and an arXiv search tool under `example/tools/`.
+The shipped example at `example/coscientist.yml` shows one possible topology — an iterative research loop — with Python control nodes under `example/control/` and an arXiv search tool under `example/tools/`. Any graph shape can be expressed in a YAML manifest.
 
 ---
 
@@ -72,12 +72,12 @@ crates/
       server.rs               # axum HTTP server for observability
     tests/
       coscientist_validate.rs # end-to-end mock validation test
-example/                      # shipped co-scientist graph
+example/                      # shipped example graph
   coscientist.yml             # the manifest (agents + control + edges)
   prompts/*.md               # agent system prompts
-  control/*.py               # subprocess control nodes (supervisor, ranker, proximity)
+  control/*.py               # control node scripts (supervisor, ranker, proximity)
   tools/arxiv_search.py      # shell tool used by agents
-  COSCIENTIST.md              # long-form design doc
+  COSCIENTIST.md              # design notes for the example
 docs/                         # spec docs
   db-session-spec.md
   http-session.md
@@ -92,7 +92,7 @@ docs/                         # spec docs
 ## Build, test, lint
 
 ```bash
-cargo build --release                 # binary: target/release/eureka-cli  (NOT "eureka")
+cargo build --release                 # binary: target/release/eureka-cli
 cargo test --release                  # unit + integration tests
 cargo test --release -p eureka-cli --test coscientist_validate  # e2e mock validation
 cargo clippy --release                # lib + bins only — green
@@ -102,7 +102,7 @@ cargo run --release -- daemon start                              # start daemon
 cargo run --release -- start "<goal>" --domain chemistry          # submit a run
 ```
 
-The workspace sets `pedantic`/`nursery` to `warn`, `unwrap_used`/`expect_used` to `deny`, and `unsafe_code` to `forbid`. The deny policy is lightened in test code via `#![cfg_attr(test, allow(clippy::unwrap_used, ...))]` at crate roots and `#![allow(...)]` in test files.
+The workspace sets `pedantic`/`nursery` to `warn`, `unwrap_used`/`expect_used` to `deny`, and `unsafe_code` to `forbid`. Test code lightens the deny via `#![cfg_attr(test, allow(clippy::unwrap_used, ...))]` at crate roots.
 
 ---
 
@@ -169,7 +169,7 @@ Kinds are opaque strings matched at edge endpoints by the validator. There is no
 
 ### Feedback edges
 
-Edges with `feedback: true` close cycles. They are excluded from source-node detection (so cyclic-but-source nodes like `generation` still receive the initial goal) and deliver to `round + 1` instead of the current round.
+Edges with `feedback: true` close cycles. They are excluded from source-node detection (so cyclic nodes still receive the initial goal) and deliver to `round + 1` instead of the current round.
 
 ### Round counting
 
@@ -187,7 +187,7 @@ flowchart LR
 ```
 
 - Forward edges deliver to the same round; feedback edges to `round + 1`.
-- A round is "complete" only when its outstanding-activation count hits zero.
+- A round is complete only when its outstanding-activation count hits zero.
 - The scheduler then advances to the next buffered round and emits a single `CycleCompleted`.
 - `rounds_completed` counts fully drained cycles, not per-emit feedback crossings.
 
