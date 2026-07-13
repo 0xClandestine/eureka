@@ -401,17 +401,16 @@ max_file_bytes = 0
 include_artifacts = true
 "#;
 
-/// Configuration for durable JSONL tracing of scheduler events.
+/// Configuration for durable scheduler event history in SQLite.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TracingConfig {
-    /// Write scheduler events to `.eureka/sessions/{session_id}.traces.jsonl`.
+    /// Persist scheduler events to the SQLite event history.
     #[serde(default)]
     pub enabled: bool,
-    /// Maximum file size in bytes before rotation (0 = no rotation).
-    /// Reserved for future use.
+    /// Retained for configuration compatibility; SQLite has no file rotation.
     #[serde(default)]
     pub max_file_bytes: u64,
-    /// Whether to include artifact payloads in `ActivationCompleted` outputs.
+    /// Whether to include artifact payloads in activation-completed events.
     #[serde(default = "default_true")]
     pub include_artifacts: bool,
 }

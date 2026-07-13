@@ -81,8 +81,9 @@ pub async fn execute_start(port: u16, config_path: Option<String>, data_dir: &Pa
     let sessions_dir = data_dir.join("sessions");
     std::fs::create_dir_all(&sessions_dir)?;
 
-    let persistence: Arc<dyn RunPersistence> =
-        open_persistence(Some(sessions_dir.join("eureka.db")), &sessions_dir).await;
+    let persistence: Arc<dyn RunPersistence> = open_persistence(sessions_dir.join("eureka.db"))
+        .await
+        .context("Failed to open SQLite persistence")?;
 
     let manager = RunManager::new(config, Arc::clone(&persistence), Some(sessions_dir));
 

@@ -94,6 +94,20 @@ impl RunManager {
             .map_err(|error| EngineError::Store(error.to_string()))
     }
 
+    /// Load the durable scheduler event history for a run.
+    ///
+    /// # Errors
+    /// Returns `EngineError::Store` on persistence failures.
+    pub async fn get_events(
+        &self,
+        run_id: uuid::Uuid,
+    ) -> Result<Vec<crate::run::RunEvent>, EngineError> {
+        self.persistence
+            .load_events(run_id)
+            .await
+            .map_err(|error| EngineError::Store(error.to_string()))
+    }
+
     /// Start a new run in the background and return its ID immediately.
     ///
     /// # Errors
@@ -242,6 +256,7 @@ impl RunManager {
             let result = async {
                 let mut session = Session::new(config, &run_id.to_string(), db_path)?;
                 session.set_checkpoint_store(persistence.clone());
+                session.set_event_store(persistence.clone());
                 session.set_scheduler_signal_sink(Arc::clone(&slot));
                 if let Some(checkpoint) = checkpoint {
                     session

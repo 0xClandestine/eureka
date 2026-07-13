@@ -6,7 +6,7 @@
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::Arc;
 
 use crate::agents::def::{AgentConfig, AgentDef, ToolDef};
 use crate::agents::{LlmAgentNode, LlmClient, RigClient};
@@ -17,7 +17,9 @@ use crate::graph::port::PortSpec;
 use crate::graph::spec::{GraphError, GraphNodeSpec, GraphSpec};
 use crate::graph::validate::{validate_graph, PortRegistry};
 use crate::manifest::{AgentSpec, ControlSpec, GraphManifest};
-use crate::run::{CheckpointStore, RunCheckpoint, RunEnvironment, RunRecord, RunStatus, RunStore};
+use crate::run::{
+    CheckpointStore, EventStore, RunCheckpoint, RunEnvironment, RunRecord, RunStatus, RunStore,
+};
 use crate::scheduler::{Scheduler, SchedulerError, SchedulerEvent, SchedulerSignal};
 use anyhow::Context;
 use rig_core::client::{CompletionClient, ProviderClient};
@@ -30,7 +32,6 @@ use tracing::{error, info, warn};
 
 use crate::control::node::{ControlNode, ControlNodeDef};
 use crate::error::EngineError;
-use crate::tracing::JsonlTraceWriter;
 
 /// A session represents a single Eureka research run.
 pub struct Session {
@@ -59,6 +60,8 @@ pub struct Session {
     node_overrides: HashMap<String, BoxedNode>,
     /// Optional durable scheduler checkpoint backend.
     checkpoint_store: Option<Arc<dyn CheckpointStore>>,
+    /// Optional durable scheduler event backend.
+    event_store: Option<Arc<dyn EventStore>>,
     /// Signal sender for the active scheduler, when a run is executing.
     scheduler_signal: Option<mpsc::Sender<SchedulerSignal>>,
     /// Optional shared sink used by a run manager to observe the active sender.
@@ -149,6 +152,7 @@ impl Session {
             event_broadcaster: None,
             node_overrides: HashMap::new(),
             checkpoint_store: None,
+            event_store: None,
             scheduler_signal: None,
             scheduler_signal_sink: None,
         })
@@ -241,6 +245,7 @@ impl Session {
             event_broadcaster: None,
             node_overrides: nodes,
             checkpoint_store: None,
+            event_store: None,
             scheduler_signal: None,
             scheduler_signal_sink: None,
         })
@@ -268,6 +273,11 @@ impl Session {
     /// Configure durable scheduler checkpoints for this session.
     pub fn set_checkpoint_store(&mut self, store: Arc<dyn CheckpointStore>) {
         self.checkpoint_store = Some(store);
+    }
+
+    /// Attach durable scheduler event storage.
+    pub fn set_event_store(&mut self, store: Arc<dyn EventStore>) {
+        self.event_store = Some(store);
     }
 
     /// Install a shared sink for application run managers.
@@ -453,34 +463,18 @@ impl Session {
 
         let mut events = scheduler.event_receiver();
 
-        // Optional durable trace writer (JSONL file co-located with the session DB).
-        let trace_writer = if self.config.tracing.enabled {
-            let sessions_dir = self.graph_dir.join(".eureka").join("sessions");
-            let provider = self.config.provider.kind.to_string();
-            let model = self
-                .config
-                .provider
-                .generation_model
-                .clone()
-                .unwrap_or_default();
-            JsonlTraceWriter::open(
-                &sessions_dir,
-                &self.session_id,
-                &self.config.tracing,
-                &self.config.graph,
-                &provider,
-                &model,
-                &self.config.budget,
-                self.config.scheduler.max_in_flight,
-            )
-        } else {
-            None
-        };
-
-        let trace_writer: Arc<Mutex<Option<JsonlTraceWriter>>> = Arc::new(Mutex::new(trace_writer));
-
+        // Durable event history is stored in the same persistence backend as
+        // run metadata and checkpoints. This replaces the former JSONL trace.
+        let event_store = self
+            .config
+            .tracing
+            .enabled
+            .then(|| self.event_store.clone())
+            .flatten();
         let broadcaster = self.event_broadcaster.clone();
-        let tw = Arc::clone(&trace_writer);
+        let event_store_for_task = event_store.clone();
+        let include_artifacts = self.config.tracing.include_artifacts;
+        let event_session_id = self.session_id;
         let event_handle = tokio::spawn(async move {
             while let Some(event) = events.recv().await {
                 if let Some(tx) = &broadcaster {
@@ -533,10 +527,22 @@ impl Session {
                     }
                 }
 
-                // Write to the durable trace file (best-effort).
-                if let Ok(mut guard) = tw.lock() {
-                    if let Some(ref mut w) = *guard {
-                        w.write_event(&event);
+                // Append to the durable database event history. Event
+                // persistence is best-effort and must not stop graph work.
+                if let Some(store) = &event_store_for_task {
+                    let event = if include_artifacts {
+                        event.clone()
+                    } else {
+                        strip_event_artifacts(&event)
+                    };
+                    if let Err(error) = store
+                        .append_event(
+                            event_session_id,
+                            serde_json::to_value(&event).unwrap_or_default(),
+                        )
+                        .await
+                    {
+                        warn!(%error, "Failed to persist scheduler event");
                     }
                 }
             }
@@ -608,18 +614,6 @@ impl Session {
         self.scheduler_signal = None;
         if let Some(sink) = &self.scheduler_signal_sink {
             *sink.lock().await = None;
-        }
-
-        // Close the trace writer with final stats (best-effort).
-        if let Ok(mut guard) = trace_writer.lock() {
-            if let Some(writer) = guard.take() {
-                if let Err(e) = writer.close(&stats) {
-                    warn!(
-                        error = %e,
-                        "Failed to close trace file"
-                    );
-                }
-            }
         }
 
         info!(
@@ -778,6 +772,25 @@ impl Session {
         self.client_cache
             .insert(model_id.to_string(), Arc::clone(&client));
         Ok(client)
+    }
+}
+
+fn strip_event_artifacts(event: &SchedulerEvent) -> SchedulerEvent {
+    match event {
+        SchedulerEvent::ActivationCompleted {
+            node_id,
+            node_kind,
+            round,
+            emit_count,
+            ..
+        } => SchedulerEvent::ActivationCompleted {
+            node_id: node_id.clone(),
+            node_kind: node_kind.clone(),
+            round: *round,
+            emit_count: *emit_count,
+            outputs: Vec::new(),
+        },
+        other => other.clone(),
     }
 }
 

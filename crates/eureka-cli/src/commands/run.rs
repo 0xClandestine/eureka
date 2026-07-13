@@ -78,8 +78,11 @@ pub async fn execute(args: RunArgs) -> Result<()> {
     } else {
         None
     };
-    let persistence: Arc<dyn RunPersistence> =
-        open_persistence(db_path.clone(), &sessions_dir).await;
+    let persistence: Arc<dyn RunPersistence> = open_persistence(
+        db_path.clone().ok_or_else(|| anyhow::anyhow!("failed to create session directory"))?,
+    )
+    .await
+    .context("Failed to open SQLite persistence")?;
 
     let manager = RunManager::new(
         config.clone(),
@@ -99,6 +102,7 @@ pub async fn execute(args: RunArgs) -> Result<()> {
     let checkpoint_store: Arc<dyn CheckpointStore> =
         Arc::clone(&persistence) as Arc<dyn CheckpointStore>;
     session.set_checkpoint_store(checkpoint_store);
+    session.set_event_store(Arc::clone(&persistence));
 
     tracing::info!(
         goal = %args.goal,

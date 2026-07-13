@@ -144,6 +144,12 @@ fn io_err(error: impl std::fmt::Display) -> PersistenceError {
     PersistenceError::Io(std::io::Error::other(error.to_string()))
 }
 
+fn unix_timestamp_ms() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |duration| duration.as_millis() as u64)
+}
+
 impl From<std::io::Error> for PersistenceError {
     fn from(error: std::io::Error) -> Self {
         Self::Io(error)
@@ -200,6 +206,19 @@ pub struct ActivationSnapshot {
     pub round: u32,
     /// Joined input messages.
     pub inputs: Vec<PortMsg>,
+}
+
+/// A durable scheduler event stored for a run.
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+pub struct RunEvent {
+    /// Run that produced the event.
+    pub run_id: uuid::Uuid,
+    /// Monotonically increasing event sequence within the run.
+    pub sequence: u64,
+    /// Unix timestamp in milliseconds when the event was stored.
+    pub timestamp_ms: u64,
+    /// Serialized scheduler event payload.
+    pub event: serde_json::Value,
 }
 
 /// An artifact emitted by a terminal/sink node.
@@ -312,14 +331,29 @@ pub trait CheckpointStore: Send + Sync {
     async fn delete_checkpoint(&self, run_id: uuid::Uuid) -> Result<(), PersistenceError>;
 }
 
-/// A persistence backend that supports run metadata and checkpoints.
+/// Persistence interface for the append-only scheduler event history.
+#[async_trait]
+pub trait EventStore: Send + Sync {
+    /// Append one serialized scheduler event and assign its sequence number.
+    async fn append_event(
+        &self,
+        run_id: uuid::Uuid,
+        event: serde_json::Value,
+    ) -> Result<RunEvent, PersistenceError>;
+    /// Load events in execution order.
+    async fn load_events(&self, run_id: uuid::Uuid) -> Result<Vec<RunEvent>, PersistenceError>;
+    /// Delete all events for a run.
+    async fn delete_events(&self, run_id: uuid::Uuid) -> Result<(), PersistenceError>;
+}
+
+/// A persistence backend that supports run metadata, checkpoints, and events.
 ///
 /// This is the canonical storage boundary for lifecycle management. The
 /// lower-level [`RunRepository`] API remains available for callers that need
 /// optimistic-concurrency details directly.
-pub trait RunPersistence: RunStore + CheckpointStore {}
+pub trait RunPersistence: RunStore + CheckpointStore + EventStore {}
 
-impl<T: RunStore + CheckpointStore> RunPersistence for T {}
+impl<T: RunStore + CheckpointStore + EventStore> RunPersistence for T {}
 
 /// Lifecycle state persisted for a run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -422,19 +456,9 @@ pub trait RunStore: Send + Sync {
 /// or lock a database. Callers receive one capability object regardless of the
 /// selected backend.
 pub async fn open_persistence(
-    sqlite_path: Option<PathBuf>,
-    fallback_directory: impl Into<PathBuf>,
-) -> Arc<dyn RunPersistence> {
-    let fallback_directory = fallback_directory.into();
-    if let Some(path) = sqlite_path {
-        match SqliteRunPersistence::open(path).await {
-            Ok(store) => return Arc::new(store),
-            Err(error) => {
-                tracing::warn!(%error, "SQLite persistence unavailable; using file store");
-            }
-        }
-    }
-    Arc::new(FileRunStore::new(fallback_directory))
+    sqlite_path: impl Into<PathBuf>,
+) -> Result<Arc<dyn RunPersistence>, PersistenceError> {
+    Ok(Arc::new(SqliteRunPersistence::open(sqlite_path).await?))
 }
 
 /// SQLite-backed run persistence.
@@ -471,6 +495,13 @@ impl SqliteRunPersistence {
                    run_id TEXT PRIMARY KEY,
                    checkpoint_json TEXT NOT NULL,
                    revision INTEGER NOT NULL
+                 );
+                 CREATE TABLE IF NOT EXISTS eureka_events (
+                   run_id TEXT NOT NULL,
+                   sequence INTEGER NOT NULL,
+                   timestamp_ms INTEGER NOT NULL,
+                   event_json TEXT NOT NULL,
+                   PRIMARY KEY (run_id, sequence)
                  );",
             )?;
             Ok::<(), PersistenceError>(())
@@ -614,6 +645,7 @@ impl RunRepository for SqliteRunPersistence {
                     [&id_text],
                 )
                 .ok();
+            connection.execute("DELETE FROM eureka_events WHERE run_id = ?1", [&id_text])?;
             connection.execute("DELETE FROM eureka_runs WHERE id = ?1", [&id_text])?;
             Ok(())
         })
@@ -654,6 +686,60 @@ impl RunStore for SqliteRunPersistence {
         RunRepository::list(self, RunFilter::default())
             .await
             .map_err(|error| std::io::Error::other(error.to_string()))
+    }
+}
+
+#[async_trait]
+#[async_trait]
+impl EventStore for SqliteRunPersistence {
+    async fn append_event(
+        &self,
+        run_id: uuid::Uuid,
+        event: serde_json::Value,
+    ) -> Result<RunEvent, PersistenceError> {
+        let _guard = self.lock.lock().await;
+        let id = run_id.to_string();
+        self.blocking(move |connection| {
+            let sequence: i64 = connection.query_row(
+                "SELECT COALESCE(MAX(sequence) + 1, 0) FROM eureka_events WHERE run_id = ?1",
+                [&id],
+                |row| row.get(0),
+            )?;
+            let timestamp_ms = unix_timestamp_ms() as i64;
+            let event_json = serde_json::to_string(&event)?;
+            connection.execute(
+                "INSERT INTO eureka_events (run_id, sequence, timestamp_ms, event_json) VALUES (?1, ?2, ?3, ?4)",
+                rusqlite::params![id, sequence, timestamp_ms, event_json],
+            )?;
+            Ok(RunEvent { run_id, sequence: sequence as u64, timestamp_ms: timestamp_ms as u64, event })
+        }).await
+    }
+
+    async fn load_events(&self, run_id: uuid::Uuid) -> Result<Vec<RunEvent>, PersistenceError> {
+        let id = run_id.to_string();
+        self.blocking(move |connection| {
+            let mut statement = connection.prepare(
+                "SELECT sequence, timestamp_ms, event_json FROM eureka_events WHERE run_id = ?1 ORDER BY sequence",
+            )?;
+            let rows = statement.query_map([&id], |row| {
+                let event_json: String = row.get(2)?;
+                let event = serde_json::from_str(&event_json)
+                    .map_err(|error| rusqlite::Error::FromSqlConversionFailure(
+                        2, rusqlite::types::Type::Text, Box::new(error),
+                    ))?;
+                Ok(RunEvent { run_id, sequence: row.get::<_, i64>(0)? as u64, timestamp_ms: row.get::<_, i64>(1)? as u64, event })
+            })?;
+            rows.collect::<Result<Vec<_>, _>>().map_err(PersistenceError::from)
+        }).await
+    }
+
+    async fn delete_events(&self, run_id: uuid::Uuid) -> Result<(), PersistenceError> {
+        let id = run_id.to_string();
+        self.blocking(move |connection| {
+            connection.execute("DELETE FROM eureka_events WHERE run_id = ?1", [&id])?;
+            Ok(())
+        })
+        .await
     }
 }
 
@@ -742,6 +828,8 @@ pub struct InMemoryRunPersistence {
     runs: Arc<tokio::sync::RwLock<HashMap<uuid::Uuid, RunRecord>>>,
     /// In-memory checkpoint records.
     checkpoints: Arc<tokio::sync::RwLock<HashMap<uuid::Uuid, RunCheckpoint>>>,
+    /// In-memory scheduler event history.
+    events: Arc<tokio::sync::RwLock<HashMap<uuid::Uuid, Vec<RunEvent>>>>,
 }
 
 impl InMemoryRunPersistence {
@@ -810,6 +898,42 @@ impl RunRepository for InMemoryRunPersistence {
     async fn delete_versioned(&self, id: uuid::Uuid) -> Result<(), PersistenceError> {
         self.runs.write().await.remove(&id);
         self.checkpoints.write().await.remove(&id);
+        self.events.write().await.remove(&id);
+        Ok(())
+    }
+}
+
+#[async_trait]
+impl EventStore for InMemoryRunPersistence {
+    async fn append_event(
+        &self,
+        run_id: uuid::Uuid,
+        event: serde_json::Value,
+    ) -> Result<RunEvent, PersistenceError> {
+        let mut events = self.events.write().await;
+        let sequence = events.get(&run_id).map_or(0, |items| items.len() as u64);
+        let entry = RunEvent {
+            run_id,
+            sequence,
+            timestamp_ms: unix_timestamp_ms(),
+            event,
+        };
+        events.entry(run_id).or_default().push(entry.clone());
+        Ok(entry)
+    }
+
+    async fn load_events(&self, run_id: uuid::Uuid) -> Result<Vec<RunEvent>, PersistenceError> {
+        Ok(self
+            .events
+            .read()
+            .await
+            .get(&run_id)
+            .cloned()
+            .unwrap_or_default())
+    }
+
+    async fn delete_events(&self, run_id: uuid::Uuid) -> Result<(), PersistenceError> {
+        self.events.write().await.remove(&run_id);
         Ok(())
     }
 }

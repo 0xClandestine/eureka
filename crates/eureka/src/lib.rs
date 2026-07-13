@@ -56,9 +56,9 @@ pub mod tracing;
 pub use error::EngineError;
 pub use manager::{CreateRunRequest, RunManager};
 pub use run::{
-    open_persistence, ActivationSnapshot, CheckpointReason, CheckpointStore, FileRunStore,
-    InMemoryRunPersistence, PendingInput, PersistenceError, Revision, RunCheckpoint,
-    RunEnvironment, RunFilter, RunOutput, RunPersistence, RunRecord, RunRepository, RunStatus,
-    RunStore, SqliteRunPersistence, DATABASE_SCHEMA_VERSION,
+    open_persistence, ActivationSnapshot, CheckpointReason, CheckpointStore, EventStore,
+    FileRunStore, InMemoryRunPersistence, PendingInput, PersistenceError, Revision, RunCheckpoint,
+    RunEnvironment, RunEvent, RunFilter, RunOutput, RunPersistence, RunRecord, RunRepository,
+    RunStatus, RunStore, SqliteRunPersistence, DATABASE_SCHEMA_VERSION,
 };
 pub use session::Session;

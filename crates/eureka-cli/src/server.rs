@@ -172,6 +172,7 @@ pub fn start_server_with_manager(
         .route("/api/graph", get(graph_handler))
         .route("/api/state", get(state_handler))
         .route("/api/run", get(run_handler))
+        .route("/api/events/history", get(event_history_handler))
         .route("/api/events", get(events_handler))
         .route("/runs", post(create_run_handler).get(list_runs_handler))
         .route("/runs/{id}", get(get_run_handler))
@@ -229,6 +230,20 @@ async fn run_handler(
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?
         .map(Json)
         .ok_or(axum::http::StatusCode::NOT_FOUND)
+}
+
+/// `GET /api/events/history` — return durable scheduler events from SQLite.
+async fn event_history_handler(
+    State(s): State<ServerState>,
+) -> Result<Json<Vec<eureka::run::RunEvent>>, axum::http::StatusCode> {
+    let (Some(store), Some(id)) = (s.run_store, s.run_id) else {
+        return Err(axum::http::StatusCode::NOT_FOUND);
+    };
+    store
+        .load_events(id)
+        .await
+        .map(Json)
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 /// Request body for creating a new run.
