@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use eureka::config::{Budget, EurekaConfig};
-use eureka::run::{CheckpointStore, FileRunStore, RunStore, SqliteRunPersistence};
+use eureka::run::{CheckpointStore, FileRunStore, RunPersistence, RunStore, SqliteRunPersistence};
 use eureka::{RunManager, Session};
 use tokio::sync::broadcast;
 
@@ -78,31 +78,21 @@ pub async fn execute(args: RunArgs) -> Result<()> {
     } else {
         None
     };
-    let (run_store, checkpoint_store): (Arc<dyn RunStore>, Arc<dyn CheckpointStore>) = if let Some(
-        path,
-    ) =
-        &db_path
-    {
+    let persistence: Arc<dyn RunPersistence> = if let Some(path) = &db_path {
         match SqliteRunPersistence::open(path).await {
-            Ok(sqlite) => {
-                let sqlite = Arc::new(sqlite);
-                (sqlite.clone(), sqlite)
-            }
+            Ok(sqlite) => Arc::new(sqlite),
             Err(error) => {
                 tracing::warn!(error = %error, "Failed to open runtime SQLite persistence; using JSON lifecycle store");
-                let file = Arc::new(FileRunStore::new(&sessions_dir));
-                (file.clone(), file)
+                Arc::new(FileRunStore::new(&sessions_dir))
             }
         }
     } else {
-        let file = Arc::new(FileRunStore::new(&sessions_dir));
-        (file.clone(), file)
+        Arc::new(FileRunStore::new(&sessions_dir))
     };
 
     let manager = RunManager::new(
         config.clone(),
-        Arc::clone(&run_store),
-        Arc::clone(&checkpoint_store),
+        Arc::clone(&persistence),
         Some(sessions_dir.clone()),
     );
 
@@ -115,6 +105,8 @@ pub async fn execute(args: RunArgs) -> Result<()> {
     // Create the session — loads the manifest, validates, preps for run
     let mut session = Session::new(config, &session_id.to_string(), db_path)
         .context("Failed to create session")?;
+    let checkpoint_store: Arc<dyn CheckpointStore> =
+        Arc::clone(&persistence) as Arc<dyn CheckpointStore>;
     session.set_checkpoint_store(checkpoint_store);
 
     tracing::info!(
@@ -143,7 +135,7 @@ pub async fn execute(args: RunArgs) -> Result<()> {
             event_tx,
             live_state,
             args.port,
-            Some(Arc::clone(&run_store)),
+            Some(Arc::clone(&persistence) as Arc<dyn RunStore>),
             Some(session_id),
             Some(manager.clone()),
         );
@@ -154,7 +146,7 @@ pub async fn execute(args: RunArgs) -> Result<()> {
     }
 
     let stats = session
-        .run_with_store(goal, Some(run_store.as_ref()))
+        .run_with_store(goal, Some(persistence.as_ref()))
         .await
         .context("Failed to run session")?;
 

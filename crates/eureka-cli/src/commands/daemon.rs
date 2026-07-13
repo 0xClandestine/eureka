@@ -20,7 +20,7 @@ use axum::{
     Router,
 };
 use eureka::config::EurekaConfig;
-use eureka::run::{CheckpointStore, FileRunStore, RunCheckpoint, RunStore, SqliteRunPersistence};
+use eureka::run::{FileRunStore, RunCheckpoint, RunPersistence, SqliteRunPersistence};
 use eureka::tracing::iso_now_rfc3339;
 use eureka::RunManager;
 use serde::{Deserialize, Serialize};
@@ -81,13 +81,13 @@ pub async fn execute_start(port: u16, config_path: Option<String>, data_dir: &Pa
     let sessions_dir = data_dir.join("sessions");
     std::fs::create_dir_all(&sessions_dir)?;
 
-    let (run_store, checkpoint_store): (Arc<dyn RunStore>, Arc<dyn CheckpointStore>) = {
+    let persistence: Arc<dyn RunPersistence> = {
         // Try SQLite; fall back to file-based store
         let db_path = sessions_dir.join("eureka.db");
         match SqliteRunPersistence::open(&db_path).await {
             Ok(sqlite) => {
                 let sqlite = Arc::new(sqlite);
-                (sqlite.clone(), sqlite)
+                sqlite
             }
             Err(error) => {
                 tracing::warn!(
@@ -95,17 +95,12 @@ pub async fn execute_start(port: u16, config_path: Option<String>, data_dir: &Pa
                     "SQLite persistence unavailable; using file-based store"
                 );
                 let file = Arc::new(FileRunStore::new(&sessions_dir));
-                (file.clone(), file)
+                file
             }
         }
     };
 
-    let manager = RunManager::new(
-        config,
-        Arc::clone(&run_store),
-        Arc::clone(&checkpoint_store),
-        Some(sessions_dir),
-    );
+    let manager = RunManager::new(config, Arc::clone(&persistence), Some(sessions_dir));
 
     // Write daemon info file
     let daemon_info = DaemonInfo {

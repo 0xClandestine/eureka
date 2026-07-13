@@ -14,7 +14,7 @@ use tokio::sync::{mpsc, Mutex};
 use crate::config::EurekaConfig;
 use crate::graph::artifact::Artifact;
 use crate::run::{
-    CheckpointReason, CheckpointStore, RunCheckpoint, RunRecord, RunStatus, RunStore,
+    CheckpointReason, CheckpointStore, RunCheckpoint, RunPersistence, RunRecord, RunStatus,
 };
 use crate::scheduler::SchedulerSignal;
 use crate::session::Session;
@@ -35,10 +35,8 @@ type ActiveRunMap = HashMap<uuid::Uuid, Arc<Mutex<Option<mpsc::Sender<SchedulerS
 pub struct RunManager {
     /// Runtime configuration.
     config: EurekaConfig,
-    /// Durable run record store.
-    run_store: Arc<dyn RunStore>,
-    /// Durable checkpoint store.
-    checkpoint_store: Arc<dyn CheckpointStore>,
+    /// Durable run and checkpoint persistence.
+    persistence: Arc<dyn RunPersistence>,
     /// Optional database directory for SQLite-backed sessions.
     db_directory: Option<PathBuf>,
     /// Map of active run signal channels, keyed by run UUID.
@@ -51,14 +49,12 @@ impl RunManager {
     #[must_use]
     pub fn new(
         config: EurekaConfig,
-        run_store: Arc<dyn RunStore>,
-        checkpoint_store: Arc<dyn CheckpointStore>,
+        persistence: Arc<dyn RunPersistence>,
         db_directory: Option<PathBuf>,
     ) -> Self {
         Self {
             config,
-            run_store,
-            checkpoint_store,
+            persistence,
             db_directory,
             active: Arc::new(Mutex::new(HashMap::new())),
         }
@@ -69,7 +65,7 @@ impl RunManager {
     /// # Errors
     /// Returns `EngineError::Store` on persistence failures.
     pub async fn get_run(&self, run_id: uuid::Uuid) -> Result<Option<RunRecord>, EngineError> {
-        self.run_store
+        self.persistence
             .get(run_id)
             .await
             .map_err(|error| EngineError::Store(error.to_string()))
@@ -80,7 +76,7 @@ impl RunManager {
     /// # Errors
     /// Returns `EngineError::Store` on persistence failures.
     pub async fn list_runs(&self) -> Result<Vec<RunRecord>, EngineError> {
-        self.run_store
+        self.persistence
             .list()
             .await
             .map_err(|error| EngineError::Store(error.to_string()))
@@ -94,7 +90,7 @@ impl RunManager {
         &self,
         run_id: uuid::Uuid,
     ) -> Result<Option<RunCheckpoint>, EngineError> {
-        self.checkpoint_store
+        self.persistence
             .load_checkpoint(run_id)
             .await
             .map_err(|error| EngineError::Store(error.to_string()))
@@ -107,7 +103,7 @@ impl RunManager {
     pub async fn create_run(&self, request: CreateRunRequest) -> Result<uuid::Uuid, EngineError> {
         let run_id = uuid::Uuid::now_v7();
         let record = RunRecord::new(run_id, self.config.graph.clone(), request.goal.clone());
-        self.run_store
+        self.persistence
             .save(record)
             .await
             .map_err(|error| EngineError::Store(error.to_string()))?;
@@ -147,7 +143,7 @@ impl RunManager {
             )));
         }
         let checkpoint = self
-            .checkpoint_store
+            .persistence
             .load_checkpoint(run_id)
             .await
             .map_err(|error| EngineError::Store(error.to_string()))?
@@ -183,7 +179,7 @@ impl RunManager {
         validation_session.validate_input(&node_id, &port, &artifact.kind)?;
 
         let mut checkpoint = self
-            .checkpoint_store
+            .persistence
             .load_checkpoint(run_id)
             .await
             .map_err(|error| EngineError::Store(error.to_string()))?
@@ -193,7 +189,7 @@ impl RunManager {
             .inject_input(node_id, port, artifact)
             .map_err(|error| EngineError::Store(error.to_string()))?;
         checkpoint.reason = CheckpointReason::InputAccepted;
-        self.checkpoint_store
+        self.persistence
             .save_checkpoint(checkpoint, Some(expected))
             .await
             .map_err(|error| EngineError::Store(error.to_string()))
@@ -238,8 +234,7 @@ impl RunManager {
         }
 
         let config = self.config.clone();
-        let run_store = Arc::clone(&self.run_store);
-        let checkpoint_store = Arc::clone(&self.checkpoint_store);
+        let persistence = Arc::clone(&self.persistence);
         let db_path = self
             .db_directory
             .as_ref()
@@ -248,14 +243,18 @@ impl RunManager {
         tokio::spawn(async move {
             let result = async {
                 let mut session = Session::new(config, &run_id.to_string(), db_path)?;
+                let checkpoint_store: Arc<dyn CheckpointStore> =
+                    Arc::clone(&persistence) as Arc<dyn CheckpointStore>;
                 session.set_checkpoint_store(checkpoint_store);
                 session.set_scheduler_signal_sink(Arc::clone(&slot));
                 if let Some(checkpoint) = checkpoint {
                     session
-                        .resume_with_store(goal, Some(run_store.as_ref()), checkpoint)
+                        .resume_with_store(goal, Some(persistence.as_ref()), checkpoint)
                         .await
                 } else {
-                    session.run_with_store(goal, Some(run_store.as_ref())).await
+                    session
+                        .run_with_store(goal, Some(persistence.as_ref()))
+                        .await
                 }
             }
             .await;
