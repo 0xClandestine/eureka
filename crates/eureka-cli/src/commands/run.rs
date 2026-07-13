@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use eureka::config::{Budget, EurekaConfig};
-use eureka::run::{CheckpointStore, FileRunStore, RunPersistence, SqliteRunPersistence};
+use eureka::run::{open_persistence, CheckpointStore, RunPersistence, RunStore};
 use eureka::{RunManager, Session};
 use tokio::sync::broadcast;
 
@@ -78,17 +78,8 @@ pub async fn execute(args: RunArgs) -> Result<()> {
     } else {
         None
     };
-    let persistence: Arc<dyn RunPersistence> = if let Some(path) = &db_path {
-        match SqliteRunPersistence::open(path).await {
-            Ok(sqlite) => Arc::new(sqlite),
-            Err(error) => {
-                tracing::warn!(error = %error, "Failed to open runtime SQLite persistence; using JSON lifecycle store");
-                Arc::new(FileRunStore::new(&sessions_dir))
-            }
-        }
-    } else {
-        Arc::new(FileRunStore::new(&sessions_dir))
-    };
+    let persistence: Arc<dyn RunPersistence> =
+        open_persistence(db_path.clone(), &sessions_dir).await;
 
     let manager = RunManager::new(
         config.clone(),

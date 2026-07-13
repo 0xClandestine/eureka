@@ -20,7 +20,7 @@ use axum::{
     Router,
 };
 use eureka::config::EurekaConfig;
-use eureka::run::{FileRunStore, RunCheckpoint, RunPersistence, SqliteRunPersistence};
+use eureka::run::{open_persistence, RunCheckpoint, RunPersistence};
 use eureka::tracing::iso_now_rfc3339;
 use eureka::RunManager;
 use serde::{Deserialize, Serialize};
@@ -81,20 +81,8 @@ pub async fn execute_start(port: u16, config_path: Option<String>, data_dir: &Pa
     let sessions_dir = data_dir.join("sessions");
     std::fs::create_dir_all(&sessions_dir)?;
 
-    let persistence: Arc<dyn RunPersistence> = {
-        // Try SQLite; fall back to file-based store
-        let db_path = sessions_dir.join("eureka.db");
-        match SqliteRunPersistence::open(&db_path).await {
-            Ok(sqlite) => Arc::new(sqlite),
-            Err(error) => {
-                tracing::warn!(
-                    error = %error,
-                    "SQLite persistence unavailable; using file-based store"
-                );
-                Arc::new(FileRunStore::new(&sessions_dir))
-            }
-        }
-    };
+    let persistence: Arc<dyn RunPersistence> =
+        open_persistence(Some(sessions_dir.join("eureka.db")), &sessions_dir).await;
 
     let manager = RunManager::new(config, Arc::clone(&persistence), Some(sessions_dir));
 
