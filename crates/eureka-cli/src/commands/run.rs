@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use eureka::config::{Budget, EurekaConfig};
-use eureka::run::{CheckpointStore, FileRunStore, RunPersistence, RunStore, SqliteRunPersistence};
+use eureka::run::{CheckpointStore, FileRunStore, RunPersistence, SqliteRunPersistence};
 use eureka::{RunManager, Session};
 use tokio::sync::broadcast;
 
@@ -135,7 +135,7 @@ pub async fn execute(args: RunArgs) -> Result<()> {
             event_tx,
             live_state,
             args.port,
-            Some(Arc::clone(&persistence) as Arc<dyn RunStore>),
+            Some(Arc::clone(&persistence)),
             Some(session_id),
             Some(manager.clone()),
         );

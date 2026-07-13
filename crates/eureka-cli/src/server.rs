@@ -29,7 +29,7 @@ use eureka::scheduler::SchedulerEvent;
 use eureka::{
     graph::artifact::Artifact,
     manager::{CreateRunRequest, RunManager},
-    run::{RunCheckpoint, RunRecord, RunStore},
+    run::{RunCheckpoint, RunPersistence, RunRecord},
 };
 
 /// Shared state injected into every axum handler.
@@ -44,7 +44,7 @@ pub struct ServerState {
     /// Wall-clock start time for computing elapsed seconds.
     started_at: Instant,
     /// Optional durable run-record store.
-    run_store: Option<Arc<dyn RunStore>>,
+    run_store: Option<Arc<dyn RunPersistence>>,
     /// Run ID used by the durable status endpoint.
     run_id: Option<uuid::Uuid>,
     /// Optional application run manager for lifecycle endpoints.
@@ -142,7 +142,7 @@ pub fn start_server_with_run_store(
     event_tx: broadcast::Sender<SchedulerEvent>,
     live: Arc<Mutex<LiveState>>,
     port: u16,
-    run_store: Option<Arc<dyn RunStore>>,
+    run_store: Option<Arc<dyn RunPersistence>>,
     run_id: Option<uuid::Uuid>,
 ) -> tokio::task::JoinHandle<()> {
     start_server_with_manager(spec, event_tx, live, port, run_store, run_id, None)
@@ -154,7 +154,7 @@ pub fn start_server_with_manager(
     event_tx: broadcast::Sender<SchedulerEvent>,
     live: Arc<Mutex<LiveState>>,
     port: u16,
-    run_store: Option<Arc<dyn RunStore>>,
+    run_store: Option<Arc<dyn RunPersistence>>,
     run_id: Option<uuid::Uuid>,
     manager: Option<RunManager>,
 ) -> tokio::task::JoinHandle<()> {
