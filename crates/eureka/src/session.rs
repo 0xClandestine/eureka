@@ -610,7 +610,11 @@ impl Session {
                 .await
                 .map_err(|e| EngineError::Store(e.to_string()))?;
         }
-        event_handle.abort();
+        // The scheduler has finished producing events. Drop its event sender,
+        // then drain the observer so all queued events reach SQLite before the
+        // session returns.
+        drop(scheduler);
+        let _ = event_handle.await;
         self.scheduler_signal = None;
         if let Some(sink) = &self.scheduler_signal_sink {
             *sink.lock().await = None;
