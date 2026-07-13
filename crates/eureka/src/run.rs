@@ -144,10 +144,13 @@ fn io_err(error: impl std::fmt::Display) -> PersistenceError {
     PersistenceError::Io(std::io::Error::other(error.to_string()))
 }
 
+/// Return the current Unix timestamp in milliseconds.
 fn unix_timestamp_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |duration| duration.as_millis() as u64)
+        .map_or(0, |duration| {
+            u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
+        })
 }
 
 impl From<std::io::Error> for PersistenceError {
@@ -209,7 +212,7 @@ pub struct ActivationSnapshot {
 }
 
 /// A durable scheduler event stored for a run.
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RunEvent {
     /// Run that produced the event.
     pub run_id: uuid::Uuid,
@@ -450,11 +453,10 @@ pub trait RunStore: Send + Sync {
     async fn list(&self) -> std::io::Result<Vec<RunRecord>>;
 }
 
-/// Open the preferred `SQLite` persistence backend, falling back to files.
+/// Open the `SQLite` persistence backend.
 ///
-/// The fallback keeps local runs usable on systems where `SQLite` cannot create
-/// or lock a database. Callers receive one capability object regardless of the
-/// selected backend.
+/// # Errors
+/// Returns a persistence error if the database cannot be opened or initialized.
 pub async fn open_persistence(
     sqlite_path: impl Into<PathBuf>,
 ) -> Result<Arc<dyn RunPersistence>, PersistenceError> {
@@ -705,13 +707,13 @@ impl EventStore for SqliteRunPersistence {
                 [&id],
                 |row| row.get(0),
             )?;
-            let timestamp_ms = unix_timestamp_ms() as i64;
+            let timestamp_ms = i64::try_from(unix_timestamp_ms()).unwrap_or(i64::MAX);
             let event_json = serde_json::to_string(&event)?;
             connection.execute(
                 "INSERT INTO eureka_events (run_id, sequence, timestamp_ms, event_json) VALUES (?1, ?2, ?3, ?4)",
                 rusqlite::params![id, sequence, timestamp_ms, event_json],
             )?;
-            Ok(RunEvent { run_id, sequence: sequence as u64, timestamp_ms: timestamp_ms as u64, event })
+            Ok(RunEvent { run_id, sequence: u64::try_from(sequence).unwrap_or(0), timestamp_ms: u64::try_from(timestamp_ms).unwrap_or(0), event })
         }).await
     }
 
@@ -727,7 +729,7 @@ impl EventStore for SqliteRunPersistence {
                     .map_err(|error| rusqlite::Error::FromSqlConversionFailure(
                         2, rusqlite::types::Type::Text, Box::new(error),
                     ))?;
-                Ok(RunEvent { run_id, sequence: row.get::<_, i64>(0)? as u64, timestamp_ms: row.get::<_, i64>(1)? as u64, event })
+                Ok(RunEvent { run_id, sequence: u64::try_from(row.get::<_, i64>(0)?).unwrap_or(0), timestamp_ms: u64::try_from(row.get::<_, i64>(1)?).unwrap_or(0), event })
             })?;
             rows.collect::<Result<Vec<_>, _>>().map_err(PersistenceError::from)
         }).await
@@ -919,6 +921,7 @@ impl EventStore for InMemoryRunPersistence {
             event,
         };
         events.entry(run_id).or_default().push(entry.clone());
+        drop(events);
         Ok(entry)
     }
 

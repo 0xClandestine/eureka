@@ -14,7 +14,7 @@ pub fn iso_now_rfc3339() -> String {
     let (year, month, day) = days_to_date(secs / 86_400);
     format!(
         "{year:04}-{month:02}-{day:02}T{hours:02}:{minutes:02}:{seconds:02}.{:03}Z",
-        now.subsec_nanos() / 1_000_000,
+        now.subsec_millis(),
     )
 }
 

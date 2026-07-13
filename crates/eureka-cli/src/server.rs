@@ -232,7 +232,7 @@ async fn run_handler(
         .ok_or(axum::http::StatusCode::NOT_FOUND)
 }
 
-/// `GET /api/events/history` — return durable scheduler events from SQLite.
+/// `GET /api/events/history` — return durable scheduler events from `SQLite`.
 async fn event_history_handler(
     State(s): State<ServerState>,
 ) -> Result<Json<Vec<eureka::run::RunEvent>>, axum::http::StatusCode> {

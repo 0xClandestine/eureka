@@ -775,6 +775,7 @@ impl Session {
     }
 }
 
+/// Remove potentially large artifact payloads from a completed event.
 fn strip_event_artifacts(event: &SchedulerEvent) -> SchedulerEvent {
     match event {
         SchedulerEvent::ActivationCompleted {

@@ -401,13 +401,13 @@ max_file_bytes = 0
 include_artifacts = true
 "#;
 
-/// Configuration for durable scheduler event history in SQLite.
+/// Configuration for durable scheduler event history in `SQLite`.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct TracingConfig {
-    /// Persist scheduler events to the SQLite event history.
+    /// Persist scheduler events to the `SQLite` event history.
     #[serde(default)]
     pub enabled: bool,
-    /// Retained for configuration compatibility; SQLite has no file rotation.
+    /// Retained for configuration compatibility; `SQLite` has no file rotation.
     #[serde(default)]
     pub max_file_bytes: u64,
     /// Whether to include artifact payloads in activation-completed events.
@@ -445,7 +445,7 @@ pub struct EurekaConfig {
     /// Falls back to `agent` (the global default) when an agent has no match.
     #[serde(default)]
     pub agent_overrides: HashMap<String, AgentConfig>,
-    /// Tracing configuration for durable JSONL event logs.
+    /// Tracing configuration for durable `SQLite` event history.
     pub tracing: TracingConfig,
 }
 
