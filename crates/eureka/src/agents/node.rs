@@ -199,10 +199,10 @@ mod tests {
     #[tokio::test]
     async fn test_single_output_node() {
         let def = make_def("generation", "Goal", "Hypotheses");
-        let node = LlmAgentNode::new(def, Arc::new(EchoClient), std::path::PathBuf::from("."));
+        let node = LlmAgentNode::new(def, Arc::new(EchoClient), PathBuf::from("."));
 
         let cancel = tokio_util::sync::CancellationToken::new();
-        let ctx = crate::graph::node::NodeCtx::new("generation", "generation", 0, cancel);
+        let ctx = NodeCtx::new("generation", "generation", 0, cancel);
         let msg = PortMsg {
             port: "in".into(),
             artifact: Artifact {
@@ -274,9 +274,9 @@ mod tests {
             tools: vec![],
         });
 
-        let node = LlmAgentNode::new(def, Arc::new(SplitClient), std::path::PathBuf::from("."));
+        let node = LlmAgentNode::new(def, Arc::new(SplitClient), PathBuf::from("."));
         let cancel = tokio_util::sync::CancellationToken::new();
-        let ctx = crate::graph::node::NodeCtx::new("meta_review", "meta_review", 1, cancel);
+        let ctx = NodeCtx::new("meta_review", "meta_review", 1, cancel);
         let msg = PortMsg {
             port: "in".into(),
             artifact: Artifact {
@@ -354,10 +354,10 @@ mod tests {
             captured: std::sync::Mutex::new(None),
         });
         let client_dyn: Arc<dyn LlmClient> = client.clone();
-        let node = LlmAgentNode::new(def, client_dyn, std::path::PathBuf::from("."));
+        let node = LlmAgentNode::new(def, client_dyn, PathBuf::from("."));
 
         let cancel = tokio_util::sync::CancellationToken::new();
-        let ctx = crate::graph::node::NodeCtx::new("generation", "generation", 0, cancel);
+        let ctx = NodeCtx::new("generation", "generation", 0, cancel);
         let msg = PortMsg {
             port: "context".into(),
             artifact: Artifact {

@@ -13,9 +13,7 @@ use tokio::sync::{mpsc, Mutex};
 
 use crate::config::EurekaConfig;
 use crate::graph::artifact::Artifact;
-use crate::run::{
-    CheckpointReason, CheckpointStore, RunCheckpoint, RunPersistence, RunRecord, RunStatus,
-};
+use crate::run::{CheckpointReason, RunCheckpoint, RunPersistence, RunRecord, RunStatus};
 use crate::scheduler::SchedulerSignal;
 use crate::session::Session;
 use crate::EngineError;
@@ -243,9 +241,7 @@ impl RunManager {
         tokio::spawn(async move {
             let result = async {
                 let mut session = Session::new(config, &run_id.to_string(), db_path)?;
-                let checkpoint_store: Arc<dyn CheckpointStore> =
-                    Arc::clone(&persistence) as Arc<dyn CheckpointStore>;
-                session.set_checkpoint_store(checkpoint_store);
+                session.set_checkpoint_store(persistence.clone());
                 session.set_scheduler_signal_sink(Arc::clone(&slot));
                 if let Some(checkpoint) = checkpoint {
                     session

@@ -85,17 +85,13 @@ pub async fn execute_start(port: u16, config_path: Option<String>, data_dir: &Pa
         // Try SQLite; fall back to file-based store
         let db_path = sessions_dir.join("eureka.db");
         match SqliteRunPersistence::open(&db_path).await {
-            Ok(sqlite) => {
-                let sqlite = Arc::new(sqlite);
-                sqlite
-            }
+            Ok(sqlite) => Arc::new(sqlite),
             Err(error) => {
                 tracing::warn!(
                     error = %error,
                     "SQLite persistence unavailable; using file-based store"
                 );
-                let file = Arc::new(FileRunStore::new(&sessions_dir));
-                file
+                Arc::new(FileRunStore::new(&sessions_dir))
             }
         }
     };
@@ -303,6 +299,7 @@ async fn checkpoint_run_handler(
     Ok(Json(checkpoint))
 }
 
+/// Generate an axum handler for a lifecycle signal.
 macro_rules! signal_handler {
     ($name:ident, $method:ident) => {
         async fn $name(

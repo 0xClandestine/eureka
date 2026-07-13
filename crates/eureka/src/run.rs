@@ -740,6 +740,7 @@ impl RunRepository for InMemoryRunPersistence {
         }
         record.revision = Revision::default();
         runs.insert(record.id, record.clone());
+        drop(runs);
         Ok(record)
     }
 
@@ -765,6 +766,7 @@ impl RunRepository for InMemoryRunPersistence {
         }
         record.revision = Revision(expected.0.saturating_add(1));
         runs.insert(record.id, record.clone());
+        drop(runs);
         Ok(record)
     }
 
@@ -853,6 +855,7 @@ impl CheckpointStore for InMemoryRunPersistence {
         checkpoint.revision =
             current.map_or_else(|| Revision(1), |item| Revision(item.revision.0 + 1));
         checkpoints.insert(checkpoint.run_id, checkpoint.clone());
+        drop(checkpoints);
         Ok(checkpoint)
     }
 
@@ -1152,7 +1155,7 @@ mod tests {
     fn subprocess_environment_contains_shared_database_contract() {
         let environment = RunEnvironment::new("run-1", Some(PathBuf::from("run.sqlite")));
         let values = environment.subprocess_env("ranker", 3, "{}");
-        let values: std::collections::HashMap<_, _> = values.into_iter().collect();
+        let values: HashMap<_, _> = values.into_iter().collect();
         assert_eq!(values.get("EUREKA_SESSION_ID"), Some(&"run-1".to_string()));
         assert_eq!(values.get("EUREKA_NODE_ID"), Some(&"ranker".to_string()));
         assert_eq!(values.get("EUREKA_ROUND"), Some(&"3".to_string()));

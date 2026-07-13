@@ -289,7 +289,7 @@ mod tests {
     }
 
     fn read_lines(path: &Path) -> Vec<String> {
-        let file = std::fs::File::open(path).unwrap();
+        let file = File::open(path).unwrap();
         let reader = std::io::BufReader::new(file);
         reader.lines().map(|l| l.unwrap()).collect()
     }
@@ -533,12 +533,12 @@ mod tests {
 
         let dir = tempfile::TempDir::new().unwrap();
         let parent = dir.path().join("readonly_parent");
-        std::fs::create_dir_all(&parent).unwrap();
+        fs::create_dir_all(&parent).unwrap();
         let sessions_dir = parent.join("sessions");
 
         // Make the parent read-only so create_dir_all fails.
-        let readonly = std::fs::Permissions::from_mode(0o444);
-        std::fs::set_permissions(&parent, readonly).unwrap_or(());
+        let readonly = fs::Permissions::from_mode(0o444);
+        fs::set_permissions(&parent, readonly).unwrap_or(());
 
         let session_id = uuid::Uuid::now_v7();
         let config = test_config();
@@ -555,8 +555,8 @@ mod tests {
         );
 
         // Restore permissions so cleanup works.
-        let writable = std::fs::Permissions::from_mode(0o755);
-        std::fs::set_permissions(&parent, writable).unwrap_or(());
+        let writable = fs::Permissions::from_mode(0o755);
+        fs::set_permissions(&parent, writable).unwrap_or(());
 
         assert!(result.is_none(), "open should return None on readonly root");
     }

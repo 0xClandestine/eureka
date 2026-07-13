@@ -103,6 +103,7 @@ impl DaemonClient {
     }
 }
 
+/// Parse a user-provided run identifier.
 fn parse_uuid(id: &str) -> Result<uuid::Uuid> {
     uuid::Uuid::parse_str(id).with_context(|| {
         format!("'{id}' is not a valid UUID. Use the full session ID from `eureka session list`.")
@@ -197,7 +198,7 @@ pub async fn execute_status(data_dir: &Path, id: &str) -> Result<()> {
     let graph = run["graph"].as_str().unwrap_or("?");
     let created = run["created_at"].as_str().unwrap_or("?");
     let error = run["error"].as_str();
-    let stats = &run["stats"];
+    let run_stats = &run["stats"];
 
     println!("Session:      {id}");
     println!("Status:       {status}");
@@ -207,12 +208,12 @@ pub async fn execute_status(data_dir: &Path, id: &str) -> Result<()> {
     if let Some(err) = error {
         println!("Error:        {err}");
     }
-    if !stats.is_null() {
-        let rounds = stats["rounds_completed"].as_u64().unwrap_or(0);
-        let elapsed = stats["elapsed_secs"].as_f64().unwrap_or(0.0);
-        let input_tokens = stats["total_input_tokens"].as_u64().unwrap_or(0);
-        let output_tokens = stats["total_output_tokens"].as_u64().unwrap_or(0);
-        let cost = stats["total_cost_usd"].as_f64().unwrap_or(0.0);
+    if !run_stats.is_null() {
+        let rounds = run_stats["rounds_completed"].as_u64().unwrap_or(0);
+        let elapsed = run_stats["elapsed_secs"].as_f64().unwrap_or(0.0);
+        let input_tokens = run_stats["total_input_tokens"].as_u64().unwrap_or(0);
+        let output_tokens = run_stats["total_output_tokens"].as_u64().unwrap_or(0);
+        let cost = run_stats["total_cost_usd"].as_f64().unwrap_or(0.0);
         println!();
         println!("Stats:");
         println!("  Rounds:       {rounds}");
@@ -315,11 +316,11 @@ pub async fn execute_wait(data_dir: &Path, id: &str, timeout_secs: Option<u64>) 
             }
             "Completed" | "Failed" | "Cancelled" => {
                 println!("\nSession {id} finished with status: {status}");
-                let stats = &run["stats"];
-                if !stats.is_null() {
-                    let rounds = stats["rounds_completed"].as_u64().unwrap_or(0);
-                    let elapsed = stats["elapsed_secs"].as_f64().unwrap_or(0.0);
-                    let cost = stats["total_cost_usd"].as_f64().unwrap_or(0.0);
+                let run_stats = &run["stats"];
+                if !run_stats.is_null() {
+                    let rounds = run_stats["rounds_completed"].as_u64().unwrap_or(0);
+                    let elapsed = run_stats["elapsed_secs"].as_f64().unwrap_or(0.0);
+                    let cost = run_stats["total_cost_usd"].as_f64().unwrap_or(0.0);
                     println!(
                         "  Rounds: {rounds}, Elapsed: {}, Cost: ${cost:.4}",
                         format_elapsed(elapsed)
@@ -339,6 +340,9 @@ pub async fn execute_wait(data_dir: &Path, id: &str, timeout_secs: Option<u64>) 
 }
 
 /// Send a simple lifecycle signal (pause/resume/cancel) to a run.
+///
+/// # Errors
+/// Returns an error if the daemon cannot be reached or rejects the signal.
 pub async fn execute_signal(data_dir: &Path, id: &str, action: &str) -> Result<()> {
     let client = DaemonClient::connect(data_dir)?;
     let uuid = parse_uuid(id)?;
@@ -351,16 +355,25 @@ pub async fn execute_signal(data_dir: &Path, id: &str, action: &str) -> Result<(
 }
 
 /// Pause a running session.
+///
+/// # Errors
+/// Returns an error if the daemon cannot be reached or rejects the signal.
 pub async fn execute_pause(data_dir: &Path, id: &str) -> Result<()> {
     execute_signal(data_dir, id, "pause").await
 }
 
 /// Resume a paused session.
+///
+/// # Errors
+/// Returns an error if the daemon cannot be reached or rejects the signal.
 pub async fn execute_resume(data_dir: &Path, id: &str) -> Result<()> {
     execute_signal(data_dir, id, "resume").await
 }
 
 /// Cancel a running or paused session.
+///
+/// # Errors
+/// Returns an error if the daemon cannot be reached or rejects the signal.
 pub async fn execute_cancel(data_dir: &Path, id: &str) -> Result<()> {
     execute_signal(data_dir, id, "cancel").await
 }
