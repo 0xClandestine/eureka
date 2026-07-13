@@ -78,8 +78,7 @@ max_wallclock = "45m"
 max_rounds = 100
 
 # [tracing]
-# Write scheduler events to .eureka/sessions/{session_id}.traces.jsonl
-# as JSONL for post-hoc analysis (cost breakdown, latency histograms, etc.).
+# Persist scheduler events in the per-run SQLite database.
 # enabled = false
-# max_file_bytes = 0        # 0 = no rotation; reserved for future use
-# include_artifacts = true   # include artifact payloads in ActivationCompleted outputs
+# max_file_bytes = 0        # retained for configuration compatibility
+# include_artifacts = true   # include artifact payloads in completed events

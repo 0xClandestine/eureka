@@ -100,8 +100,8 @@ allowing `unwrap_used` in `#[cfg(test)]` modules or switching tests to
 8. **Observability** (`eureka-cli/src/server.rs`): an axum server on
    `127.0.0.1:{port}` exposes `/api/graph`, `/api/state`, and `/api/events`
    (SSE). A background task (`track_live_state`) folds scheduler events into a
-   `LiveState` snapshot. Opt-in JSONL tracing writes durable scheduler events
-   to `.eureka/sessions/{session_id}.traces.jsonl`.
+   `LiveState` snapshot. Opt-in tracing writes durable scheduler events to the
+   per-run SQLite `eureka_events` table.
 
 ## Key concepts / invariants
 

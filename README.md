@@ -246,7 +246,7 @@ A run may contain:
 ```text
 <run_id>.sqlite        # control/plugin and tool state
 <run_id>.json          # durable lifecycle metadata
-<run_id>.traces.jsonl  # optional scheduler event trace
+<run_id>.sqlite       # run metadata, checkpoints, and event history
 ```
 
 The current SQLite integration provides a shared per-run database path to
@@ -273,7 +273,7 @@ The live state and SSE endpoints are intended for active-run UIs. The durable
 run endpoint is suitable for status polling after the process or UI restarts,
 but does not currently restore execution.
 
-Enable JSONL tracing with:
+Enable durable scheduler event history in SQLite with:
 
 ```toml
 [tracing]
@@ -281,14 +281,15 @@ enabled = true
 include_artifacts = false
 ```
 
-Trace files are written next to the run database as:
+Events are stored in the per-run `eureka_events` table and can be queried via:
 
 ```text
-.eureka/sessions/<run_id>.traces.jsonl
+GET /api/events/history
+GET /runs/<run_id>/events
 ```
 
-See [`docs/tracing-spec.md`](docs/tracing-spec.md) for the file format,
-configuration, durability behavior, and planned extensions.
+The `include_artifacts` setting controls whether completed-event payloads are
+retained in the database.
 
 ## Library entry point
 
