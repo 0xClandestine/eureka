@@ -416,9 +416,9 @@ pub trait RunStore: Send + Sync {
     async fn list(&self) -> std::io::Result<Vec<RunRecord>>;
 }
 
-/// Open the preferred SQLite persistence backend, falling back to files.
+/// Open the preferred `SQLite` persistence backend, falling back to files.
 ///
-/// The fallback keeps local runs usable on systems where SQLite cannot create
+/// The fallback keeps local runs usable on systems where `SQLite` cannot create
 /// or lock a database. Callers receive one capability object regardless of the
 /// selected backend.
 pub async fn open_persistence(
@@ -430,7 +430,7 @@ pub async fn open_persistence(
         match SqliteRunPersistence::open(path).await {
             Ok(store) => return Arc::new(store),
             Err(error) => {
-                tracing::warn!(%error, "SQLite persistence unavailable; using file store")
+                tracing::warn!(%error, "SQLite persistence unavailable; using file store");
             }
         }
     }

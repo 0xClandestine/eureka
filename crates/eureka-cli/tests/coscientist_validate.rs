@@ -1,3 +1,5 @@
+//! End-to-end validation coverage for the shipped co-scientist graph.
+
 // Integration tests use unwrap/expect liberally; the workspace deny policy
 // for unwrap_used/expect_used applies to production code, not tests.
 #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -198,7 +200,7 @@ fn test_coscientist_validates() {
                     ..Default::default()
                 })
                 .collect(),
-            config: Default::default(),
+            config: eureka::config::AgentConfig::default(),
             output_schema: agent_spec.output_schema.clone(),
             tools: agent_spec
                 .tools

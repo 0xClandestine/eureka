@@ -1102,13 +1102,9 @@ mod tests {
         let mut nodes = HashMap::new();
         nodes.insert("source".into(), BoxedNode::new(SlowNode));
         let store = Arc::new(crate::run::InMemoryRunPersistence::new());
+        let checkpoint_store: Arc<dyn CheckpointStore> = store.clone();
         let mut scheduler = Scheduler::new(spec.clone(), nodes, Budget::default(), 1)
-            .with_checkpoint_store(
-                Arc::clone(&store) as Arc<dyn CheckpointStore>,
-                run_id,
-                "graph",
-                "config",
-            );
+            .with_checkpoint_store(checkpoint_store, run_id, "graph", "config");
         let signal_tx = scheduler.signal_sender();
         signal_tx.send(SchedulerSignal::Pause).await.unwrap();
         let input = HashMap::from([(
@@ -1130,13 +1126,9 @@ mod tests {
 
         let mut restored_nodes = HashMap::new();
         restored_nodes.insert("source".into(), BoxedNode::new(SlowNode));
+        let checkpoint_store: Arc<dyn CheckpointStore> = store.clone();
         let mut restored = Scheduler::new(spec, restored_nodes, Budget::default(), 1)
-            .with_checkpoint_store(
-                Arc::clone(&store) as Arc<dyn CheckpointStore>,
-                run_id,
-                "graph",
-                "config",
-            );
+            .with_checkpoint_store(checkpoint_store, run_id, "graph", "config");
         let stats = restored.run_from_checkpoint(checkpoint).await.unwrap();
         assert_eq!(stats.rounds_completed, 0);
         assert!(CheckpointStore::load_checkpoint(&*store, run_id)

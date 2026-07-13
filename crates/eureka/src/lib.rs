@@ -20,7 +20,26 @@
 // however, use unwrap/expect liberally for ergonomics; allow them in test
 // builds so `cargo clippy --all-targets` stays green without sacrificing
 // the deny policy for real code paths.
-#![cfg_attr(test, allow(clippy::unwrap_used, clippy::expect_used))]
+#![cfg_attr(
+    test,
+    allow(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::items_after_statements,
+        clippy::too_many_lines,
+        clippy::option_if_let_else,
+        clippy::needless_borrows_for_generic_args,
+        clippy::field_reassign_with_default,
+        clippy::manual_let_else,
+        clippy::significant_drop_tightening,
+        clippy::needless_raw_string_hashes,
+        trivial_casts,
+        unused_qualifications,
+        dead_code,
+        unused_variables,
+        unused_mut
+    )
+)]
 
 pub mod agents;
 pub mod config;
