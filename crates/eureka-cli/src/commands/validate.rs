@@ -83,7 +83,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let path = write_manifest(
             dir.path(),
-            r#"
+            r"
 name: test
 agents:
   - id: gen
@@ -101,7 +101,7 @@ edges:
     from_port: out
     to_node: sink
     to_port: in
-"#,
+",
         );
         let manifest = GraphManifest::load(&path).unwrap();
         let reg = build_registry_from_manifest(&manifest);
