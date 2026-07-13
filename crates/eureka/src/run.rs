@@ -312,10 +312,14 @@ pub trait CheckpointStore: Send + Sync {
     async fn delete_checkpoint(&self, run_id: uuid::Uuid) -> Result<(), PersistenceError>;
 }
 
-/// A persistence backend that supports both run metadata and checkpoints.
-pub trait RunPersistence: RunRepository + CheckpointStore {}
+/// A persistence backend that supports run metadata and checkpoints.
+///
+/// This is the canonical storage boundary for lifecycle management. The
+/// lower-level [`RunRepository`] API remains available for callers that need
+/// optimistic-concurrency details directly.
+pub trait RunPersistence: RunStore + CheckpointStore {}
 
-impl<T: RunRepository + CheckpointStore> RunPersistence for T {}
+impl<T: RunStore + CheckpointStore> RunPersistence for T {}
 
 /// Lifecycle state persisted for a run.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -903,7 +907,12 @@ impl FileRunStore {
             let mut records = Vec::new();
             for entry in entries {
                 let path = entry?.path();
-                if path.extension().and_then(|ext| ext.to_str()) != Some("json") {
+                if path.extension().and_then(|ext| ext.to_str()) != Some("json")
+                    || path
+                        .file_name()
+                        .and_then(|name| name.to_str())
+                        .is_some_and(|name| name.ends_with(".checkpoint.json"))
+                {
                     continue;
                 }
                 let bytes = std::fs::read(path)?;

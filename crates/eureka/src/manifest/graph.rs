@@ -76,7 +76,7 @@ impl GraphManifest {
             nodes.push(GraphNodeSpec {
                 id: agent.id.clone(),
                 kind: agent.id.clone(),
-                config: agent.llm_config(),
+                config: agent.config.clone(),
                 description: agent.description.clone(),
             });
         }
@@ -84,7 +84,7 @@ impl GraphManifest {
             nodes.push(GraphNodeSpec {
                 id: ctrl.id.clone(),
                 kind: ctrl.kind.clone(),
-                config: ctrl.node_config(),
+                config: ctrl.config.clone(),
                 description: ctrl.description.clone(),
             });
         }
@@ -96,14 +96,6 @@ impl GraphManifest {
             edges: self.edges.clone(),
             metadata: self.metadata.clone(),
         }
-    }
-
-    /// Get the set of all node IDs (agents + control).
-    #[must_use]
-    pub fn all_node_ids(&self) -> Vec<String> {
-        let mut ids: Vec<String> = self.agents.iter().map(|a| a.id.clone()).collect();
-        ids.extend(self.control.iter().map(|c| c.id.clone()));
-        ids
     }
 }
 
@@ -279,9 +271,5 @@ agents:
             }],
             metadata: serde_json::json!({}),
         };
-
-        let ids = manifest.all_node_ids();
-        assert!(ids.contains(&"gen".to_string()));
-        assert!(ids.contains(&"gov".to_string()));
     }
 }

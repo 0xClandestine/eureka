@@ -11,7 +11,6 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 
 use super::edge::Edge;
-use super::node::Node;
 use super::port::PortSpec;
 use super::spec::{GraphError, GraphSpec};
 
@@ -42,14 +41,6 @@ impl ValidationResult {
             errors,
         }
     }
-
-    /// Merge multiple validation results.
-    #[must_use]
-    pub fn merge(results: Vec<Self>) -> Self {
-        let errors: Vec<GraphError> = results.into_iter().flat_map(|r| r.errors).collect();
-        let valid = errors.is_empty();
-        Self { valid, errors }
-    }
 }
 
 /// A registry mapping node kind strings to their port specifications.
@@ -74,26 +65,10 @@ impl PortRegistry {
         self.specs.insert(kind.into(), spec);
     }
 
-    /// Register a node kind from a `Node` instance.
-    pub fn register_node(&mut self, kind: impl Into<String>, node: &impl Node) {
-        self.specs.insert(kind.into(), node.ports());
-    }
-
     /// Get the port spec for a node kind.
     #[must_use]
     pub fn get(&self, kind: &str) -> Option<&PortSpec> {
         self.specs.get(kind)
-    }
-}
-
-/// Parse a port reference like `"node.port"` into `(node_id, port_name)`.
-#[must_use]
-pub fn parse_port_ref(ref_str: &str) -> Option<(String, String)> {
-    let parts: Vec<&str> = ref_str.splitn(2, '.').collect();
-    if parts.len() == 2 {
-        Some((parts[0].to_string(), parts[1].to_string()))
-    } else {
-        None
     }
 }
 
@@ -619,14 +594,5 @@ mod tests {
             .errors
             .iter()
             .any(|e| matches!(e, GraphError::UnknownNode(_))));
-    }
-
-    #[test]
-    fn test_parse_port_ref() {
-        assert_eq!(
-            parse_port_ref("generation.out"),
-            Some(("generation".into(), "out".into()))
-        );
-        assert_eq!(parse_port_ref("invalid"), None);
     }
 }

@@ -17,4 +17,4 @@ pub use edge::Edge;
 pub use node::{BoxedNode, Emit, Node, NodeCtx, NodeError, NodeUsage, PortMsg};
 pub use port::{PortDef, PortDirection, PortId, PortSpec, PortSpecEntry};
 pub use spec::{GraphError, GraphNodeSpec, GraphSpec};
-pub use validate::{parse_port_ref, validate_graph, PortRegistry, ValidationResult};
+pub use validate::{validate_graph, PortRegistry, ValidationResult};

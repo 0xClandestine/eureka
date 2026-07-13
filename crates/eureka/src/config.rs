@@ -17,7 +17,6 @@ use figment::{
     providers::{Env, Format, Toml},
     Figment,
 };
-use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -185,37 +184,6 @@ impl RunStats {
             ));
         }
         None
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Control signals
-// ---------------------------------------------------------------------------
-
-/// Control signals that flow through control nodes and feedback edges.
-#[derive(Debug, Clone, Serialize, Deserialize, JsonSchema)]
-pub enum ControlSignal {
-    /// Continue processing (next round).
-    Continue {
-        /// The round number.
-        round: u32,
-    },
-    /// Halt processing (termination).
-    Halt {
-        /// Reason for halting.
-        reason: String,
-    },
-    /// Pause for human review.
-    Pause,
-}
-
-impl std::fmt::Display for ControlSignal {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            Self::Continue { round } => write!(f, "Continue(round={round})"),
-            Self::Halt { reason } => write!(f, "Halt({reason})"),
-            Self::Pause => write!(f, "Pause"),
-        }
     }
 }
 

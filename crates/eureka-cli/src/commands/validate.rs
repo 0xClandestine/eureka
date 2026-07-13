@@ -6,7 +6,7 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use eureka::graph::validate::{validate_graph, PortRegistry};
+use eureka::graph::{validate_graph, PortRegistry, PortSpec};
 use eureka::manifest::GraphManifest;
 
 /// Execute the `validate` command.
@@ -47,10 +47,16 @@ pub fn execute(graph_path: &str) -> Result<()> {
 fn build_registry_from_manifest(manifest: &GraphManifest) -> PortRegistry {
     let mut reg = PortRegistry::new();
     for agent in &manifest.agents {
-        reg.register(agent.id.clone(), agent.to_port_spec());
+        reg.register(
+            agent.id.clone(),
+            PortSpec::from_defs(&agent.inputs, &agent.outputs),
+        );
     }
     for ctrl in &manifest.control {
-        reg.register(ctrl.kind.clone(), ctrl.to_port_spec());
+        reg.register(
+            ctrl.kind.clone(),
+            PortSpec::from_defs(&ctrl.inputs, &ctrl.outputs),
+        );
     }
     reg
 }

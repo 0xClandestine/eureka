@@ -287,11 +287,6 @@ impl Scheduler {
             }
             ready_activations = item.ready_activations.clone();
         }
-        // Highest round for which an activation has been dispatched (used to
-        // know which future rounds might have buffered work when the current
-        // round drains).
-        let mut max_dispatched_round: u32 = 0;
-
         // A checkpoint may contain a partially joined input bucket. Re-submit
         // its buffered ports through the normal delivery path so an externally
         // injected human artifact can complete the join and dispatch the node.
@@ -318,7 +313,6 @@ impl Scheduler {
                 )?;
                 if dispatched > 0 {
                     *round_pending.entry(round).or_insert(0) += dispatched;
-                    max_dispatched_round = max_dispatched_round.max(round);
                 }
             }
         }
@@ -351,7 +345,6 @@ impl Scheduler {
                     )?;
                     if dispatched > 0 {
                         *round_pending.entry(current_round).or_insert(0) += dispatched;
-                        max_dispatched_round = max_dispatched_round.max(current_round);
                     }
                 }
             }
@@ -513,7 +506,7 @@ impl Scheduler {
                                                 artifact: emit.artifact.clone(),
                                             });
                                         }
-                                        let new_count = self.route_emission(
+                                        let (forward, feedback) = self.route_emission(
                                             &node_id,
                                             &emit,
                                             &outbound,
@@ -524,28 +517,11 @@ impl Scheduler {
                                             &handles,
                                             &mut tasks,
                                         )?;
-                                        // Route each emission's new
-                                        // activations to their target rounds.
-                                        // (route_emission attributes forward
-                                        // edges to `round` and feedback edges
-                                        // to `round + 1`.)
-                                        // We don't know the per-round split here
-                                        // without more bookkeeping, so track
-                                        // the total and the max round seen.
-                                        if new_count > 0 {
-                                            // Determine the target round(s) for
-                                            // the dispatched activations by
-                                            // re-deriving from the edges.
-                                            let (fwd, fb) = Self::route_round_split(
-                                                &node_id, &emit, &outbound);
-                                            if fwd > 0 {
-                                                *round_pending.entry(round).or_insert(0) += fwd;
-                                            }
-                                            if fb > 0 {
-                                                let next = round + 1;
-                                                *round_pending.entry(next).or_insert(0) += fb;
-                                                max_dispatched_round = max_dispatched_round.max(next);
-                                            }
+                                        if forward > 0 {
+                                            *round_pending.entry(round).or_insert(0) += forward;
+                                        }
+                                        if feedback > 0 {
+                                            *round_pending.entry(round + 1).or_insert(0) += feedback;
                                         }
                                     }
                                 }
@@ -691,7 +667,7 @@ impl Scheduler {
     ///
     /// `round` is the round the *source* activation belonged to. Forward edges
     /// deliver to the same round; feedback edges deliver to `round + 1` (the
-    /// next cycle). Returns the total number of activations dispatched.
+    /// next cycle). Returns `(forward, feedback)` activation counts.
     #[allow(clippy::too_many_arguments)]
     fn route_emission(
         &self,
@@ -704,12 +680,13 @@ impl Scheduler {
         next_activation_id: &mut u64,
         handles: &TaskHandles,
         tasks: &mut JoinSet<()>,
-    ) -> Result<usize, SchedulerError> {
+    ) -> Result<(usize, usize), SchedulerError> {
         let Some(edges) = outbound.get(from_node_id) else {
-            return Ok(0);
+            return Ok((0, 0));
         };
 
-        let mut enqueued = 0usize;
+        let mut forward = 0usize;
+        let mut feedback = 0usize;
 
         for edge in edges {
             if edge.from_port != emit.port {
@@ -720,7 +697,7 @@ impl Scheduler {
             // cycle boundary and belong to the next round.
             let target_round = if edge.feedback { round + 1 } else { round };
 
-            enqueued += self.deliver_input(
+            let dispatched = self.deliver_input(
                 &edge.to_node,
                 &edge.to_port,
                 emit.artifact.clone(),
@@ -731,35 +708,14 @@ impl Scheduler {
                 handles,
                 tasks,
             )?;
-        }
-
-        Ok(enqueued)
-    }
-
-    /// Compute how many of an emission's outbound edges are forward vs feedback,
-    /// so the caller can attribute dispatched activations to the right round.
-    /// Returns `(forward_count, feedback_count)`.
-    fn route_round_split(
-        from_node_id: &str,
-        emit: &Emit,
-        outbound: &HashMap<String, Vec<Edge>>,
-    ) -> (usize, usize) {
-        let Some(edges) = outbound.get(from_node_id) else {
-            return (0, 0);
-        };
-        let mut fwd = 0usize;
-        let mut fb = 0usize;
-        for edge in edges {
-            if edge.from_port != emit.port {
-                continue;
-            }
             if edge.feedback {
-                fb += 1;
+                feedback += dispatched;
             } else {
-                fwd += 1;
+                forward += dispatched;
             }
         }
-        (fwd, fb)
+
+        Ok((forward, feedback))
     }
 
     /// Buffer a single input for `(node_id, round)` and, if the node now has

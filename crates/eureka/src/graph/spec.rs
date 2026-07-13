@@ -44,12 +44,6 @@ pub struct GraphSpec {
 }
 
 impl GraphSpec {
-    /// Get the set of node IDs in this graph.
-    #[must_use]
-    pub fn node_ids(&self) -> Vec<String> {
-        self.nodes.iter().map(|n| n.id.clone()).collect()
-    }
-
     /// Get the kind of a node by ID.
     #[must_use]
     pub fn node_kind(&self, id: &str) -> Option<&str> {
@@ -57,21 +51,6 @@ impl GraphSpec {
             .iter()
             .find(|n| n.id == id)
             .map(|n| n.kind.as_str())
-    }
-
-    /// Get all edges originating from a node.
-    #[must_use]
-    pub fn edges_from(&self, node_id: &str) -> Vec<&Edge> {
-        self.edges
-            .iter()
-            .filter(|e| e.from_node == node_id)
-            .collect()
-    }
-
-    /// Get all edges targeting a node.
-    #[must_use]
-    pub fn edges_to(&self, node_id: &str) -> Vec<&Edge> {
-        self.edges.iter().filter(|e| e.to_node == node_id).collect()
     }
 
     /// Get all nodes that have no non-feedback inbound edges (source nodes).
@@ -90,18 +69,6 @@ impl GraphSpec {
         self.nodes
             .iter()
             .filter(|n| !has_forward_inbound.contains(&n.id))
-            .map(|n| n.id.clone())
-            .collect()
-    }
-
-    /// Get all nodes that have no outbound edges (potential sink nodes).
-    #[must_use]
-    pub fn sink_node_ids(&self) -> Vec<String> {
-        let has_outbound: std::collections::HashSet<String> =
-            self.edges.iter().map(|e| e.from_node.clone()).collect();
-        self.nodes
-            .iter()
-            .filter(|n| !has_outbound.contains(&n.id))
             .map(|n| n.id.clone())
             .collect()
     }
@@ -141,33 +108,6 @@ mod tests {
     use super::*;
 
     #[test]
-    fn test_node_ids() {
-        let spec = GraphSpec {
-            name: Some("test".into()),
-            description: None,
-            nodes: vec![
-                GraphNodeSpec {
-                    id: "a".into(),
-                    kind: "agent.test".into(),
-                    config: serde_json::Value::Null,
-                    description: None,
-                },
-                GraphNodeSpec {
-                    id: "b".into(),
-                    kind: "agent.test".into(),
-                    config: serde_json::Value::Null,
-                    description: None,
-                },
-            ],
-            edges: vec![Edge::new("a", "out", "b", "in")],
-            metadata: serde_json::Value::Null,
-        };
-        assert_eq!(spec.node_ids(), vec!["a", "b"]);
-        assert_eq!(spec.edges_from("a").len(), 1);
-        assert_eq!(spec.edges_to("b").len(), 1);
-    }
-
-    #[test]
     fn test_source_and_sink_nodes() {
         let spec = GraphSpec {
             name: None,
@@ -199,6 +139,5 @@ mod tests {
             metadata: serde_json::Value::Null,
         };
         assert_eq!(spec.source_node_ids(), vec!["source"]);
-        assert_eq!(spec.sink_node_ids(), vec!["sink"]);
     }
 }

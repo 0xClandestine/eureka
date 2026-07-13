@@ -42,16 +42,4 @@ impl AgentSpec {
             tool.resolve_paths(base);
         }
     }
-
-    /// Build the LLM config JSON value for the graph node spec.
-    #[must_use]
-    pub fn llm_config(&self) -> serde_json::Value {
-        self.config.clone()
-    }
-
-    /// Build a `PortSpec` for node registration.
-    #[must_use]
-    pub fn to_port_spec(&self) -> crate::graph::port::PortSpec {
-        crate::graph::port::PortSpec::from_defs(&self.inputs, &self.outputs)
-    }
 }
