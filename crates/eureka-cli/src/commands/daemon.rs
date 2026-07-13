@@ -137,6 +137,7 @@ fn build_daemon_router(state: DaemonState) -> Router {
         .route("/runs", post(create_run_handler).get(list_runs_handler))
         .route("/runs/{id}", get(get_run_handler))
         .route("/runs/{id}/checkpoint", get(checkpoint_run_handler))
+        .route("/runs/{id}/events", get(events_run_handler))
         .route("/runs/{id}/pause", post(pause_run_handler))
         .route("/runs/{id}/resume", post(resume_run_handler))
         .route("/runs/{id}/cancel", post(cancel_run_handler))
@@ -271,6 +272,19 @@ async fn get_run_handler(
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
         .ok_or(StatusCode::NOT_FOUND)?;
     Ok(Json(serde_json::to_value(record).unwrap_or_default()))
+}
+
+/// `GET /runs/{id}/events` — get the durable scheduler event history.
+async fn events_run_handler(
+    State(state): State<DaemonState>,
+    AxumPath(id): AxumPath<uuid::Uuid>,
+) -> Result<Json<Vec<eureka::run::RunEvent>>, StatusCode> {
+    state
+        .manager
+        .get_events(id)
+        .await
+        .map(Json)
+        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 /// `GET /runs/{id}/checkpoint` — get the latest checkpoint (outputs, round, etc.).
