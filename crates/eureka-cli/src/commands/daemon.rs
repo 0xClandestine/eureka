@@ -21,6 +21,7 @@ use axum::{
 };
 use eureka::config::EurekaConfig;
 use eureka::run::{CheckpointStore, FileRunStore, RunCheckpoint, RunStore, SqliteRunPersistence};
+use eureka::tracing::iso_now_rfc3339;
 use eureka::RunManager;
 use serde::{Deserialize, Serialize};
 use tokio::signal;
@@ -111,7 +112,7 @@ pub async fn execute_start(port: u16, config_path: Option<String>, data_dir: &Pa
         pid: std::process::id(),
         port,
         data_dir: data_dir.to_string_lossy().to_string(),
-        started_at: chrono_now(),
+        started_at: iso_now_rfc3339(),
     };
     write_daemon_info(data_dir, &daemon_info)?;
 
@@ -245,19 +246,15 @@ pub fn execute_status(data_dir: &Path) -> Result<()> {
 // HTTP Handlers
 // ---------------------------------------------------------------------------
 
-/// Extract the `RunManager` from state.
-fn manager_from_state(state: &DaemonState) -> RunManager {
-    state.manager.clone()
-}
-
 /// `POST /runs` — create and start a new research run.
 async fn create_run_handler(
     State(state): State<DaemonState>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<(StatusCode, Json<serde_json::Value>), StatusCode> {
+    let manager = state.manager.clone();
     let goal = body.get("goal").cloned().unwrap_or(body);
     let request = eureka::CreateRunRequest { goal };
-    let id = manager_from_state(&state)
+    let id = manager
         .create_run(request)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -268,7 +265,9 @@ async fn create_run_handler(
 async fn list_runs_handler(
     State(state): State<DaemonState>,
 ) -> Result<Json<Vec<serde_json::Value>>, StatusCode> {
-    let records = manager_from_state(&state)
+    let records = state
+        .manager
+        .clone()
         .list_runs()
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
@@ -284,7 +283,9 @@ async fn get_run_handler(
     State(state): State<DaemonState>,
     AxumPath(id): AxumPath<uuid::Uuid>,
 ) -> Result<Json<serde_json::Value>, StatusCode> {
-    let record = manager_from_state(&state)
+    let record = state
+        .manager
+        .clone()
         .get_run(id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
@@ -297,7 +298,9 @@ async fn checkpoint_run_handler(
     State(state): State<DaemonState>,
     AxumPath(id): AxumPath<uuid::Uuid>,
 ) -> Result<Json<RunCheckpoint>, StatusCode> {
-    let checkpoint = manager_from_state(&state)
+    let checkpoint = state
+        .manager
+        .clone()
         .get_checkpoint(id)
         .await
         .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?
@@ -305,41 +308,26 @@ async fn checkpoint_run_handler(
     Ok(Json(checkpoint))
 }
 
-/// `POST /runs/{id}/pause` — pause a running session.
-async fn pause_run_handler(
-    State(state): State<DaemonState>,
-    AxumPath(id): AxumPath<uuid::Uuid>,
-) -> Result<StatusCode, StatusCode> {
-    manager_from_state(&state)
-        .pause_run(id)
-        .await
-        .map(|()| StatusCode::ACCEPTED)
-        .map_err(|_| StatusCode::CONFLICT)
+macro_rules! signal_handler {
+    ($name:ident, $method:ident) => {
+        async fn $name(
+            State(state): State<DaemonState>,
+            AxumPath(id): AxumPath<uuid::Uuid>,
+        ) -> Result<StatusCode, StatusCode> {
+            state
+                .manager
+                .clone()
+                .$method(id)
+                .await
+                .map(|()| StatusCode::ACCEPTED)
+                .map_err(|_| StatusCode::CONFLICT)
+        }
+    };
 }
 
-/// `POST /runs/{id}/resume` — resume a paused session.
-async fn resume_run_handler(
-    State(state): State<DaemonState>,
-    AxumPath(id): AxumPath<uuid::Uuid>,
-) -> Result<StatusCode, StatusCode> {
-    manager_from_state(&state)
-        .resume_run(id)
-        .await
-        .map(|()| StatusCode::ACCEPTED)
-        .map_err(|_| StatusCode::CONFLICT)
-}
-
-/// `POST /runs/{id}/cancel` — cancel a running or paused session.
-async fn cancel_run_handler(
-    State(state): State<DaemonState>,
-    AxumPath(id): AxumPath<uuid::Uuid>,
-) -> Result<StatusCode, StatusCode> {
-    manager_from_state(&state)
-        .cancel_run(id)
-        .await
-        .map(|()| StatusCode::ACCEPTED)
-        .map_err(|_| StatusCode::CONFLICT)
-}
+signal_handler!(pause_run_handler, pause_run);
+signal_handler!(resume_run_handler, resume_run);
+signal_handler!(cancel_run_handler, cancel_run);
 
 /// `POST /runs/{id}/input` — inject an artifact into a paused session.
 async fn input_run_handler(
@@ -347,7 +335,7 @@ async fn input_run_handler(
     AxumPath(id): AxumPath<uuid::Uuid>,
     Json(body): Json<serde_json::Value>,
 ) -> Result<Json<RunCheckpoint>, StatusCode> {
-    let manager = manager_from_state(&state);
+    let manager = state.manager.clone();
 
     let node_id = body
         .get("node_id")
@@ -441,44 +429,6 @@ async fn shutdown_signal() {
     }
 }
 
-/// Get a stable timestamp string for daemon info (no chrono dependency).
-fn chrono_now() -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
-    let secs = now.as_secs();
-    let days_since_epoch = secs / 86_400;
-    let time_in_day = secs % 86_400;
-    let hours = time_in_day / 3_600;
-    let minutes = (time_in_day % 3_600) / 60;
-    let seconds = time_in_day % 60;
-
-    let (year, month, day) = days_to_date(days_since_epoch);
-
-    format!("{year:04}-{month:02}-{day:02}T{hours:02}:{minutes:02}:{seconds:02}Z")
-}
-
-/// Convert days since Unix epoch to `(year, month, day)`.
-///
-/// Algorithm from Howard Hinnant.
-#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
-const fn days_to_date(days: u64) -> (i64, u32, u32) {
-    // Safety: current Unix timestamps (~2^31 seconds) fit easily in i64.
-    #[allow(clippy::cast_possible_wrap)]
-    let z = days as i64 + 719_468;
-    let era = (if z >= 0 { z } else { z - 146_096 }) / 146_097;
-    let doe = z - era * 146_097;
-    let yoe = (doe - doe / 1_460 + doe / 36_524 - doe / 146_096) / 365;
-    let y = yoe + era * 400;
-    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
-    let mp = (5 * doy + 2) / 153;
-    let d = doy - (153 * mp + 2) / 5 + 1;
-    let m = if mp < 10 { mp + 3 } else { mp - 9 };
-    let y = if m <= 2 { y + 1 } else { y };
-    // Safety: month/day values are always in valid ranges
-    (y, m as u32, d as u32)
-}
-
 #[cfg(test)]
 mod tests {
     #![allow(clippy::unwrap_used, clippy::expect_used)]
@@ -525,41 +475,5 @@ mod tests {
         assert!(daemon_info_path(dir.path()).exists());
         remove_daemon_info(dir.path());
         assert!(!daemon_info_path(dir.path()).exists());
-    }
-
-    #[test]
-    fn test_days_to_date() {
-        // Unix epoch: 1970-01-01
-        let (y, m, d) = days_to_date(0);
-        assert_eq!(y, 1970);
-        assert_eq!(m, 1);
-        assert_eq!(d, 1);
-
-        // Known date: 2026-07-11 = days since epoch
-        let july_11_2026 = days_since_ymd(2026, 7, 11);
-        let (y, m, d) = days_to_date(july_11_2026);
-        assert_eq!(y, 2026);
-        assert_eq!(m, 7);
-        assert_eq!(d, 11);
-
-        // Far future
-        let (y, m, d) = days_to_date(days_since_ymd(2099, 12, 31));
-        assert_eq!(y, 2099);
-        assert_eq!(m, 12);
-        assert_eq!(d, 31);
-    }
-
-    /// Days since Unix epoch for a given date.
-    fn days_since_ymd(year: i64, month: u32, day: u32) -> u64 {
-        let (y, m) = if month <= 2 {
-            (year - 1, month + 9)
-        } else {
-            (year, month - 3)
-        };
-        let era = y / 400;
-        let yoe = y - era * 400;
-        let doy = (153 * i64::from(m) + 2) / 5 + i64::from(day) - 1;
-        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-        (era * 146_097 + doe - 719_468) as u64
     }
 }

@@ -7,7 +7,6 @@
 pub use crate::config::AgentConfig;
 pub use crate::graph::port::PortDef as AgentPort;
 
-use crate::graph::port::PortSpec;
 use serde::{Deserialize, Serialize};
 
 /// A shell tool the agent may call during its loop.
@@ -61,9 +60,7 @@ pub struct AgentDef {
 impl AgentDef {
     /// Build a `PortSpec` for this agent (used by the node registry).
     #[must_use]
-    pub fn to_port_spec(&self) -> PortSpec {
-        let inputs = self.inputs.iter().map(AgentPort::to_input_spec).collect();
-        let outputs = self.outputs.iter().map(AgentPort::to_output_spec).collect();
-        PortSpec::new(inputs, outputs)
+    pub fn to_port_spec(&self) -> crate::graph::port::PortSpec {
+        crate::graph::port::PortSpec::from_defs(&self.inputs, &self.outputs)
     }
 }

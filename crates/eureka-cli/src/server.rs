@@ -148,7 +148,7 @@ pub fn start_server_with_run_store(
     start_server_with_manager(spec, event_tx, live, port, run_store, run_id, None)
 }
 
-/// Start the HTTP server with a high-level lifecycle manager.
+/// Start the UI server with an optional manager and run store.
 pub fn start_server_with_manager(
     spec: GraphSpec,
     event_tx: broadcast::Sender<SchedulerEvent>,
@@ -300,40 +300,24 @@ async fn get_run_handler(
 }
 
 /// `POST /runs/:id/pause` — request a pause.
-async fn pause_run_handler(
-    State(state): State<ServerState>,
-    Path(id): Path<uuid::Uuid>,
-) -> Result<axum::http::StatusCode, axum::http::StatusCode> {
-    manager_or_404(&state)?
-        .pause_run(id)
-        .await
-        .map(|()| axum::http::StatusCode::ACCEPTED)
-        .map_err(|_| axum::http::StatusCode::CONFLICT)
+macro_rules! signal_handler {
+    ($name:ident, $method:ident) => {
+        async fn $name(
+            State(state): State<ServerState>,
+            Path(id): Path<uuid::Uuid>,
+        ) -> Result<axum::http::StatusCode, axum::http::StatusCode> {
+            manager_or_404(&state)?
+                .$method(id)
+                .await
+                .map(|()| axum::http::StatusCode::ACCEPTED)
+                .map_err(|_| axum::http::StatusCode::CONFLICT)
+        }
+    };
 }
 
-/// `POST /runs/:id/resume` — resume a paused run.
-async fn resume_run_handler(
-    State(state): State<ServerState>,
-    Path(id): Path<uuid::Uuid>,
-) -> Result<axum::http::StatusCode, axum::http::StatusCode> {
-    manager_or_404(&state)?
-        .resume_run(id)
-        .await
-        .map(|()| axum::http::StatusCode::ACCEPTED)
-        .map_err(|_| axum::http::StatusCode::CONFLICT)
-}
-
-/// `POST /runs/:id/cancel` — request cancellation.
-async fn cancel_run_handler(
-    State(state): State<ServerState>,
-    Path(id): Path<uuid::Uuid>,
-) -> Result<axum::http::StatusCode, axum::http::StatusCode> {
-    manager_or_404(&state)?
-        .cancel_run(id)
-        .await
-        .map(|()| axum::http::StatusCode::ACCEPTED)
-        .map_err(|_| axum::http::StatusCode::CONFLICT)
-}
+signal_handler!(pause_run_handler, pause_run);
+signal_handler!(resume_run_handler, resume_run);
+signal_handler!(cancel_run_handler, cancel_run);
 
 /// `POST /runs/:id/input` — inject a typed artifact into a paused run.
 async fn input_run_handler(

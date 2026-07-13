@@ -2,6 +2,46 @@ name: AI Co-Scientist
 description: Reproduction of Google Research's AI co-scientist topology (Feb 2025)
 
 # ── LLM agents ──────────────────────────────────────────────────────────
+# Shared tool definitions referenced via YAML anchors by each agent.
+tool_defs:
+  - &arxiv_search
+    name: search_literature
+    description: Search arXiv for papers matching a query
+    command: [python3, tools/arxiv_search.py]
+    args_schema:
+      type: object
+      required: [query]
+      properties:
+        query:       { type: string,  description: "Keywords or phrase to search for" }
+        max_results: { type: integer, description: "Max results (default 5, max 20)" }
+        page:        { type: integer, description: "Page number (default 0)" }
+    timeout_secs: 30
+  - &arxiv_read
+    name: read_paper
+    description: Retrieve the full text of an arXiv paper as clean Markdown
+    command: [python3, tools/arxiv_search.py]
+    args_schema:
+      type: object
+      required: [arxiv_id]
+      properties:
+        arxiv_id: { type: string, description: "ArXiv paper ID e.g. 2404.01234" }
+    timeout_secs: 60
+  - &context_store
+    name: context_store
+    description: Read or write shared agent context memory (persists across rounds)
+    command: [python3, tools/context_store.py]
+    args_schema:
+      type: object
+      required: [action]
+      properties:
+        action:  { type: string, enum: [read, write, list, read_round, delete] }
+        key:     { type: string, description: "Context key to read/write/delete" }
+        value:   { type: object, description: "JSON value to store (for write action)" }
+        prefix:  { type: string, description: "Key prefix filter (for list action)" }
+        round:   { type: integer, description: "Round number (for read_round action)" }
+        namespace: { type: string, description: "Logical namespace, defaults to 'shared'" }
+    timeout_secs: 10
+
 agents:
   - id: generation
     description: Drafts novel hypotheses from the research goal via literature
@@ -16,41 +56,7 @@ agents:
     outputs:
       - port: out
         kind: Hypotheses
-    tools:
-      - name: search_literature
-        description: Search arXiv for papers matching a query
-        command: [python3, tools/arxiv_search.py]
-        args_schema:
-          type: object
-          required: [query]
-          properties:
-            query:       { type: string,  description: "Keywords or phrase to search for" }
-            max_results: { type: integer, description: "Max results (default 5, max 20)" }
-            page:        { type: integer, description: "Page number (default 0)" }
-        timeout_secs: 30
-      - name: read_paper
-        description: Retrieve the full text of an arXiv paper as clean Markdown
-        command: [python3, tools/arxiv_search.py]
-        args_schema:
-          type: object
-          required: [arxiv_id]
-          properties:
-            arxiv_id: { type: string, description: "ArXiv paper ID e.g. 2404.01234" }
-        timeout_secs: 60
-      - name: context_store
-        description: Read or write shared agent context memory (persists across rounds)
-        command: [python3, tools/context_store.py]
-        args_schema:
-          type: object
-          required: [action]
-          properties:
-            action:  { type: string, enum: [read, write, list, read_round, delete] }
-            key:     { type: string, description: "Context key to read/write/delete" }
-            value:   { type: object, description: "JSON value to store (for write action)" }
-            prefix:  { type: string, description: "Key prefix filter (for list action)" }
-            round:   { type: integer, description: "Round number (for read_round action)" }
-            namespace: { type: string, description: "Logical namespace, defaults to 'shared'" }
-        timeout_secs: 10
+    tools: [*arxiv_search, *arxiv_read, *context_store]
     output_schema:
       type: object
       required: [hypotheses]
@@ -109,41 +115,7 @@ agents:
     outputs:
       - port: out
         kind: Reviews
-    tools:
-      - name: search_literature
-        description: Search arXiv for papers matching a query
-        command: [python3, tools/arxiv_search.py]
-        args_schema:
-          type: object
-          required: [query]
-          properties:
-            query:       { type: string }
-            max_results: { type: integer }
-            page:        { type: integer }
-        timeout_secs: 30
-      - name: read_paper
-        description: Retrieve full text of an arXiv paper
-        command: [python3, tools/arxiv_search.py]
-        args_schema:
-          type: object
-          required: [arxiv_id]
-          properties:
-            arxiv_id: { type: string }
-        timeout_secs: 60
-      - name: context_store
-        description: Read or write shared agent context memory across rounds
-        command: [python3, tools/context_store.py]
-        args_schema:
-          type: object
-          required: [action]
-          properties:
-            action:  { type: string, enum: [read, write, list, read_round, delete] }
-            key:     { type: string }
-            value:   { type: object }
-            prefix:  { type: string }
-            round:   { type: integer }
-            namespace: { type: string }
-        timeout_secs: 10
+    tools: [*arxiv_search, *arxiv_read, *context_store]
     output_schema:
       type: object
       required: [reviews]
@@ -177,41 +149,7 @@ agents:
     outputs:
       - port: out
         kind: Hypotheses
-    tools:
-      - name: search_literature
-        description: Search arXiv for papers matching a query
-        command: [python3, tools/arxiv_search.py]
-        args_schema:
-          type: object
-          required: [query]
-          properties:
-            query:       { type: string }
-            max_results: { type: integer }
-            page:        { type: integer }
-        timeout_secs: 30
-      - name: read_paper
-        description: Retrieve full text of an arXiv paper
-        command: [python3, tools/arxiv_search.py]
-        args_schema:
-          type: object
-          required: [arxiv_id]
-          properties:
-            arxiv_id: { type: string }
-        timeout_secs: 60
-      - name: context_store
-        description: Read or write shared agent context memory across rounds
-        command: [python3, tools/context_store.py]
-        args_schema:
-          type: object
-          required: [action]
-          properties:
-            action:  { type: string, enum: [read, write, list, read_round, delete] }
-            key:     { type: string }
-            value:   { type: object }
-            prefix:  { type: string }
-            round:   { type: integer }
-            namespace: { type: string }
-        timeout_secs: 10
+    tools: [*arxiv_search, *arxiv_read, *context_store]
     output_schema:
       type: object
       required: [hypotheses]
@@ -433,23 +371,3 @@ metadata:
   version: 0.7.0
   author: Eureka Team
   reference: Google Research, AI co-scientist, Feb 2025
-  expert_workflow:
-    description: |
-      Scientists can interact with a running co-scientist session via the CLI:
-
-      1. Pause the session:
-         eureka session pause <session-id>
-
-      2. Inject an expert hypothesis:
-         eureka session inject <session-id> generation in \
-           '{"hypotheses":[{"statement":"...","rationale":"...", ...}]}'
-
-      3. Inject an expert review:
-         eureka session inject <session-id> reflection in \
-           '{"reviews":[{"hypothesis":{...},"kind":"expert","score":9,"reasoning":"..."}]}'
-
-      4. Resume the session:
-         eureka session resume <session-id>
-
-      Expert-injected content carries authoritative weight — agents treat it
-      as high-priority input and surface any conflicts explicitly.

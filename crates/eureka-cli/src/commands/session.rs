@@ -6,24 +6,107 @@
 
 use std::io::Write;
 use std::path::Path;
+use std::time::Duration;
 
 use anyhow::{Context, Result};
 use serde_json::Value;
 
 use crate::commands::daemon;
 
-/// Daemon HTTP client base URL.
-fn daemon_base_url(data_dir: &Path) -> Result<String> {
-    let info = daemon::read_daemon_info(data_dir)?;
-    Ok(format!("http://127.0.0.1:{}", info.port))
+/// HTTP client for the daemon API.
+#[derive(Clone)]
+struct DaemonClient {
+    /// Daemon base URL (http://127.0.0.1:{port}).
+    base_url: String,
+    /// Shared HTTP client.
+    client: reqwest::Client,
 }
 
-/// Build a reqwest client.
-fn http_client() -> Result<reqwest::Client> {
-    reqwest::Client::builder()
-        .timeout(std::time::Duration::from_secs(30))
-        .build()
-        .context("Failed to create HTTP client")
+impl DaemonClient {
+    /// Connect to the daemon by reading its info file.
+    ///
+    /// # Errors
+    /// Returns an error if the daemon info file cannot be read or the client cannot be built.
+    fn connect(data_dir: &Path) -> Result<Self> {
+        let info = daemon::read_daemon_info(data_dir)?;
+        Ok(Self {
+            base_url: format!("http://127.0.0.1:{}", info.port),
+            client: reqwest::Client::builder()
+                .timeout(Duration::from_secs(30))
+                .build()
+                .context("Failed to create HTTP client")?,
+        })
+    }
+
+    /// POST JSON to the daemon, returning the JSON response.
+    ///
+    /// # Errors
+    /// Returns an error on connection failure, non-2xx status, or invalid JSON.
+    async fn post(&self, path: &str, body: &Value) -> Result<Value> {
+        let resp = self
+            .client
+            .post(format!("{}{}", self.base_url, path))
+            .json(body)
+            .send()
+            .await
+            .context("Failed to connect to daemon. Is it running? (`eureka daemon status`)")?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            anyhow::bail!("Daemon returned {status}: {text}");
+        }
+        resp.json().await.context("Invalid JSON from daemon")
+    }
+
+    /// GET from the daemon, returning the JSON response.
+    ///
+    /// `not_found_msg` is shown when the daemon returns 404.
+    ///
+    /// # Errors
+    /// Returns an error on connection failure, non-2xx status, or invalid JSON.
+    async fn get(&self, path: &str, not_found_msg: &str) -> Result<Value> {
+        let resp = self
+            .client
+            .get(format!("{}{}", self.base_url, path))
+            .send()
+            .await
+            .context("Failed to connect to daemon")?;
+        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+            anyhow::bail!("{not_found_msg}");
+        }
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            anyhow::bail!("Daemon returned {status}: {text}");
+        }
+        resp.json().await.context("Invalid JSON from daemon")
+    }
+
+    /// POST to the daemon, printing a success message on 2xx.
+    ///
+    /// # Errors
+    /// Returns an error on connection failure or non-2xx status.
+    async fn post_simple(&self, path: &str, ok_msg: &str) -> Result<()> {
+        let resp = self
+            .client
+            .post(format!("{}{}", self.base_url, path))
+            .send()
+            .await
+            .context("Failed to connect to daemon")?;
+        if !resp.status().is_success() {
+            let status = resp.status();
+            let text = resp.text().await.unwrap_or_default();
+            anyhow::bail!("Failed: {status} {text}");
+        }
+        println!("{ok_msg}");
+        Ok(())
+    }
+}
+
+fn parse_uuid(id: &str) -> Result<uuid::Uuid> {
+    uuid::Uuid::parse_str(id).with_context(|| {
+        format!("'{id}' is not a valid UUID. Use the full session ID from `eureka session list`.")
+    })
 }
 
 /// Start a new research run via the daemon.
@@ -37,8 +120,7 @@ pub async fn execute_start(
     domain: &str,
     max_rounds: Option<u32>,
 ) -> Result<()> {
-    let base = daemon_base_url(data_dir)?;
-    let client = http_client()?;
+    let client = DaemonClient::connect(data_dir)?;
 
     let mut goal_obj = serde_json::json!({
         "goal": goal,
@@ -50,26 +132,8 @@ pub async fn execute_start(
     }
 
     let body = serde_json::json!({ "goal": goal_obj });
-
-    let resp = client
-        .post(format!("{base}/runs"))
-        .json(&body)
-        .send()
-        .await
-        .context("Failed to connect to daemon. Is it running? (`eureka daemon status`)")?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Daemon returned {status}: {text}");
-    }
-
-    let result: Value = resp.json().await?;
-    let id = result["id"]
-        .as_str()
-        .map_or_else(|| "unknown", |s| s)
-        .to_string();
-
+    let result = client.post("/runs", &body).await?;
+    let id = result["id"].as_str().unwrap_or("unknown");
     println!("Started run: {id}");
     Ok(())
 }
@@ -79,22 +143,8 @@ pub async fn execute_start(
 /// # Errors
 /// Returns an error if the daemon is not reachable.
 pub async fn execute_list(data_dir: &Path) -> Result<()> {
-    let base = daemon_base_url(data_dir)?;
-    let client = http_client()?;
-
-    let resp = client
-        .get(format!("{base}/runs"))
-        .send()
-        .await
-        .context("Failed to connect to daemon. Is it running?")?;
-
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Daemon returned {status}: {text}");
-    }
-
-    let runs: Vec<Value> = resp.json().await?;
+    let client = DaemonClient::connect(data_dir)?;
+    let runs: Vec<Value> = serde_json::from_value(client.get("/runs", "No runs found").await?)?;
 
     if runs.is_empty() {
         println!("No runs found.");
@@ -116,11 +166,12 @@ pub async fn execute_list(data_dir: &Path) -> Result<()> {
             .as_str()
             .or_else(|| run["goal"].as_str())
             .unwrap_or("?");
-        let elapsed_str = format_elapsed(elapsed);
 
-        println!("{id:<38} {status:<12} {rounds:<8} {elapsed_str:<10} {goal}");
+        println!(
+            "{id:<38} {status:<12} {rounds:<8} {:<10} {goal}",
+            format_elapsed(elapsed)
+        );
     }
-
     Ok(())
 }
 
@@ -129,28 +180,16 @@ pub async fn execute_list(data_dir: &Path) -> Result<()> {
 /// # Errors
 /// Returns an error if the daemon is not reachable or the session is not found.
 pub async fn execute_status(data_dir: &Path, id: &str) -> Result<()> {
-    let base = daemon_base_url(data_dir)?;
-    let client = http_client()?;
-
+    let client = DaemonClient::connect(data_dir)?;
     let uuid = parse_uuid(id)?;
-    let resp = client
-        .get(format!("{base}/runs/{uuid}"))
-        .send()
-        .await
-        .context("Failed to connect to daemon")?;
+    let run = client
+        .get(
+            &format!("/runs/{uuid}"),
+            &format!("Session '{id}' not found"),
+        )
+        .await?;
 
-    if resp.status() == reqwest::StatusCode::NOT_FOUND {
-        anyhow::bail!("Session '{id}' not found");
-    }
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Daemon returned {status}: {text}");
-    }
-
-    let run: Value = resp.json().await?;
-
-    let run_status = run["status"].as_str().unwrap_or("unknown");
+    let status = run["status"].as_str().unwrap_or("unknown");
     let goal = run["goal"]["goal"]
         .as_str()
         .or_else(|| run["goal"].as_str())
@@ -158,26 +197,22 @@ pub async fn execute_status(data_dir: &Path, id: &str) -> Result<()> {
     let graph = run["graph"].as_str().unwrap_or("?");
     let created = run["created_at"].as_str().unwrap_or("?");
     let error = run["error"].as_str();
-
-    let session_stats = &run["stats"];
+    let stats = &run["stats"];
 
     println!("Session:      {id}");
-    println!("Status:       {run_status}");
+    println!("Status:       {status}");
     println!("Goal:         {goal}");
     println!("Graph:        {graph}");
     println!("Created:      {created}");
-
     if let Some(err) = error {
         println!("Error:        {err}");
     }
-
-    if !session_stats.is_null() {
-        let rounds = session_stats["rounds_completed"].as_u64().unwrap_or(0);
-        let elapsed = session_stats["elapsed_secs"].as_f64().unwrap_or(0.0);
-        let input_tokens = session_stats["total_input_tokens"].as_u64().unwrap_or(0);
-        let output_tokens = session_stats["total_output_tokens"].as_u64().unwrap_or(0);
-        let cost = session_stats["total_cost_usd"].as_f64().unwrap_or(0.0);
-
+    if !stats.is_null() {
+        let rounds = stats["rounds_completed"].as_u64().unwrap_or(0);
+        let elapsed = stats["elapsed_secs"].as_f64().unwrap_or(0.0);
+        let input_tokens = stats["total_input_tokens"].as_u64().unwrap_or(0);
+        let output_tokens = stats["total_output_tokens"].as_u64().unwrap_or(0);
+        let cost = stats["total_cost_usd"].as_f64().unwrap_or(0.0);
         println!();
         println!("Stats:");
         println!("  Rounds:       {rounds}");
@@ -186,40 +221,26 @@ pub async fn execute_status(data_dir: &Path, id: &str) -> Result<()> {
         println!("  Output tokens:{output_tokens}");
         println!("  Cost:         ${cost:.4}");
     }
-
     Ok(())
 }
 
 /// Show outputs from a session's latest checkpoint.
 ///
 /// # Errors
-/// Returns an error if the daemon is not reachable or the session is not found.
+/// Returns an error if the daemon is not reachable or no checkpoint exists.
 pub async fn execute_output(
     data_dir: &Path,
     id: &str,
     node_filter: Option<&str>,
     json_output: bool,
 ) -> Result<()> {
-    let base = daemon_base_url(data_dir)?;
-    let client = http_client()?;
-
+    let client = DaemonClient::connect(data_dir)?;
     let uuid = parse_uuid(id)?;
-    let resp = client
-        .get(format!("{base}/runs/{uuid}/checkpoint"))
-        .send()
-        .await
-        .context("Failed to connect to daemon")?;
+    let checkpoint = client.get(
+        &format!("/runs/{uuid}/checkpoint"),
+        &format!("No checkpoint found for session '{id}' (session may still be running or no outputs produced yet)"),
+    ).await?;
 
-    if resp.status() == reqwest::StatusCode::NOT_FOUND {
-        anyhow::bail!("No checkpoint found for session '{id}' (session may still be running or no outputs produced yet)");
-    }
-    if !resp.status().is_success() {
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Daemon returned {status}: {text}");
-    }
-
-    let checkpoint: Value = resp.json().await?;
     let outputs = checkpoint["outputs"]
         .as_array()
         .map(Vec::as_slice)
@@ -230,32 +251,13 @@ pub async fn execute_output(
         return Ok(());
     }
 
-    // Filter by node if requested
-    let filtered: Vec<&Value> = node_filter.map_or_else(
-        || outputs.iter().collect(),
-        |node| {
-            outputs
-                .iter()
-                .filter(|o| o["node_id"].as_str() == Some(node))
-                .collect()
-        },
-    );
-
-    if filtered.is_empty() {
-        if let Some(node) = node_filter {
-            println!("No outputs from node '{node}'.");
-        } else {
-            println!("No outputs found.");
-        }
+    let by_node = group_outputs_by_node(outputs, node_filter);
+    if by_node.is_empty() {
+        println!(
+            "No outputs found{}",
+            node_filter.map_or(String::new(), |n| format!(" from node '{n}'"))
+        );
         return Ok(());
-    }
-
-    // Group by node for clean display
-    let mut by_node: std::collections::BTreeMap<String, Vec<&Value>> =
-        std::collections::BTreeMap::new();
-    for output in &filtered {
-        let node = output["node_id"].as_str().unwrap_or("unknown").to_string();
-        by_node.entry(node).or_default().push(output);
     }
 
     for (node_id, node_outputs) in &by_node {
@@ -263,52 +265,26 @@ pub async fn execute_output(
             println!("\n── {node_id} ──");
         }
         for output in node_outputs {
-            let port = output["port"].as_str().unwrap_or("?");
-            let round = output["round"].as_u64().unwrap_or(0);
-            let artifact = &output["artifact"];
-
             if json_output {
                 println!(
                     "{}",
                     serde_json::to_string_pretty(output).unwrap_or_default()
                 );
             } else {
-                println!("  port:  {port}");
-                println!("  round: {round}");
-                if let Some(kind) = artifact["kind"].as_str() {
-                    println!("  kind:  {kind}");
-                }
-                let data = &artifact["data"];
-                if !data.is_null() {
-                    if let Some(s) = data.as_str() {
-                        println!("  data:  {s}");
-                    } else {
-                        // Print compact summary for objects/arrays
-                        let preview = serde_json::to_string(data).unwrap_or_default();
-                        if preview.len() > 500 {
-                            println!("  data: {} ... (truncated)", &preview[..200]);
-                        } else {
-                            println!("  data: {preview}");
-                        }
-                    }
-                }
-                println!();
+                print_output_summary(output);
             }
         }
     }
-
     Ok(())
 }
 
-/// Wait for a session to complete (poll until non-Running status).
+/// Wait for a session to complete (poll until terminal status).
 ///
 /// # Errors
-/// Returns an error if the daemon is not reachable or the session is not found.
+/// Returns an error if the daemon is not reachable or the wait times out.
 pub async fn execute_wait(data_dir: &Path, id: &str, timeout_secs: Option<u64>) -> Result<()> {
-    let base = daemon_base_url(data_dir)?;
-    let client = http_client()?;
+    let client = DaemonClient::connect(data_dir)?;
     let uuid = parse_uuid(id)?;
-
     let timeout = timeout_secs.unwrap_or(3600);
     let start = std::time::Instant::now();
 
@@ -318,43 +294,32 @@ pub async fn execute_wait(data_dir: &Path, id: &str, timeout_secs: Option<u64>) 
         if start.elapsed().as_secs() > timeout {
             anyhow::bail!("Timed out after {timeout}s waiting for session {id}");
         }
+        let run = client
+            .get(
+                &format!("/runs/{uuid}"),
+                &format!("Session '{id}' not found"),
+            )
+            .await?;
+        let status = run["status"].as_str().unwrap_or("unknown");
 
-        let resp = client
-            .get(format!("{base}/runs/{uuid}"))
-            .send()
-            .await
-            .context("Failed to connect to daemon")?;
-
-        if resp.status() == reqwest::StatusCode::NOT_FOUND {
-            anyhow::bail!("Session '{id}' not found");
-        }
-        if !resp.status().is_success() {
-            let status = resp.status();
-            let text = resp.text().await.unwrap_or_default();
-            anyhow::bail!("Daemon returned {status}: {text}");
-        }
-
-        let run: Value = resp.json().await?;
-        let run_status = run["status"].as_str().unwrap_or("unknown");
-
-        match run_status {
+        match status {
             "Running" | "Paused" => {
                 let elapsed = run["stats"]["elapsed_secs"].as_f64().unwrap_or(0.0);
                 let rounds = run["stats"]["rounds_completed"].as_u64().unwrap_or(0);
                 print!(
-                    "\r  Status: {run_status:<12} Rounds: {rounds:<4} Elapsed: {}",
+                    "\r  Status: {status:<12} Rounds: {rounds:<4} Elapsed: {}",
                     format_elapsed(elapsed)
                 );
                 std::io::stdout().flush()?;
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                tokio::time::sleep(Duration::from_secs(2)).await;
             }
             "Completed" | "Failed" | "Cancelled" => {
-                println!("\nSession {id} finished with status: {run_status}");
-                let session_stats = &run["stats"];
-                if !session_stats.is_null() {
-                    let rounds = session_stats["rounds_completed"].as_u64().unwrap_or(0);
-                    let elapsed = session_stats["elapsed_secs"].as_f64().unwrap_or(0.0);
-                    let cost = session_stats["total_cost_usd"].as_f64().unwrap_or(0.0);
+                println!("\nSession {id} finished with status: {status}");
+                let stats = &run["stats"];
+                if !stats.is_null() {
+                    let rounds = stats["rounds_completed"].as_u64().unwrap_or(0);
+                    let elapsed = stats["elapsed_secs"].as_f64().unwrap_or(0.0);
+                    let cost = stats["total_cost_usd"].as_f64().unwrap_or(0.0);
                     println!(
                         "  Rounds: {rounds}, Elapsed: {}, Cost: ${cost:.4}",
                         format_elapsed(elapsed)
@@ -367,85 +332,37 @@ pub async fn execute_wait(data_dir: &Path, id: &str, timeout_secs: Option<u64>) 
             }
             other => {
                 println!("\nSession {id} status: {other}");
-                tokio::time::sleep(std::time::Duration::from_secs(2)).await;
+                tokio::time::sleep(Duration::from_secs(2)).await;
             }
         }
     }
 }
 
-/// Pause a running session.
-///
-/// # Errors
-/// Returns an error if the daemon is not reachable or the session cannot be paused.
-pub async fn execute_pause(data_dir: &Path, id: &str) -> Result<()> {
-    let base = daemon_base_url(data_dir)?;
-    let client = http_client()?;
+/// Send a simple lifecycle signal (pause/resume/cancel) to a run.
+pub async fn execute_signal(data_dir: &Path, id: &str, action: &str) -> Result<()> {
+    let client = DaemonClient::connect(data_dir)?;
     let uuid = parse_uuid(id)?;
-
-    let resp = client
-        .post(format!("{base}/runs/{uuid}/pause"))
-        .send()
+    client
+        .post_simple(
+            &format!("/runs/{uuid}/{action}"),
+            &format!("Session {id} {action}d."),
+        )
         .await
-        .context("Failed to connect to daemon")?;
+}
 
-    if resp.status().is_success() {
-        println!("Session {id} paused.");
-    } else {
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to pause session: {status} {text}");
-    }
-    Ok(())
+/// Pause a running session.
+pub async fn execute_pause(data_dir: &Path, id: &str) -> Result<()> {
+    execute_signal(data_dir, id, "pause").await
 }
 
 /// Resume a paused session.
-///
-/// # Errors
-/// Returns an error if the daemon is not reachable or the session cannot be resumed.
 pub async fn execute_resume(data_dir: &Path, id: &str) -> Result<()> {
-    let base = daemon_base_url(data_dir)?;
-    let client = http_client()?;
-    let uuid = parse_uuid(id)?;
-
-    let resp = client
-        .post(format!("{base}/runs/{uuid}/resume"))
-        .send()
-        .await
-        .context("Failed to connect to daemon")?;
-
-    if resp.status().is_success() {
-        println!("Session {id} resumed.");
-    } else {
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to resume session: {status} {text}");
-    }
-    Ok(())
+    execute_signal(data_dir, id, "resume").await
 }
 
 /// Cancel a running or paused session.
-///
-/// # Errors
-/// Returns an error if the daemon is not reachable or the session cannot be cancelled.
 pub async fn execute_cancel(data_dir: &Path, id: &str) -> Result<()> {
-    let base = daemon_base_url(data_dir)?;
-    let client = http_client()?;
-    let uuid = parse_uuid(id)?;
-
-    let resp = client
-        .post(format!("{base}/runs/{uuid}/cancel"))
-        .send()
-        .await
-        .context("Failed to connect to daemon")?;
-
-    if resp.status().is_success() {
-        println!("Session {id} cancelled.");
-    } else {
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to cancel session: {status} {text}");
-    }
-    Ok(())
+    execute_signal(data_dir, id, "cancel").await
 }
 
 /// Inject an artifact into a paused session.
@@ -459,34 +376,17 @@ pub async fn execute_inject(
     port: &str,
     data: &str,
 ) -> Result<()> {
-    let base = daemon_base_url(data_dir)?;
-    let client = http_client()?;
+    let client = DaemonClient::connect(data_dir)?;
     let uuid = parse_uuid(id)?;
-
-    // Parse the data as JSON
     let data_value: Value = serde_json::from_str(data).context("Failed to parse data as JSON")?;
-
     let body = serde_json::json!({
         "node_id": node,
         "port": port,
         "kind": "Goal",
         "data": data_value,
     });
-
-    let resp = client
-        .post(format!("{base}/runs/{uuid}/input"))
-        .json(&body)
-        .send()
-        .await
-        .context("Failed to connect to daemon")?;
-
-    if resp.status().is_success() {
-        println!("Artifact injected into {node}.{port}.");
-    } else {
-        let status = resp.status();
-        let text = resp.text().await.unwrap_or_default();
-        anyhow::bail!("Failed to inject input: {status} {text}");
-    }
+    client.post(&format!("/runs/{uuid}/input"), &body).await?;
+    println!("Artifact injected into {node}.{port}.");
     Ok(())
 }
 
@@ -494,22 +394,51 @@ pub async fn execute_inject(
 // Helpers
 // ---------------------------------------------------------------------------
 
-/// Parse a UUID string, accepting short prefixes (minimum 8 chars).
-fn parse_uuid(id: &str) -> Result<uuid::Uuid> {
-    // Try full UUID first
-    if let Ok(u) = uuid::Uuid::parse_str(id) {
-        return Ok(u);
+/// Group checkpoint outputs by node ID, optionally filtering to one node.
+fn group_outputs_by_node<'a>(
+    outputs: &'a [Value],
+    node_filter: Option<&str>,
+) -> std::collections::BTreeMap<String, Vec<&'a Value>> {
+    let mut by_node: std::collections::BTreeMap<String, Vec<&Value>> =
+        std::collections::BTreeMap::new();
+    for output in outputs {
+        let node_id = output["node_id"].as_str().unwrap_or("unknown");
+        if node_filter.is_none_or(|f| f == node_id) {
+            by_node.entry(node_id.to_string()).or_default().push(output);
+        }
     }
+    by_node
+}
 
-    // Try as a short prefix match — we can't really query by prefix without
-    // listing runs, so just support full UUIDs for now.
-    anyhow::bail!(
-        "'{id}' is not a valid UUID. Use the full session ID shown by `eureka session list`."
-    );
+/// Print a human-readable summary of one checkpoint output.
+fn print_output_summary(output: &Value) {
+    let port = output["port"].as_str().unwrap_or("?");
+    let round = output["round"].as_u64().unwrap_or(0);
+    let artifact = &output["artifact"];
+    println!("  port:  {port}");
+    println!("  round: {round}");
+    if let Some(kind) = artifact["kind"].as_str() {
+        println!("  kind:  {kind}");
+    }
+    let data = &artifact["data"];
+    if !data.is_null() {
+        if let Some(s) = data.as_str() {
+            println!("  data:  {s}");
+        } else {
+            let preview = serde_json::to_string(data).unwrap_or_default();
+            if preview.len() > 500 {
+                println!("  data: {} ... (truncated)", &preview[..200]);
+            } else {
+                println!("  data: {preview}");
+            }
+        }
+    }
+    println!();
 }
 
 /// Format elapsed seconds into a human-readable string.
 #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+#[must_use]
 fn format_elapsed(secs: f64) -> String {
     if secs < 60.0 {
         format!("{secs:.0}s")

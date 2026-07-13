@@ -283,20 +283,6 @@ def main() -> None:
 
         n = len(scored)
 
-        # ── Seed new hypotheses against top-established first ──
-        # Identify established hypotheses (matches >= MIN_MATCHES_FOR_TOP)
-        # and newcomers for seeding priority.
-        newcomers = [
-            (i, id_a) for i, (id_a, _, _) in enumerate(scored)
-            if ratings[id_a][2] < MIN_MATCHES_FOR_TOP
-        ]
-        established = [
-            (i, id_a, ratings[id_a][0])
-            for i, (id_a, _, _) in enumerate(scored)
-            if ratings[id_a][2] >= MIN_MATCHES_FOR_TOP
-        ]
-        established.sort(key=lambda x: -x[2])  # descending Elo
-
         # ── Pairwise comparison with Elo-gap pruning ──
         for i in range(n):
             id_a, score_a, _ = scored[i]

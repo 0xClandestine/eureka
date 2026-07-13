@@ -239,12 +239,11 @@ pub struct AgentConfig {
 impl AgentConfig {
     /// Return the per-agent override for `agent_id`, or `self` if none exists.
     #[must_use]
-    pub fn resolve_for<'a>(
-        global: &'a Self,
-        overrides: &'a HashMap<String, Self>,
-        agent_id: &str,
-    ) -> &'a Self {
-        overrides.get(agent_id).unwrap_or(global)
+    pub fn resolve_for(global: &Self, overrides: &HashMap<String, Self>, agent_id: &str) -> Self {
+        overrides
+            .get(agent_id)
+            .cloned()
+            .unwrap_or_else(|| global.clone())
     }
 }
 

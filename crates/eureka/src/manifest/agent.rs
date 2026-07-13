@@ -2,7 +2,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::graph::port::{PortDef, PortSpec};
+use crate::graph::port::PortDef;
 
 use super::control::ToolSpec;
 use super::prompt::PromptPath;
@@ -51,9 +51,7 @@ impl AgentSpec {
 
     /// Build a `PortSpec` for node registration.
     #[must_use]
-    pub fn to_port_spec(&self) -> PortSpec {
-        let inputs = self.inputs.iter().map(PortDef::to_input_spec).collect();
-        let outputs = self.outputs.iter().map(PortDef::to_output_spec).collect();
-        PortSpec::new(inputs, outputs)
+    pub fn to_port_spec(&self) -> crate::graph::port::PortSpec {
+        crate::graph::port::PortSpec::from_defs(&self.inputs, &self.outputs)
     }
 }

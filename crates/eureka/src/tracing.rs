@@ -218,7 +218,8 @@ fn strip_artifacts(event: &SchedulerEvent) -> SchedulerEvent {
 }
 
 /// Produce an RFC 3339 / ISO 8601 UTC timestamp string.
-fn iso_now_rfc3339() -> String {
+#[must_use]
+pub fn iso_now_rfc3339() -> String {
     let now = std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .unwrap_or_default();
@@ -248,7 +249,8 @@ fn iso_now_rfc3339() -> String {
 /// Convert days since Unix epoch to (year, month, day) in the Gregorian
 /// civil calendar. Uses Howard Hinnant's algorithm.
 #[allow(clippy::many_single_char_names)]
-const fn days_to_date(days: u64) -> (u64, u64, u64) {
+#[must_use]
+pub const fn days_to_date(days: u64) -> (u64, u64, u64) {
     let z = days + 719_468;
     let era = z / 146_097;
     let doe = z % 146_097;

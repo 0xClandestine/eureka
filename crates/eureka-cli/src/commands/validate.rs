@@ -6,7 +6,6 @@
 use std::path::Path;
 
 use anyhow::{Context, Result};
-use eureka::graph::port::{PortDirection, PortSpec, PortSpecEntry};
 use eureka::graph::validate::{validate_graph, PortRegistry};
 use eureka::manifest::GraphManifest;
 
@@ -47,59 +46,12 @@ pub fn execute(graph_path: &str) -> Result<()> {
 /// `GraphManifest`. No filesystem scanning needed — everything is inline.
 fn build_registry_from_manifest(manifest: &GraphManifest) -> PortRegistry {
     let mut reg = PortRegistry::new();
-
     for agent in &manifest.agents {
-        let inputs = agent
-            .inputs
-            .iter()
-            .map(|p| PortSpecEntry {
-                name: p.port.clone(),
-                direction: PortDirection::Input,
-                kind: p.kind.clone(),
-                required: true,
-            })
-            .collect();
-
-        let outputs = agent
-            .outputs
-            .iter()
-            .map(|p| PortSpecEntry {
-                name: p.port.clone(),
-                direction: PortDirection::Output,
-                kind: p.kind.clone(),
-                required: false,
-            })
-            .collect();
-
-        reg.register(agent.id.clone(), PortSpec::new(inputs, outputs));
+        reg.register(agent.id.clone(), agent.to_port_spec());
     }
-
     for ctrl in &manifest.control {
-        let inputs = ctrl
-            .inputs
-            .iter()
-            .map(|p| PortSpecEntry {
-                name: p.port.clone(),
-                direction: PortDirection::Input,
-                kind: p.kind.clone(),
-                required: true,
-            })
-            .collect();
-
-        let outputs = ctrl
-            .outputs
-            .iter()
-            .map(|p| PortSpecEntry {
-                name: p.port.clone(),
-                direction: PortDirection::Output,
-                kind: p.kind.clone(),
-                required: false,
-            })
-            .collect();
-
-        reg.register(ctrl.kind.clone(), PortSpec::new(inputs, outputs));
+        reg.register(ctrl.kind.clone(), ctrl.to_port_spec());
     }
-
     reg
 }
 

@@ -56,7 +56,7 @@ impl ValidationResult {
 ///
 /// Populated from the manifest at startup and used by the validator to check
 /// port kinds without needing to instantiate nodes.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub struct PortRegistry {
     /// Registered port specs keyed by node kind string.
     pub(super) specs: HashMap<String, PortSpec>,
@@ -66,9 +66,7 @@ impl PortRegistry {
     /// Create an empty port registry.
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            specs: HashMap::new(),
-        }
+        Self::default()
     }
 
     /// Register a node kind with its port spec.
@@ -85,12 +83,6 @@ impl PortRegistry {
     #[must_use]
     pub fn get(&self, kind: &str) -> Option<&PortSpec> {
         self.specs.get(kind)
-    }
-}
-
-impl Default for PortRegistry {
-    fn default() -> Self {
-        Self::new()
     }
 }
 

@@ -2,7 +2,7 @@ use std::path::Path;
 
 use serde::{Deserialize, Serialize};
 
-use crate::graph::port::{PortDef, PortSpec};
+use crate::graph::port::PortDef;
 
 /// A subprocess-backed control node definition.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -36,17 +36,22 @@ const fn default_control_timeout() -> u32 {
     60
 }
 
+/// Resolve a relative command binary path against a base directory.
+fn resolve_binary(bin: &mut String, base: &Path) {
+    let p = Path::new(bin.as_str());
+    if p.is_relative() && !p.exists() {
+        let resolved = base.join(bin.as_str());
+        if resolved.exists() {
+            *bin = resolved.to_string_lossy().to_string();
+        }
+    }
+}
+
 impl ControlSpec {
     /// Resolve relative paths in the command.
     pub(super) fn resolve_paths(&mut self, base: &Path) {
         if let Some(bin) = self.command.first_mut() {
-            let p = Path::new(bin.as_str());
-            if p.is_relative() && !p.exists() {
-                let resolved = base.join(bin.as_str());
-                if resolved.exists() {
-                    *bin = resolved.to_string_lossy().to_string();
-                }
-            }
+            resolve_binary(bin, base);
         }
     }
 
@@ -58,10 +63,8 @@ impl ControlSpec {
 
     /// Build a `PortSpec` for node registration.
     #[must_use]
-    pub fn to_port_spec(&self) -> PortSpec {
-        let inputs = self.inputs.iter().map(PortDef::to_input_spec).collect();
-        let outputs = self.outputs.iter().map(PortDef::to_output_spec).collect();
-        PortSpec::new(inputs, outputs)
+    pub fn to_port_spec(&self) -> crate::graph::port::PortSpec {
+        crate::graph::port::PortSpec::from_defs(&self.inputs, &self.outputs)
     }
 }
 
@@ -90,13 +93,7 @@ impl ToolSpec {
     /// Resolve relative binary paths against the manifest base directory.
     pub(super) fn resolve_paths(&mut self, base: &Path) {
         if let Some(bin) = self.command.first_mut() {
-            let p = Path::new(bin.as_str());
-            if p.is_relative() && !p.exists() {
-                let resolved = base.join(bin.as_str());
-                if resolved.exists() {
-                    *bin = resolved.to_string_lossy().to_string();
-                }
-            }
+            resolve_binary(bin, base);
         }
     }
 }

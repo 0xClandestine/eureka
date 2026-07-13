@@ -8,12 +8,12 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
-use crate::agents::def::{AgentConfig, AgentDef, AgentPort, ToolDef};
+use crate::agents::def::{AgentConfig, AgentDef, ToolDef};
 use crate::agents::{LlmAgentNode, LlmClient, RigClient};
 use crate::config::{EurekaConfig, ProviderKind, RunStats};
 use crate::graph::artifact::Artifact;
 use crate::graph::node::BoxedNode;
-use crate::graph::port::{PortDef, PortDirection, PortSpec, PortSpecEntry};
+use crate::graph::port::PortSpec;
 use crate::graph::spec::{GraphError, GraphNodeSpec, GraphSpec};
 use crate::graph::validate::{validate_graph, PortRegistry};
 use crate::manifest::{AgentSpec, ControlSpec, GraphManifest};
@@ -390,22 +390,7 @@ impl Session {
             "Starting Eureka session"
         );
 
-        let mut record = if checkpoint.is_some() {
-            if let Some(store) = store {
-                store
-                    .get(self.session_id)
-                    .await
-                    .map_err(|error| EngineError::Store(error.to_string()))?
-                    .unwrap_or_else(|| {
-                        RunRecord::new(self.session_id, self.config.graph.clone(), goal.clone())
-                    })
-            } else {
-                RunRecord::new(self.session_id, self.config.graph.clone(), goal.clone())
-            }
-        } else {
-            RunRecord::new(self.session_id, self.config.graph.clone(), goal.clone())
-        };
-        record.goal = goal.clone();
+        let mut record = RunRecord::new(self.session_id, self.config.graph.clone(), goal.clone());
         record.status = RunStatus::Running;
         if let Some(store) = store {
             store
@@ -693,30 +678,13 @@ impl Session {
             name: agent_spec.id.clone(),
             description: agent_spec.description.clone(),
             preamble: prompt_content,
-            inputs: agent_spec
-                .inputs
-                .iter()
-                .map(|p| AgentPort {
-                    kind: p.kind.clone(),
-                    port: p.port.clone(),
-                    required: p.required,
-                })
-                .collect(),
-            outputs: agent_spec
-                .outputs
-                .iter()
-                .map(|p| AgentPort {
-                    kind: p.kind.clone(),
-                    port: p.port.clone(),
-                    required: p.required,
-                })
-                .collect(),
+            inputs: agent_spec.inputs.clone(),
+            outputs: agent_spec.outputs.clone(),
             config: AgentConfig::resolve_for(
                 &self.config.agent,
                 &self.config.agent_overrides,
                 &agent_spec.id,
-            )
-            .clone(),
+            ),
             output_schema: agent_spec.output_schema.clone(),
             tools: agent_spec
                 .tools
@@ -785,24 +753,8 @@ impl Session {
             name: format!("{}.{}", ctrl_spec.kind, ctrl_spec.id),
             work_dir: self.graph_dir.clone(),
             command: ctrl_spec.command.clone(),
-            inputs: ctrl_spec
-                .inputs
-                .iter()
-                .map(|p| PortDef {
-                    port: p.port.clone(),
-                    kind: p.kind.clone(),
-                    required: p.required,
-                })
-                .collect(),
-            outputs: ctrl_spec
-                .outputs
-                .iter()
-                .map(|p| PortDef {
-                    port: p.port.clone(),
-                    kind: p.kind.clone(),
-                    required: p.required,
-                })
-                .collect(),
+            inputs: ctrl_spec.inputs.clone(),
+            outputs: ctrl_spec.outputs.clone(),
             timeout_secs: ctrl_spec.timeout_secs,
         };
 
@@ -848,61 +800,18 @@ fn stable_hash<T: serde::Serialize>(value: &T) -> String {
 /// `GraphManifest`. Used for graph validation.
 fn build_port_registry(manifest: &GraphManifest) -> PortRegistry {
     let mut reg = PortRegistry::new();
-
     for agent in &manifest.agents {
-        let inputs = agent
-            .inputs
-            .iter()
-            .map(|p| PortSpecEntry {
-                name: p.port.clone(),
-                direction: PortDirection::Input,
-                kind: p.kind.clone(),
-                required: p.required.unwrap_or(true),
-            })
-            .collect();
-
-        let outputs = agent
-            .outputs
-            .iter()
-            .map(|p| PortSpecEntry {
-                name: p.port.clone(),
-                direction: PortDirection::Output,
-                kind: p.kind.clone(),
-                required: false,
-            })
-            .collect();
-
-        // Agents are keyed by their ID (the kind string in GraphNodeSpec).
-        reg.register(agent.id.clone(), PortSpec::new(inputs, outputs));
+        reg.register(
+            agent.id.clone(),
+            PortSpec::from_defs(&agent.inputs, &agent.outputs),
+        );
     }
-
     for ctrl in &manifest.control {
-        let inputs = ctrl
-            .inputs
-            .iter()
-            .map(|p| PortSpecEntry {
-                name: p.port.clone(),
-                direction: PortDirection::Input,
-                kind: p.kind.clone(),
-                required: p.required.unwrap_or(true),
-            })
-            .collect();
-
-        let outputs = ctrl
-            .outputs
-            .iter()
-            .map(|p| PortSpecEntry {
-                name: p.port.clone(),
-                direction: PortDirection::Output,
-                kind: p.kind.clone(),
-                required: false,
-            })
-            .collect();
-
-        // Control nodes are keyed by their kind (e.g., "elo-ranker").
-        reg.register(ctrl.kind.clone(), PortSpec::new(inputs, outputs));
+        reg.register(
+            ctrl.kind.clone(),
+            PortSpec::from_defs(&ctrl.inputs, &ctrl.outputs),
+        );
     }
-
     reg
 }
 
@@ -911,103 +820,41 @@ fn build_llm_client(
     config: &EurekaConfig,
     model_id: &str,
 ) -> Result<Arc<dyn LlmClient>, anyhow::Error> {
+    let pricing = config.provider.pricing.clone();
+    macro_rules! provider {
+        ($provider:ident, $env_key:expr) => {{
+            let client = $provider::Client::from_env()
+                .context(concat!($env_key, " environment variable not set"))?;
+            Arc::new(RigClient::new(
+                client.completion_model(model_id),
+                pricing.clone(),
+            ))
+        }};
+        ($provider:ident, $env_key:expr, $msg:expr) => {{
+            let client = $provider::Client::from_env().context($msg)?;
+            Arc::new(RigClient::new(
+                client.completion_model(model_id),
+                pricing.clone(),
+            ))
+        }};
+    }
     match config.provider.kind {
-        ProviderKind::Anthropic => {
-            let client = anthropic::Client::from_env()
-                .context("ANTHROPIC_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(
-                client.completion_model(model_id),
-                config.provider.pricing.clone(),
-            )))
-        }
-        ProviderKind::OpenAI => {
-            let client = openai::Client::from_env()
-                .context("OPENAI_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(
-                client.completion_model(model_id),
-                config.provider.pricing.clone(),
-            )))
-        }
-        ProviderKind::OpenRouter => {
-            let client = openrouter::Client::from_env()
-                .context("OPENROUTER_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(
-                client.completion_model(model_id),
-                config.provider.pricing.clone(),
-            )))
-        }
-        ProviderKind::Gemini => {
-            let client = gemini::Client::from_env()
-                .context("GEMINI_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(
-                client.completion_model(model_id),
-                config.provider.pricing.clone(),
-            )))
-        }
-        ProviderKind::Groq => {
-            let client =
-                groq::Client::from_env().context("GROQ_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(
-                client.completion_model(model_id),
-                config.provider.pricing.clone(),
-            )))
-        }
-        ProviderKind::Mistral => {
-            let client = mistral::Client::from_env()
-                .context("MISTRAL_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(
-                client.completion_model(model_id),
-                config.provider.pricing.clone(),
-            )))
-        }
-        ProviderKind::Cohere => {
-            let client = cohere::Client::from_env()
-                .context("COHERE_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(
-                client.completion_model(model_id),
-                config.provider.pricing.clone(),
-            )))
-        }
-        ProviderKind::DeepSeek => {
-            let client = deepseek::Client::from_env()
-                .context("DEEPSEEK_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(
-                client.completion_model(model_id),
-                config.provider.pricing.clone(),
-            )))
-        }
-        ProviderKind::Perplexity => {
-            let client = perplexity::Client::from_env()
-                .context("PERPLEXITY_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(
-                client.completion_model(model_id),
-                config.provider.pricing.clone(),
-            )))
-        }
-        ProviderKind::Together => {
-            let client = together::Client::from_env()
-                .context("TOGETHER_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(
-                client.completion_model(model_id),
-                config.provider.pricing.clone(),
-            )))
-        }
-        ProviderKind::XAI => {
-            let client =
-                xai::Client::from_env().context("XAI_API_KEY environment variable not set")?;
-            Ok(Arc::new(RigClient::new(
-                client.completion_model(model_id),
-                config.provider.pricing.clone(),
-            )))
-        }
-        ProviderKind::Ollama => {
-            let client = ollama::Client::from_env()
-                .context("Failed to initialise Ollama client (check OLLAMA_API_BASE_URL)")?;
-            Ok(Arc::new(RigClient::new(
-                client.completion_model(model_id),
-                config.provider.pricing.clone(),
-            )))
-        }
+        ProviderKind::Anthropic => Ok(provider!(anthropic, "ANTHROPIC_API_KEY")),
+        ProviderKind::OpenAI => Ok(provider!(openai, "OPENAI_API_KEY")),
+        ProviderKind::OpenRouter => Ok(provider!(openrouter, "OPENROUTER_API_KEY")),
+        ProviderKind::Gemini => Ok(provider!(gemini, "GEMINI_API_KEY")),
+        ProviderKind::Groq => Ok(provider!(groq, "GROQ_API_KEY")),
+        ProviderKind::Mistral => Ok(provider!(mistral, "MISTRAL_API_KEY")),
+        ProviderKind::Cohere => Ok(provider!(cohere, "COHERE_API_KEY")),
+        ProviderKind::DeepSeek => Ok(provider!(deepseek, "DEEPSEEK_API_KEY")),
+        ProviderKind::Perplexity => Ok(provider!(perplexity, "PERPLEXITY_API_KEY")),
+        ProviderKind::Together => Ok(provider!(together, "TOGETHER_API_KEY")),
+        ProviderKind::XAI => Ok(provider!(xai, "XAI_API_KEY")),
+        ProviderKind::Ollama => Ok(provider!(
+            ollama,
+            "OLLAMA_API_KEY",
+            "Failed to initialise Ollama client (check OLLAMA_API_BASE_URL)"
+        )),
     }
 }
 

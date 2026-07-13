@@ -139,9 +139,26 @@ pub enum PersistenceError {
     },
 }
 
+/// Wrap any Display-able error as an I/O error for `PersistenceError`.
+fn io_err(error: impl std::fmt::Display) -> PersistenceError {
+    PersistenceError::Io(std::io::Error::other(error.to_string()))
+}
+
 impl From<std::io::Error> for PersistenceError {
     fn from(error: std::io::Error) -> Self {
         Self::Io(error)
+    }
+}
+
+impl From<rusqlite::Error> for PersistenceError {
+    fn from(error: rusqlite::Error) -> Self {
+        Self::Io(std::io::Error::other(error.to_string()))
+    }
+}
+
+impl From<serde_json::Error> for PersistenceError {
+    fn from(error: serde_json::Error) -> Self {
+        Self::Serialization(error.to_string())
     }
 }
 
@@ -408,8 +425,7 @@ impl SqliteRunPersistence {
     /// Open or create a `SQLite` database and initialize runtime tables.
     ///
     /// # Errors
-    /// Returns `PersistenceError::Io` on filesystem errors or `PersistenceError::Migration`
-    /// on schema migration failures.
+    /// Returns `PersistenceError::Io` on filesystem errors.
     pub async fn open(path: impl Into<PathBuf>) -> Result<Self, PersistenceError> {
         let persistence = Self {
             path: Arc::new(path.into()),
@@ -417,28 +433,25 @@ impl SqliteRunPersistence {
         };
         let path = persistence.path.clone();
         tokio::task::spawn_blocking(move || {
-            let connection = rusqlite::Connection::open(path.as_path())
-                .map_err(|error| PersistenceError::Io(std::io::Error::other(error.to_string())))?;
-            connection
-                .execute_batch(
-                    "PRAGMA foreign_keys = ON;
-                     PRAGMA busy_timeout = 5000;
-                     CREATE TABLE IF NOT EXISTS eureka_runs (
-                       id TEXT PRIMARY KEY,
-                       record_json TEXT NOT NULL,
-                       revision INTEGER NOT NULL
-                     );
-                     CREATE TABLE IF NOT EXISTS eureka_checkpoints (
-                       run_id TEXT PRIMARY KEY,
-                       checkpoint_json TEXT NOT NULL,
-                       revision INTEGER NOT NULL
-                     );",
-                )
-                .map_err(|error| PersistenceError::Io(std::io::Error::other(error.to_string())))?;
+            let connection = rusqlite::Connection::open(path.as_path())?;
+            connection.execute_batch(
+                "PRAGMA foreign_keys = ON;
+                 PRAGMA busy_timeout = 5000;
+                 CREATE TABLE IF NOT EXISTS eureka_runs (
+                   id TEXT PRIMARY KEY,
+                   record_json TEXT NOT NULL,
+                   revision INTEGER NOT NULL
+                 );
+                 CREATE TABLE IF NOT EXISTS eureka_checkpoints (
+                   run_id TEXT PRIMARY KEY,
+                   checkpoint_json TEXT NOT NULL,
+                   revision INTEGER NOT NULL
+                 );",
+            )?;
             Ok::<(), PersistenceError>(())
         })
         .await
-        .map_err(|error| PersistenceError::Io(std::io::Error::other(error.to_string())))??;
+        .map_err(io_err)??;
         Ok(persistence)
     }
 
@@ -456,15 +469,12 @@ impl SqliteRunPersistence {
     {
         let path = self.path.clone();
         tokio::task::spawn_blocking(move || {
-            let connection = rusqlite::Connection::open(path.as_path())
-                .map_err(|error| PersistenceError::Io(std::io::Error::other(error.to_string())))?;
-            connection
-                .pragma_update(None, "foreign_keys", "ON")
-                .map_err(|error| PersistenceError::Io(std::io::Error::other(error.to_string())))?;
+            let connection = rusqlite::Connection::open(path.as_path())?;
+            connection.pragma_update(None, "foreign_keys", "ON")?;
             operation(connection)
         })
         .await
-        .map_err(|error| PersistenceError::Io(std::io::Error::other(error.to_string())))?
+        .map_err(io_err)?
     }
 }
 
@@ -475,24 +485,19 @@ impl RunRepository for SqliteRunPersistence {
         record.revision = Revision::default();
         let id = record.id.to_string();
         self.blocking(move |connection| {
-            let exists: bool = connection
-                .query_row(
-                    "SELECT EXISTS(SELECT 1 FROM eureka_runs WHERE id = ?1)",
-                    [&id],
-                    |row| row.get(0),
-                )
-                .map_err(|error| PersistenceError::Io(std::io::Error::other(error.to_string())))?;
+            let exists: bool = connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM eureka_runs WHERE id = ?1)",
+                [&id],
+                |row| row.get(0),
+            )?;
             if exists {
                 return Err(PersistenceError::AlreadyExists(record.id));
             }
-            let json = serde_json::to_string(&record)
-                .map_err(|error| PersistenceError::Serialization(error.to_string()))?;
-            connection
-                .execute(
-                    "INSERT INTO eureka_runs (id, record_json, revision) VALUES (?1, ?2, 0)",
-                    [&id, &json],
-                )
-                .map_err(|error| PersistenceError::Io(std::io::Error::other(error.to_string())))?;
+            let json = serde_json::to_string(&record)?;
+            connection.execute(
+                "INSERT INTO eureka_runs (id, record_json, revision) VALUES (?1, ?2, 0)",
+                [&id, &json],
+            )?;
             Ok(record)
         })
         .await
@@ -501,19 +506,15 @@ impl RunRepository for SqliteRunPersistence {
     async fn get_versioned(&self, id: uuid::Uuid) -> Result<Option<RunRecord>, PersistenceError> {
         let id_text = id.to_string();
         self.blocking(move |connection| {
-            let result = connection.query_row(
+            let result: Result<String, rusqlite::Error> = connection.query_row(
                 "SELECT record_json FROM eureka_runs WHERE id = ?1",
                 [&id_text],
-                |row| row.get::<_, String>(0),
+                |row| row.get(0),
             );
             match result {
-                Ok(json) => serde_json::from_str(&json)
-                    .map(Some)
-                    .map_err(|error| PersistenceError::Serialization(error.to_string())),
+                Ok(json) => Ok(Some(serde_json::from_str(&json)?)),
                 Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-                Err(error) => Err(PersistenceError::Io(std::io::Error::other(
-                    error.to_string(),
-                ))),
+                Err(error) => Err(io_err(error)),
             }
         })
         .await
@@ -534,8 +535,7 @@ impl RunRepository for SqliteRunPersistence {
                     [&id_text],
                     |row| row.get(0),
                 )
-                .optional()
-                .map_err(|error| PersistenceError::Io(std::io::Error::other(error.to_string())))?;
+                .optional()?;
             let Some(actual) = actual else {
                 return Err(PersistenceError::NotFound(id));
             };
@@ -548,14 +548,11 @@ impl RunRepository for SqliteRunPersistence {
                 });
             }
             record.revision = Revision(expected.0 + 1);
-            let updated = serde_json::to_string(&record)
-                .map_err(|error| PersistenceError::Serialization(error.to_string()))?;
-            connection
-                .execute(
-                    "UPDATE eureka_runs SET record_json = ?2, revision = ?3 WHERE id = ?1",
-                    rusqlite::params![id_text, updated, record.revision.0],
-                )
-                .map_err(|error| PersistenceError::Io(std::io::Error::other(error.to_string())))?;
+            let updated = serde_json::to_string(&record)?;
+            connection.execute(
+                "UPDATE eureka_runs SET record_json = ?2, revision = ?3 WHERE id = ?1",
+                rusqlite::params![id_text, updated, record.revision.0],
+            )?;
             Ok(record)
         })
         .await
@@ -563,18 +560,13 @@ impl RunRepository for SqliteRunPersistence {
 
     async fn list(&self, filter: RunFilter) -> Result<Vec<RunRecord>, PersistenceError> {
         self.blocking(move |connection| {
-            let mut statement = connection
-                .prepare("SELECT record_json FROM eureka_runs ORDER BY id")
-                .map_err(|error| PersistenceError::Io(std::io::Error::other(error.to_string())))?;
-            let rows = statement
-                .query_map([], |row| row.get::<_, String>(0))
-                .map_err(|error| PersistenceError::Io(std::io::Error::other(error.to_string())))?;
+            let mut statement =
+                connection.prepare("SELECT record_json FROM eureka_runs ORDER BY id")?;
+            let rows = statement.query_map([], |row| row.get::<_, String>(0))?;
             let mut records = Vec::new();
             for row in rows {
-                let record: RunRecord = serde_json::from_str(&row.map_err(|error| {
-                    PersistenceError::Io(std::io::Error::other(error.to_string()))
-                })?)
-                .map_err(|error| PersistenceError::Serialization(error.to_string()))?;
+                let json = row.map_err(io_err)?;
+                let record: RunRecord = serde_json::from_str(&json)?;
                 if filter.status.is_none_or(|status| record.status == status) {
                     records.push(record);
                 }
@@ -597,9 +589,7 @@ impl RunRepository for SqliteRunPersistence {
                     [&id_text],
                 )
                 .ok();
-            connection
-                .execute("DELETE FROM eureka_runs WHERE id = ?1", [&id_text])
-                .map_err(|error| PersistenceError::Io(std::io::Error::other(error.to_string())))?;
+            connection.execute("DELETE FROM eureka_runs WHERE id = ?1", [&id_text])?;
             Ok(())
         })
         .await
@@ -653,16 +643,38 @@ impl CheckpointStore for SqliteRunPersistence {
         let id = checkpoint.run_id;
         let id_text = id.to_string();
         self.blocking(move |connection| {
-            let current: Option<(String, i64)> = connection.query_row("SELECT checkpoint_json, revision FROM eureka_checkpoints WHERE run_id = ?1", [&id_text], |row| Ok((row.get(0)?, row.get(1)?))).optional()
-                .map_err(|error| PersistenceError::Io(std::io::Error::other(error.to_string())))?;
-            let actual = current.as_ref().map_or_else(Revision::default, |item| Revision(item.1));
-            if let Some(expected) = expected { if actual != expected { return Err(PersistenceError::RevisionConflict { run_id: id, expected, actual }); } }
+            let current: Option<(String, i64)> = connection
+                .query_row(
+                    "SELECT checkpoint_json, revision FROM eureka_checkpoints WHERE run_id = ?1",
+                    [&id_text],
+                    |row| Ok((row.get(0)?, row.get(1)?)),
+                )
+                .optional()?;
+            let actual = current
+                .as_ref()
+                .map_or_else(Revision::default, |item| Revision(item.1));
+            if let Some(expected) = expected {
+                if actual != expected {
+                    return Err(PersistenceError::RevisionConflict {
+                        run_id: id,
+                        expected,
+                        actual,
+                    });
+                }
+            }
             checkpoint.revision = Revision(actual.0 + 1);
-            let json = serde_json::to_string(&checkpoint).map_err(|error| PersistenceError::Serialization(error.to_string()))?;
-            connection.execute("INSERT INTO eureka_checkpoints (run_id, checkpoint_json, revision) VALUES (?1, ?2, ?3) ON CONFLICT(run_id) DO UPDATE SET checkpoint_json = excluded.checkpoint_json, revision = excluded.revision", rusqlite::params![id_text, json, checkpoint.revision.0])
-                .map_err(|error| PersistenceError::Io(std::io::Error::other(error.to_string())))?;
+            let json = serde_json::to_string(&checkpoint)?;
+            connection.execute(
+                "INSERT INTO eureka_checkpoints (run_id, checkpoint_json, revision) \
+                 VALUES (?1, ?2, ?3) \
+                 ON CONFLICT(run_id) DO UPDATE \
+                 SET checkpoint_json = excluded.checkpoint_json, \
+                     revision = excluded.revision",
+                rusqlite::params![id_text, json, checkpoint.revision.0],
+            )?;
             Ok(checkpoint)
-        }).await
+        })
+        .await
     }
 
     async fn load_checkpoint(
@@ -671,19 +683,15 @@ impl CheckpointStore for SqliteRunPersistence {
     ) -> Result<Option<RunCheckpoint>, PersistenceError> {
         let id_text = run_id.to_string();
         self.blocking(move |connection| {
-            let result = connection.query_row(
+            let result: Result<String, rusqlite::Error> = connection.query_row(
                 "SELECT checkpoint_json FROM eureka_checkpoints WHERE run_id = ?1",
                 [&id_text],
-                |row| row.get::<_, String>(0),
+                |row| row.get(0),
             );
             match result {
-                Ok(json) => serde_json::from_str(&json)
-                    .map(Some)
-                    .map_err(|error| PersistenceError::Serialization(error.to_string())),
+                Ok(json) => Ok(Some(serde_json::from_str(&json)?)),
                 Err(rusqlite::Error::QueryReturnedNoRows) => Ok(None),
-                Err(error) => Err(PersistenceError::Io(std::io::Error::other(
-                    error.to_string(),
-                ))),
+                Err(error) => Err(io_err(error)),
             }
         })
         .await
@@ -692,12 +700,10 @@ impl CheckpointStore for SqliteRunPersistence {
     async fn delete_checkpoint(&self, run_id: uuid::Uuid) -> Result<(), PersistenceError> {
         let id_text = run_id.to_string();
         self.blocking(move |connection| {
-            connection
-                .execute(
-                    "DELETE FROM eureka_checkpoints WHERE run_id = ?1",
-                    [&id_text],
-                )
-                .map_err(|error| PersistenceError::Io(std::io::Error::other(error.to_string())))?;
+            connection.execute(
+                "DELETE FROM eureka_checkpoints WHERE run_id = ?1",
+                [&id_text],
+            )?;
             Ok(())
         })
         .await
@@ -730,7 +736,6 @@ impl RunRepository for InMemoryRunPersistence {
         }
         record.revision = Revision::default();
         runs.insert(record.id, record.clone());
-        drop(runs);
         Ok(record)
     }
 
@@ -756,7 +761,6 @@ impl RunRepository for InMemoryRunPersistence {
         }
         record.revision = Revision(expected.0.saturating_add(1));
         runs.insert(record.id, record.clone());
-        drop(runs);
         Ok(record)
     }
 
@@ -805,7 +809,6 @@ impl CheckpointStore for InMemoryRunPersistence {
         checkpoint.revision =
             current.map_or_else(|| Revision(1), |item| Revision(item.revision.0 + 1));
         checkpoints.insert(checkpoint.run_id, checkpoint.clone());
-        drop(checkpoints);
         Ok(checkpoint)
     }
 
@@ -1014,7 +1017,7 @@ impl CheckpointStore for FileRunStore {
             }
         })
         .await
-        .map_err(|error| PersistenceError::Io(std::io::Error::other(error.to_string())))??;
+        .map_err(io_err)??;
         if let Some(expected) = expected {
             let actual = current
                 .as_ref()
@@ -1029,8 +1032,7 @@ impl CheckpointStore for FileRunStore {
         }
         checkpoint.revision = current.map_or(Revision(1), |item| Revision(item.revision.0 + 1));
         let directory = self.directory.clone();
-        let bytes = serde_json::to_vec_pretty(&checkpoint)
-            .map_err(|error| PersistenceError::Serialization(error.to_string()))?;
+        let bytes = serde_json::to_vec_pretty(&checkpoint)?;
         tokio::task::spawn_blocking(move || {
             std::fs::create_dir_all(directory.as_path())?;
             let temp = path.with_extension("checkpoint.json.tmp");
@@ -1038,7 +1040,7 @@ impl CheckpointStore for FileRunStore {
             std::fs::rename(temp, path)
         })
         .await
-        .map_err(|error| PersistenceError::Io(std::io::Error::other(error.to_string())))??;
+        .map_err(io_err)??;
         Ok(checkpoint)
     }
 
@@ -1049,14 +1051,12 @@ impl CheckpointStore for FileRunStore {
         let _guard = self.lock.lock().await;
         let path = self.checkpoint_path_for(run_id);
         tokio::task::spawn_blocking(move || match std::fs::read(path) {
-            Ok(bytes) => serde_json::from_slice(&bytes)
-                .map(Some)
-                .map_err(|error| PersistenceError::Serialization(error.to_string())),
+            Ok(bytes) => Ok(Some(serde_json::from_slice(&bytes)?)),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
-            Err(error) => Err(PersistenceError::Io(error)),
+            Err(error) => Err(io_err(error)),
         })
         .await
-        .map_err(|error| PersistenceError::Io(std::io::Error::other(error.to_string())))?
+        .map_err(io_err)?
     }
 
     async fn delete_checkpoint(&self, run_id: uuid::Uuid) -> Result<(), PersistenceError> {
@@ -1065,10 +1065,10 @@ impl CheckpointStore for FileRunStore {
         tokio::task::spawn_blocking(move || match std::fs::remove_file(path) {
             Ok(()) => Ok(()),
             Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
-            Err(error) => Err(PersistenceError::Io(error)),
+            Err(error) => Err(io_err(error)),
         })
         .await
-        .map_err(|error| PersistenceError::Io(std::io::Error::other(error.to_string())))?
+        .map_err(io_err)?
     }
 }
 

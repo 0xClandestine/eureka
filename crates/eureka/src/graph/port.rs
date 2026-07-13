@@ -142,6 +142,16 @@ impl PortSpec {
     pub fn input_names(&self) -> Vec<String> {
         self.inputs.iter().map(|p| p.name.clone()).collect()
     }
+
+    /// Build a `PortSpec` directly from `PortDef` slices (the common case for
+    /// agents, control nodes, and manifests).
+    #[must_use]
+    pub fn from_defs(inputs: &[PortDef], outputs: &[PortDef]) -> Self {
+        Self::new(
+            inputs.iter().map(PortDef::to_input_spec).collect(),
+            outputs.iter().map(PortDef::to_output_spec).collect(),
+        )
+    }
 }
 
 #[cfg(test)]
