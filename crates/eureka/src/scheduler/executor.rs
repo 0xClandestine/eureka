@@ -11,11 +11,11 @@ use crate::graph::artifact::Artifact;
 use crate::graph::edge::Edge;
 use crate::graph::node::{BoxedNode, Emit, NodeCtx, NodeError, NodeUsage, PortMsg};
 use crate::graph::spec::GraphSpec;
-use crate::rag::RagIndexer;
 use crate::persistence::{
     ActivationSnapshot, CheckpointReason, CheckpointStore, PendingInput, Revision, RunCheckpoint,
     RunOutput,
 };
+use crate::rag::RagIndexer;
 
 use super::error::SchedulerError;
 use super::event::{SchedulerEvent, SchedulerSignal};

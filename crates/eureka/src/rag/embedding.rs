@@ -12,7 +12,9 @@ use std::sync::Arc;
 
 use rig_core::client::{EmbeddingsClient, ProviderClient};
 use rig_core::embeddings::{EmbeddingModel, EmbeddingsBuilder};
-use rig_core::providers::{cohere, gemini, llamafile, ollama, openai, openrouter, together, voyageai};
+use rig_core::providers::{
+    cohere, gemini, llamafile, ollama, openai, openrouter, together, voyageai,
+};
 use rig_core::vector_store::InsertDocuments;
 use rig_sqlite::SqliteVectorStore;
 

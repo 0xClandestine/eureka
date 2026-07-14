@@ -214,7 +214,6 @@ impl Node for ControlNode {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
