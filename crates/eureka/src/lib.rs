@@ -46,7 +46,6 @@ pub mod agent;
 pub mod config;
 pub mod control;
 pub mod error;
-pub mod time;
 pub mod graph;
 pub mod manager;
 pub mod manifest;
@@ -54,6 +53,7 @@ pub mod persistence;
 pub mod rag;
 pub mod scheduler;
 pub mod session;
+pub mod time;
 
 pub use error::EngineError;
 pub use manager::{CreateRunRequest, RunManager};

@@ -20,8 +20,8 @@ use axum::{
     Router,
 };
 use eureka::config::EurekaConfig;
-use eureka::time::iso_now_rfc3339;
 use eureka::persistence::{open_persistence, RunCheckpoint, RunPersistence};
+use eureka::time::iso_now_rfc3339;
 use eureka::RunManager;
 use serde::{Deserialize, Serialize};
 use tokio::signal;
