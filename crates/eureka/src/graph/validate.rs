@@ -193,10 +193,18 @@ pub fn validate_graph(spec: &GraphSpec, registry: &PortRegistry) -> ValidationRe
         .collect();
 
     let sources: Vec<&str> = if source_candidates.is_empty() {
+        // Only non-feedback inbound edges count for source detection: a node
+        // that receives inputs exclusively on feedback edges is still a source.
+        let has_non_feedback_inbound: HashSet<&str> = spec
+            .edges
+            .iter()
+            .filter(|e| !e.feedback)
+            .map(|e| e.to_node.as_str())
+            .collect();
         spec.nodes
             .iter()
             .map(|n| n.id.as_str())
-            .filter(|id| !reverse_adjacency.contains_key(id))
+            .filter(|id| !has_non_feedback_inbound.contains(id))
             .collect()
     } else {
         source_candidates

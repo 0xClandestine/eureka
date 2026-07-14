@@ -158,6 +158,9 @@ pub fn start_server_with_manager(
     run_id: Option<uuid::Uuid>,
     manager: Option<RunManager>,
 ) -> tokio::task::JoinHandle<()> {
+    if port == 0 {
+        return tokio::spawn(async {});
+    }
     let state = ServerState {
         spec: Arc::new(spec),
         event_tx,
@@ -211,9 +214,7 @@ async fn graph_handler(State(s): State<ServerState>) -> Json<serde_json::Value> 
 /// `GET /api/state` — return a snapshot of the live run state.
 async fn state_handler(State(s): State<ServerState>) -> Json<LiveState> {
     let mut snapshot = s.live.lock().await.clone();
-    if !snapshot.finished {
-        snapshot.elapsed_secs = s.started_at.elapsed().as_secs_f64();
-    }
+    snapshot.elapsed_secs = s.started_at.elapsed().as_secs_f64();
     Json(snapshot)
 }
 

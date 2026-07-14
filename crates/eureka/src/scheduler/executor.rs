@@ -618,7 +618,8 @@ impl Scheduler {
                             reason: reason.clone(),
                             total_rounds: self.stats.rounds_completed,
                         }).await;
-                        self.cancel.cancel();
+                        tasks.abort_all();
+                        break;
                     }
                 }
             }

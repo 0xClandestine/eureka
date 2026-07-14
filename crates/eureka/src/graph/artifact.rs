@@ -6,7 +6,7 @@
 //! are defined by agent JSON files and control-node configurations, not by
 //! any Rust enum here.
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Serialize, ser::Error as _};
 
 /// The kind of artifact — a plain string tag used for port type-matching.
 ///
@@ -40,8 +40,12 @@ impl Artifact {
         kind: impl Into<String>,
         value: &T,
     ) -> Result<Self, serde_json::Error> {
+        let kind = kind.into();
+        if kind.is_empty() {
+            return Err(serde_json::Error::custom("artifact kind must not be empty"));
+        }
         Ok(Self {
-            kind: kind.into(),
+            kind,
             data: serde_json::to_value(value)?,
         })
     }

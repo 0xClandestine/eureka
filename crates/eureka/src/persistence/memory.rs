@@ -92,7 +92,12 @@ impl RunRepository for InMemoryRunPersistence {
     }
 
     async fn delete_versioned(&self, id: uuid::Uuid) -> Result<(), PersistenceError> {
-        self.runs.write().await.remove(&id);
+        let mut runs = self.runs.write().await;
+        if !runs.contains_key(&id) {
+            return Err(PersistenceError::NotFound(id));
+        }
+        runs.remove(&id);
+        drop(runs);
         self.checkpoints.write().await.remove(&id);
         self.events.write().await.remove(&id);
         Ok(())

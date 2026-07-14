@@ -204,6 +204,14 @@ impl RunRepository for SqliteRunPersistence {
         let _guard = self.lock.lock().await;
         let id_text = id.to_string();
         self.blocking(move |connection| {
+            let exists: bool = connection.query_row(
+                "SELECT EXISTS(SELECT 1 FROM eureka_runs WHERE id = ?1)",
+                [&id_text],
+                |row| row.get(0),
+            )?;
+            if !exists {
+                return Err(PersistenceError::NotFound(id));
+            }
             connection
                 .execute(
                     "DELETE FROM eureka_checkpoints WHERE run_id = ?1",
@@ -254,7 +262,6 @@ impl RunStore for SqliteRunPersistence {
     }
 }
 
-#[async_trait]
 #[async_trait]
 impl EventStore for SqliteRunPersistence {
     async fn append_event(
