@@ -230,7 +230,7 @@ agents:
           description: Per-agent feedback for use in the next round
           properties:
             generation_context:    { type: array, items: { type: string }, description: "Specific directions and gaps for the Generation agent" }
-            reflection_heuristics: { type: array, items: { type: string }, description: "Review patterns and heuristics for the Reflection agent" }
+            debate_heuristics:     { type: array, items: { type: string }, description: "Challenge and rebuttal patterns for the Critic and Advocate agents" }
             evolution_guidance:    { type: array, items: { type: string }, description: "Strategy observations for the Evolution agent" }
             recurring_patterns:    { type: array, items: { type: string }, description: "Themes appearing across top hypotheses" }
             common_weaknesses:     { type: array, items: { type: string } }

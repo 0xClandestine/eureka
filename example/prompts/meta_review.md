@@ -11,10 +11,11 @@ What themes or mechanisms appear across the top hypotheses? What gaps in the
 current batch should the Generation agent fill in the next round? Be specific
 about what kinds of hypotheses to pursue and which to avoid.
 
-## Insights for Reflection Agent
-Summarise common weaknesses and errors seen across reviews. What systematic
-issues did reviewers miss? What recurring problems should future reviews pay
-extra attention to? Provide specific review heuristics for the next round.
+## Insights for Debate Agents (Critic & Advocate)
+Summarise recurring weaknesses and critique patterns from the debate. What
+challenges did the Critic raise that the Advocate consistently struggled to
+answer? What defences succeeded — and should the Critic target differently
+next round? Provide specific challenge and rebuttal heuristics for both agents.
 
 ## Insights for Evolution Agent
 Which refinement strategies produced the strongest improvements? Which

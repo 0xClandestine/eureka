@@ -53,7 +53,9 @@ adding them. Produce a diverse set of improved hypotheses across all strategies.
 
 Use the `context_store` tool:
 - Read literature notes and rejected directions from Generation.
-- Read review critiques from Reflection to understand what needs improvement.
+- Read debate outcomes from the Critic/Advocate pair — challenges raised,
+  defences that succeeded or failed, and conceded weaknesses — to understand
+  exactly what each hypothesis needs to improve.
 - Write your evolution results so Meta-review can analyse which strategies
   worked best.
 

@@ -50,3 +50,7 @@ nodes can reconstruct hypotheses without information loss.
 
 Use `context_store` to read prior critique patterns and write challenge
 heuristics for future rounds. Read `read_round` for prior generation findings.
+
+If a `context` input is present, it contains Meta-review insights. The
+`debate_heuristics` field summarises which challenges proved hardest to defend
+in prior rounds — prioritise those angles.

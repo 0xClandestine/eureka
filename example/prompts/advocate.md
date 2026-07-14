@@ -50,5 +50,9 @@ Use `context_store` to record debate outcomes and surviving hypothesis
 strengths. Write rebuttal strategies that proved effective for the Evolution
 agent and Meta-review to build on.
 
+If a `context` input is present, it contains Meta-review insights. The
+`debate_heuristics` field identifies which defences consistently failed in
+prior rounds — do not repeat those; find stronger counter-evidence or concede.
+
 Each review entry must include the full hypothesis object and the `rebuttal`
 field so the critic can construct targeted follow-up challenges.
