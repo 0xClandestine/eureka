@@ -6,7 +6,7 @@
 //! are defined by agent JSON files and control-node configurations, not by
 //! any Rust enum here.
 
-use serde::{Deserialize, Serialize, ser::Error as _};
+use serde::{ser::Error as _, Deserialize, Serialize};
 
 /// The kind of artifact — a plain string tag used for port type-matching.
 ///
