@@ -59,6 +59,11 @@ crates/
       session.rs              # assembles everything; entry point: Session::new / Session::run
       manager.rs              # RunManager lifecycle service
       tracing.rs              # optional SQLite event history writer
+      rag/                    # RAG integration (opt-in via [rag] config section)
+        mod.rs                # RagIndexHandle — type-erased VectorStoreIndexDyn wrapper
+        init.rs               # register_sqlite_vec() — one-time sqlite-vec auto-extension
+        indexer.rs            # RagDocument, RagIndexer — artifact → vector store pipeline
+        embedding.rs          # build_rag_components — embedding model construction + type erasure
   eureka-cli/                 # the CLI binary
     src/
       main.rs                 # clap: daemon | start | session | validate | list
@@ -102,7 +107,7 @@ cargo run --release -- daemon start                              # start daemon
 cargo run --release -- start "<goal>" --domain chemistry          # submit a run
 ```
 
-The workspace sets `pedantic`/`nursery` to `warn`, `unwrap_used`/`expect_used` to `deny`, and `unsafe_code` to `forbid`. Test code lightens the deny via `#![cfg_attr(test, allow(clippy::unwrap_used, ...))]` at crate roots.
+The workspace sets `pedantic`/`nursery` to `warn`, `unwrap_used`/`expect_used` to `deny`, and `unsafe_code` to `deny`. Test code lightens the deny via `#![cfg_attr(test, allow(clippy::unwrap_used, ...))]` at crate roots. (`unsafe_code` is `deny` rather than `forbid` so that `rag/init.rs` can use `#![allow(unsafe_code)]` for the single sqlite-vec registration call.)
 
 ---
 

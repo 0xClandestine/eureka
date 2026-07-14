@@ -2,7 +2,7 @@
 //!
 //! [`build_rag_components`] is the single entry point. It reads the
 //! [`RagConfig`], constructs the concrete embedding model (erasing its type),
-//! opens a `tokio-rusqlite` connection to the per-run SQLite database, and
+//! opens a `tokio-rusqlite` connection to the per-run `SQLite` database, and
 //! returns a type-erased [`super::RagIndexHandle`] (for querying) plus an
 //! [`super::indexer::RagIndexer`] (for inserting).
 
@@ -19,8 +19,8 @@ use rig_sqlite::SqliteVectorStore;
 use crate::config::{EmbeddingProvider, RagConfig};
 use crate::error::EngineError;
 
-use super::RagIndexHandle;
 use super::indexer::{RagDocument, RagIndexer};
+use super::RagIndexHandle;
 
 /// Build a [`RagIndexHandle`] (query) and [`RagIndexer`] (insert) from the
 /// supplied configuration and database path.
@@ -94,22 +94,23 @@ where
 
     // Build the type-erased embed-and-insert closure for RagIndexer.
     let store_arc = Arc::new(store_for_insert);
-    let embed_and_insert: super::indexer::EmbedInsertFn = Arc::new(move |docs: Vec<RagDocument>| {
-        let store = Arc::clone(&store_arc);
-        let model = model.clone();
-        Box::pin(async move {
-            let embeddings = EmbeddingsBuilder::new(model)
-                .documents(docs)
-                .map_err(|e| EngineError::Store(format!("RAG embed error: {e}")))?
-                .build()
-                .await
-                .map_err(|e| EngineError::Store(format!("RAG embed build error: {e}")))?;
-            store
-                .insert_documents(embeddings)
-                .await
-                .map_err(|e| EngineError::Store(format!("RAG insert error: {e}")))
-        })
-    });
+    let embed_and_insert: super::indexer::EmbedInsertFn =
+        Arc::new(move |docs: Vec<RagDocument>| {
+            let store = Arc::clone(&store_arc);
+            let model = model.clone();
+            Box::pin(async move {
+                let embeddings = EmbeddingsBuilder::new(model)
+                    .documents(docs)
+                    .map_err(|e| EngineError::Store(format!("RAG embed error: {e}")))?
+                    .build()
+                    .await
+                    .map_err(|e| EngineError::Store(format!("RAG embed build error: {e}")))?;
+                store
+                    .insert_documents(embeddings)
+                    .await
+                    .map_err(|e| EngineError::Store(format!("RAG insert error: {e}")))
+            })
+        });
 
     let indexer = Arc::new(RagIndexer::new(
         embed_and_insert,

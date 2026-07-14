@@ -1,7 +1,7 @@
 #![allow(unsafe_code)]
 //! One-time `sqlite-vec` extension registration.
 //!
-//! `sqlite-vec` implements vector similarity search inside SQLite. It must be
+//! `sqlite-vec` implements vector similarity search inside `SQLite`. It must be
 //! registered as an auto-extension before any `rusqlite::Connection` is opened
 //! so that every subsequent connection automatically loads the extension.
 //!
@@ -12,19 +12,20 @@
 use rusqlite::ffi::sqlite3_auto_extension;
 use sqlite_vec::sqlite3_vec_init;
 
+/// Guards the one-time `sqlite3_auto_extension` call.
 static REGISTERED: std::sync::OnceLock<()> = std::sync::OnceLock::new();
 
-/// Register the `sqlite-vec` extension for all subsequent SQLite connections
+/// Register the `sqlite-vec` extension for all subsequent `SQLite` connections
 /// in this process.
 ///
 /// Safe to call multiple times — the actual registration happens exactly once.
 /// Must be called before the first `rusqlite::Connection::open`.
 pub fn register_sqlite_vec() {
     REGISTERED.get_or_init(|| {
-        // SAFETY: `sqlite3_vec_init` is a valid SQLite extension entry point.
-        // `sqlite3_auto_extension` stores a function pointer that SQLite calls
+        // SAFETY: `sqlite3_vec_init` is a valid `SQLite` extension entry point.
+        // `sqlite3_auto_extension` stores a function pointer that `SQLite` calls
         // for every new connection; the transmute reinterprets the void pointer
-        // as the exact signature SQLite expects, which is sound for this specific
+        // as the exact signature `SQLite` expects, which is sound for this specific
         // function.
         unsafe {
             sqlite3_auto_extension(Some(std::mem::transmute::<

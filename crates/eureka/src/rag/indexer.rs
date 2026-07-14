@@ -131,7 +131,7 @@ impl RagIndexer {
             .into_iter()
             .enumerate()
             .map(|(i, text)| RagDocument {
-                id: format!("{}:r{}:{}", node_id, round, i),
+                id: format!("{node_id}:r{round}:{i}"),
                 text,
                 metadata: serde_json::json!({
                     "node_id":    node_id,
@@ -152,19 +152,18 @@ impl RagIndexer {
 /// element. All other artifacts are serialized as a single chunk.
 fn chunk_artifact(kind: &str, data: &serde_json::Value) -> Vec<String> {
     let _ = kind; // reserved for per-kind strategy overrides
-    match data {
-        serde_json::Value::Array(items) => items
+    if let serde_json::Value::Array(items) = data {
+        items
             .iter()
             .map(|v| serde_json::to_string(v).unwrap_or_default())
             .filter(|s| !s.is_empty())
-            .collect(),
-        _ => {
-            let s = serde_json::to_string(data).unwrap_or_default();
-            if s.is_empty() {
-                vec![]
-            } else {
-                vec![s]
-            }
+            .collect()
+    } else {
+        let s = serde_json::to_string(data).unwrap_or_default();
+        if s.is_empty() {
+            vec![]
+        } else {
+            vec![s]
         }
     }
 }

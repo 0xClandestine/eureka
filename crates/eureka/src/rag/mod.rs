@@ -6,7 +6,7 @@
 //! ## Usage
 //!
 //! 1. Call [`init::register_sqlite_vec`] once at process startup (before any
-//!    SQLite connection is opened).
+//!    `SQLite` connection is opened).
 //! 2. Add a `[rag]` section to `eureka.toml` (see [`crate::config::RagConfig`]).
 //! 3. The session wires everything automatically — no per-agent code required.
 //!
@@ -43,17 +43,17 @@ pub use indexer::{RagDocument, RagIndexer};
 pub struct RagIndexHandle(pub Arc<dyn VectorStoreIndexDyn + Send + Sync + 'static>);
 
 impl VectorStoreIndexDyn for RagIndexHandle {
-    fn top_n<'a>(
-        &'a self,
+    fn top_n(
+        &self,
         req: VectorSearchRequest<Filter<serde_json::Value>>,
-    ) -> WasmBoxedFuture<'a, TopNResults> {
+    ) -> WasmBoxedFuture<'_, TopNResults> {
         self.0.top_n(req)
     }
 
-    fn top_n_ids<'a>(
-        &'a self,
+    fn top_n_ids(
+        &self,
         req: VectorSearchRequest<Filter<serde_json::Value>>,
-    ) -> WasmBoxedFuture<'a, Result<Vec<(f64, String)>, VectorStoreError>> {
+    ) -> WasmBoxedFuture<'_, Result<Vec<(f64, String)>, VectorStoreError>> {
         self.0.top_n_ids(req)
     }
 }
