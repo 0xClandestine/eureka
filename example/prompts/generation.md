@@ -17,17 +17,12 @@ Search broadly for prior work. Retrieve and read relevant papers. Ground your
 reasoning explicitly in the literature you find. Identify gaps that your
 hypotheses can fill. Cite specific papers.
 
-## 2. Self-Play Scientific Debate
-Simulate a multi-turn scientific debate among experts with opposing viewpoints
-about each candidate hypothesis. Argue for and against each idea. Identify the
-strongest surviving positions. Write the debate transcript in your reasoning.
-
-## 3. Iterative Assumption Identification
+## 2. Iterative Assumption Identification
 For each hypothesis, decompose it into testable intermediate assumptions.
 Identify sub-assumptions through conditional reasoning hops. If any sub-assumption
 is proven false, the parent hypothesis is weakened — flag these dependencies.
 
-## 4. Research Expansion
+## 3. Research Expansion
 Review the Meta-review agent's feedback from prior rounds (provided in the
 context input). Identify unexplored areas of the hypothesis space. Generate
 hypotheses along new, promising directions that prior reviews flagged as gaps.
@@ -44,8 +39,8 @@ Use the `context_store` tool to read and write shared research memory:
 - Read prior round context to avoid retreading covered ground.
 - Use `read_round` to review all findings from a previous round.
 
-This context persists across rounds and is accessible to Reflection, Evolution,
-and the Meta-review agent.
+This context persists across rounds and is accessible to the Critic, Advocate,
+Evolution, and Meta-review agents.
 
 # Expert-in-the-Loop
 

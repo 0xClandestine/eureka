@@ -102,13 +102,17 @@ agents:
               recommendation: { type: string, enum: [proceed, revise, reject] }
               rationale:      { type: string }
 
-  - id: reflection
-    description: Multi-type peer review — initial, full, deep verification,
-                 observation, simulation, and recurrent review
-    prompt: prompts/reflection.md
+  - id: critic
+    description: Adversarial reviewer — challenges hypotheses through literature
+                 attack, assumption decomposition, and experiment critique;
+                 sharpens counter-arguments each round using the advocate's rebuttal
+    prompt: prompts/critic.md
     inputs:
       - port: in
         kind: Hypotheses
+      - port: rebuttal
+        kind: Reviews
+        required: false
       - port: context
         kind: Insights
         required: false
@@ -122,19 +126,53 @@ agents:
       properties:
         reviews:
           type: array
-          description: One review entry per hypothesis
+          description: One critique entry per hypothesis
           items:
             type: object
             required: [hypothesis, kind, reasoning, score]
             properties:
-              hypothesis:  { type: object, description: "Full hypothesis object pass-through for downstream ranking" }
-              kind:        { type: string, enum: [initial, full, deep_verification, observation, simulation, recurrent] }
-              eliminated:  { type: boolean, description: "True if hypothesis should be discarded entirely" }
-              reasoning:   { type: string, description: "Detailed critique with evidence" }
-              strengths:   { type: array, items: { type: string } }
+              hypothesis:  { type: object, description: "Full hypothesis object pass-through" }
+              kind:        { type: string, enum: [initial, literature, assumption, experiment, adversarial, escalation] }
+              eliminated:  { type: boolean, description: "True if hypothesis should be discarded" }
+              reasoning:   { type: string, description: "Detailed challenge with evidence" }
               weaknesses:  { type: array, items: { type: string } }
               suggestions: { type: array, items: { type: string } }
-              score:       { type: number, description: "Overall quality score 0–10" }
+              score:       { type: number, description: "Preliminary quality score 0–10 (advocate may revise)" }
+
+  - id: advocate
+    description: Scientific defender — responds to critic's challenges with
+                 evidence, concedes valid objections, refines hypotheses, and
+                 produces the authoritative final review for ranking
+    prompt: prompts/advocate.md
+    inputs:
+      - port: in
+        kind: Reviews
+      - port: context
+        kind: Insights
+        required: false
+    outputs:
+      - port: out
+        kind: Reviews
+    tools: [*arxiv_search, *arxiv_read, *context_store]
+    output_schema:
+      type: object
+      required: [reviews]
+      properties:
+        reviews:
+          type: array
+          description: Final review entries after debate synthesis
+          items:
+            type: object
+            required: [hypothesis, kind, reasoning, score, rebuttal]
+            properties:
+              hypothesis:  { type: object, description: "Full hypothesis object (potentially refined)" }
+              kind:        { type: string, enum: [debate_synthesis] }
+              eliminated:  { type: boolean, description: "True if hypothesis did not survive debate" }
+              reasoning:   { type: string, description: "Final balanced assessment after debate" }
+              strengths:   { type: array, items: { type: string } }
+              weaknesses:  { type: array, items: { type: string }, description: "Conceded weaknesses" }
+              rebuttal:    { type: string, description: "Summary of responses to critic's objections" }
+              score:       { type: number, description: "Post-debate quality score 0–10" }
 
   - id: evolution
     description: Refines top hypotheses via grounding, coherence, inspiration,
@@ -287,10 +325,13 @@ control:
     timeout_secs: 10
 
 # ── Graph topology ─────────────────────────────────────────────────────
-# Forward pipeline: generation → safety_review → reflection → ranking → evolution → proximity → supervisor
-# Feedback loops: supervisor → reflection (continue), proximity.graph → ranking,
-#                 meta_review.insights → generation, reflection, evolution
-#                 ranking.state → supervisor (statistics)
+# Forward pipeline: generation → safety_review → critic → advocate → ranking
+#                   → evolution → proximity → supervisor
+# Debate loop:      advocate → critic (feedback — each outer round the critic
+#                   sharpens its challenge using the advocate's prior rebuttal)
+# Feedback loops:   supervisor → critic (continue), proximity.graph → ranking,
+#                   meta_review.insights → generation, critic, advocate, evolution
+#                   ranking.state → supervisor (statistics)
 edges:
   # ── Forward pipeline ──
   - from_node: generation
@@ -300,10 +341,15 @@ edges:
 
   - from_node: safety_review
     from_port: out
-    to_node: reflection
+    to_node: critic
     to_port: in
 
-  - from_node: reflection
+  - from_node: critic
+    from_port: out
+    to_node: advocate
+    to_port: in
+
+  - from_node: advocate
     from_port: out
     to_node: ranking
     to_port: in
@@ -341,6 +387,13 @@ edges:
     to_node: supervisor
     to_port: ranking
 
+  # ── Debate loop: advocate rebuttal → critic (sharpens next challenge) ──
+  - from_node: advocate
+    from_port: out
+    to_node: critic
+    to_port: rebuttal
+    feedback: true
+
   # ── Meta-review feedback → all agents ──
   - from_node: meta_review
     from_port: insights
@@ -350,7 +403,13 @@ edges:
 
   - from_node: meta_review
     from_port: insights
-    to_node: reflection
+    to_node: critic
+    to_port: context
+    feedback: true
+
+  - from_node: meta_review
+    from_port: insights
+    to_node: advocate
     to_port: context
     feedback: true
 
@@ -363,7 +422,7 @@ edges:
   # ── Supervisor feedback loop ──
   - from_node: supervisor
     from_port: continue
-    to_node: reflection
+    to_node: critic
     to_port: in
     feedback: true
 
