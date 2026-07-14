@@ -86,8 +86,8 @@ impl RunCheckpoint {
     /// rejected so an input cannot be silently lost.
     ///
     /// # Errors
-    /// Returns `PersistenceError::AlreadyExists` if an input already exists for the
-    /// same (`node_id`, port) pair.
+    /// Returns `PersistenceError::InputConflict` if an input already exists for the
+    /// same (`node_id`, port) pair at the current round.
     pub fn inject_input(
         &mut self,
         node_id: impl Into<String>,
