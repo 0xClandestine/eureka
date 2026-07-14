@@ -7,7 +7,7 @@
 use std::sync::Arc;
 
 use crate::control::process::run_subprocess;
-use crate::run::RunEnvironment;
+use crate::persistence::RunEnvironment;
 use crate::scheduler::SchedulerEvent;
 use rig_core::tool::{ToolDyn, ToolError};
 use rig_core::wasm_compat::WasmBoxedFuture;

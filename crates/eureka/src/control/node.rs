@@ -15,11 +15,12 @@
 
 use std::path::PathBuf;
 
+use super::def::ControlNodeDef;
 use super::process::run_subprocess;
 use crate::graph::artifact::Artifact;
 use crate::graph::node::{Emit, Node, NodeCtx, NodeError, PortMsg};
 use crate::graph::port::{PortDef, PortSpec};
-use crate::run::RunEnvironment;
+use crate::persistence::RunEnvironment;
 use async_trait::async_trait;
 
 /// A graph node implemented by a subprocess plugin.
@@ -213,23 +214,6 @@ impl Node for ControlNode {
     }
 }
 
-/// Lightweight definition for constructing a [`ControlNode`].
-///
-/// Populated from the YAML manifest's `control[]` entries.
-pub struct ControlNodeDef {
-    /// Display name (for diagnostics).
-    pub name: String,
-    /// Working directory (absolute path to graph dir).
-    pub work_dir: PathBuf,
-    /// Subprocess argv.
-    pub command: Vec<String>,
-    /// Input port declarations.
-    pub inputs: Vec<PortDef>,
-    /// Output port declarations.
-    pub outputs: Vec<PortDef>,
-    /// Subprocess timeout in seconds.
-    pub timeout_secs: u32,
-}
 
 #[cfg(test)]
 mod tests {

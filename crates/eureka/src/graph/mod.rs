@@ -5,7 +5,6 @@
 //! calls — just data structures and the scheduler-facing traits.
 
 pub mod artifact;
-pub mod control;
 pub mod edge;
 pub mod node;
 pub mod port;

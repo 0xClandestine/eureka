@@ -7,7 +7,7 @@
 use std::sync::{Arc, Mutex};
 
 use crate::graph::node::NodeUsage;
-use crate::run::RunEnvironment;
+use crate::persistence::RunEnvironment;
 use crate::scheduler::SchedulerEvent;
 use async_trait::async_trait;
 use rig_core::agent::AgentBuilder;
@@ -17,7 +17,7 @@ use tokio::sync::mpsc;
 
 use super::def::ToolDef;
 use super::error::AgentError;
-use super::tools::CommandTool;
+use super::tool::CommandTool;
 
 /// Type-erased LLM client: runs an agentic loop until `submit` is called.
 #[async_trait]

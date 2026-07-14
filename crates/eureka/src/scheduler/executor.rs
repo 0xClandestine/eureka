@@ -12,7 +12,7 @@ use crate::graph::edge::Edge;
 use crate::graph::node::{BoxedNode, Emit, NodeCtx, NodeError, NodeUsage, PortMsg};
 use crate::graph::spec::GraphSpec;
 use crate::rag::RagIndexer;
-use crate::run::{
+use crate::persistence::{
     ActivationSnapshot, CheckpointReason, CheckpointStore, PendingInput, Revision, RunCheckpoint,
     RunOutput,
 };
@@ -1131,7 +1131,7 @@ mod tests {
         };
         let mut nodes = HashMap::new();
         nodes.insert("source".into(), BoxedNode::new(SlowNode));
-        let store = Arc::new(crate::run::InMemoryRunPersistence::new());
+        let store = Arc::new(crate::persistence::InMemoryRunPersistence::new());
         let checkpoint_store: Arc<dyn CheckpointStore> = store.clone();
         let mut scheduler = Scheduler::new(spec.clone(), nodes, Budget::default(), 1)
             .with_checkpoint_store(checkpoint_store, run_id, "graph", "config");

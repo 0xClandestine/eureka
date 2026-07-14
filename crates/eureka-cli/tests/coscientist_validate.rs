@@ -9,8 +9,8 @@ use std::path::Path;
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use eureka::agents::error::AgentError;
-use eureka::agents::{AgentDef, AgentPort, LlmAgentNode, LlmClient, ToolDef};
+use eureka::agent::error::AgentError;
+use eureka::agent::{AgentDef, LlmAgentNode, LlmClient, PortDef, ToolDef};
 use eureka::graph::node::{BoxedNode, Emit, Node, NodeCtx, NodeError, PortMsg};
 use eureka::graph::port::{PortDirection, PortSpec, PortSpecEntry};
 use eureka::graph::validate::{validate_graph, PortRegistry};
@@ -185,7 +185,7 @@ fn test_coscientist_validates() {
             inputs: agent_spec
                 .inputs
                 .iter()
-                .map(|p| AgentPort {
+                .map(|p| PortDef {
                     kind: p.kind.clone(),
                     port: p.port.clone(),
                     ..Default::default()
@@ -194,7 +194,7 @@ fn test_coscientist_validates() {
             outputs: agent_spec
                 .outputs
                 .iter()
-                .map(|p| AgentPort {
+                .map(|p| PortDef {
                     kind: p.kind.clone(),
                     port: p.port.clone(),
                     ..Default::default()

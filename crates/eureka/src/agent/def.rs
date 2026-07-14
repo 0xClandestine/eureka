@@ -5,7 +5,7 @@
 //! LLM config, output schema, and shell tool definitions.
 
 pub use crate::config::AgentConfig;
-pub use crate::graph::port::PortDef as AgentPort;
+pub use crate::graph::port::PortDef;
 
 use serde::{Deserialize, Serialize};
 
@@ -46,9 +46,9 @@ pub struct AgentDef {
     /// The system preamble loaded from the prompt file.
     pub preamble: String,
     /// Input port specifications.
-    pub inputs: Vec<AgentPort>,
+    pub inputs: Vec<PortDef>,
     /// Output port specifications.
-    pub outputs: Vec<AgentPort>,
+    pub outputs: Vec<PortDef>,
     /// LLM configuration for this agent.
     pub config: AgentConfig,
     /// JSON Schema the LLM must conform to (becomes the `submit` tool's parameter schema).

@@ -11,7 +11,7 @@ use std::sync::Arc;
 use crate::graph::artifact::Artifact;
 use crate::graph::node::{Emit, Node, NodeCtx, NodeError, PortMsg};
 use crate::graph::port::PortSpec;
-use crate::run::RunEnvironment;
+use crate::persistence::RunEnvironment;
 use async_trait::async_trait;
 
 use super::client::LlmClient;
@@ -146,7 +146,7 @@ impl Node for LlmAgentNode {
 
 #[cfg(test)]
 mod tests {
-    use super::super::def::{AgentConfig, AgentPort};
+    use super::super::def::{AgentConfig, PortDef};
     use super::super::error::AgentError;
     use super::*;
 
@@ -180,12 +180,12 @@ mod tests {
             name: name.to_string(),
             description: None,
             preamble: "test preamble".to_string(),
-            inputs: vec![AgentPort {
+            inputs: vec![PortDef {
                 kind: input_kind.to_string(),
                 port: "in".to_string(),
                 ..Default::default()
             }],
-            outputs: vec![AgentPort {
+            outputs: vec![PortDef {
                 kind: output_kind.to_string(),
                 port: "out".to_string(),
                 ..Default::default()
@@ -252,18 +252,18 @@ mod tests {
             name: "meta_review".to_string(),
             description: None,
             preamble: "preamble".to_string(),
-            inputs: vec![AgentPort {
+            inputs: vec![PortDef {
                 kind: "Ranking".to_string(),
                 port: "in".to_string(),
                 ..Default::default()
             }],
             outputs: vec![
-                AgentPort {
+                PortDef {
                     kind: "Insights".to_string(),
                     port: "insights".to_string(),
                     ..Default::default()
                 },
-                AgentPort {
+                PortDef {
                     kind: "Overview".to_string(),
                     port: "overview".to_string(),
                     ..Default::default()
@@ -300,18 +300,18 @@ mod tests {
             description: None,
             preamble: "preamble".to_string(),
             inputs: vec![
-                AgentPort {
+                PortDef {
                     kind: "Goal".to_string(),
                     port: "in".to_string(),
                     ..Default::default()
                 },
-                AgentPort {
+                PortDef {
                     kind: "Insights".to_string(),
                     port: "context".to_string(),
                     ..Default::default()
                 },
             ],
-            outputs: vec![AgentPort {
+            outputs: vec![PortDef {
                 kind: "Hypotheses".to_string(),
                 port: "out".to_string(),
                 ..Default::default()

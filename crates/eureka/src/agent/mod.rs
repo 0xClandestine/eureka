@@ -9,10 +9,10 @@ pub mod client;
 pub mod def;
 pub mod error;
 pub mod node;
-pub mod tools;
+pub mod tool;
 
 pub use client::{LlmClient, RigClient};
-pub use def::{AgentConfig, AgentDef, AgentPort, ToolDef};
+pub use def::{AgentDef, PortDef, ToolDef};
 pub use error::AgentError;
 pub use node::LlmAgentNode;
-pub use tools::CommandTool;
+pub use tool::CommandTool;

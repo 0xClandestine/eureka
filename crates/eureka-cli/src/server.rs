@@ -29,7 +29,7 @@ use eureka::scheduler::SchedulerEvent;
 use eureka::{
     graph::artifact::Artifact,
     manager::{CreateRunRequest, RunManager},
-    run::{RunCheckpoint, RunPersistence, RunRecord},
+    persistence::{RunCheckpoint, RunPersistence, RunRecord},
 };
 
 /// Shared state injected into every axum handler.
@@ -235,7 +235,7 @@ async fn run_handler(
 /// `GET /api/events/history` — return durable scheduler events from `SQLite`.
 async fn event_history_handler(
     State(s): State<ServerState>,
-) -> Result<Json<Vec<eureka::run::RunEvent>>, axum::http::StatusCode> {
+) -> Result<Json<Vec<eureka::persistence::RunEvent>>, axum::http::StatusCode> {
     let (Some(store), Some(id)) = (s.run_store, s.run_id) else {
         return Err(axum::http::StatusCode::NOT_FOUND);
     };

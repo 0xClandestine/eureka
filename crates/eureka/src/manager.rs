@@ -13,7 +13,7 @@ use tokio::sync::{mpsc, Mutex};
 
 use crate::config::EurekaConfig;
 use crate::graph::artifact::Artifact;
-use crate::run::{CheckpointReason, RunCheckpoint, RunPersistence, RunRecord, RunStatus};
+use crate::persistence::{CheckpointReason, RunCheckpoint, RunPersistence, RunRecord, RunStatus};
 use crate::scheduler::SchedulerSignal;
 use crate::session::Session;
 use crate::EngineError;
@@ -101,7 +101,7 @@ impl RunManager {
     pub async fn get_events(
         &self,
         run_id: uuid::Uuid,
-    ) -> Result<Vec<crate::run::RunEvent>, EngineError> {
+    ) -> Result<Vec<crate::persistence::RunEvent>, EngineError> {
         self.persistence
             .load_events(run_id)
             .await

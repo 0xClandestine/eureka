@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use eureka::config::{Budget, EurekaConfig};
-use eureka::run::{open_persistence, CheckpointStore, RunPersistence, RunStore};
+use eureka::persistence::{open_persistence, CheckpointStore, RunPersistence, RunStore};
 use eureka::{RunManager, Session};
 use tokio::sync::broadcast;
 

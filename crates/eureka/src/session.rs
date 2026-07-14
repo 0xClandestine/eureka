@@ -8,16 +8,17 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
-use crate::agents::def::{AgentConfig, AgentDef, ToolDef};
-use crate::agents::{LlmAgentNode, LlmClient, RigClient};
+use crate::agent::def::{AgentConfig, AgentDef, ToolDef};
+use crate::agent::{LlmAgentNode, LlmClient, RigClient};
 use crate::config::{EurekaConfig, ProviderKind, RunStats};
+use crate::control::{ControlNode, ControlNodeDef};
 use crate::graph::artifact::Artifact;
 use crate::graph::node::BoxedNode;
 use crate::graph::port::PortSpec;
 use crate::graph::spec::{GraphError, GraphNodeSpec, GraphSpec};
 use crate::graph::validate::{validate_graph, PortRegistry};
 use crate::manifest::{AgentSpec, ControlSpec, GraphManifest};
-use crate::run::{
+use crate::persistence::{
     CheckpointStore, EventStore, RunCheckpoint, RunEnvironment, RunRecord, RunStatus, RunStore,
 };
 use crate::scheduler::{Scheduler, SchedulerError, SchedulerEvent, SchedulerSignal};
@@ -30,7 +31,6 @@ use rig_core::providers::{
 use tokio::sync::{broadcast, mpsc};
 use tracing::{error, info, warn};
 
-use crate::control::node::{ControlNode, ControlNodeDef};
 use crate::error::EngineError;
 
 /// A session represents a single Eureka research run.
@@ -736,7 +736,7 @@ impl Session {
         for tool in &agent_def.tools {
             if tool.name.eq_ignore_ascii_case("submit") {
                 return Err(EngineError::NodeCreation(format!(
-                    "Agent '{}' declares a tool named 'submit', which is reserved 
+                    "Agent '{}' declares a tool named 'submit', which is reserved
                      for the agent's terminal output tool. Rename the tool.",
                     agent_spec.id
                 )));
@@ -760,12 +760,11 @@ impl Session {
 
         // Attach RAG dynamic_context if the index is ready and this agent is
         // in the configured allow-list (empty list = all agents).
-        let client_arc = if let (Some(rag_index), Some(rag_cfg)) =
-            (&self.rag_index, self.config.rag.as_ref().filter(|r| r.enabled))
-        {
-            if rag_cfg.agent_ids.is_empty()
-                || rag_cfg.agent_ids.contains(&agent_spec.id)
-            {
+        let client_arc = if let (Some(rag_index), Some(rag_cfg)) = (
+            &self.rag_index,
+            self.config.rag.as_ref().filter(|r| r.enabled),
+        ) {
+            if rag_cfg.agent_ids.is_empty() || rag_cfg.agent_ids.contains(&agent_spec.id) {
                 build_rag_client(&self.config, &model_id, rag_index.clone(), rag_cfg.top_k)
                     .map_err(|e| {
                         EngineError::NodeCreation(format!(

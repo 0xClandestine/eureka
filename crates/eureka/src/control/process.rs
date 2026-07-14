@@ -1,6 +1,6 @@
 //! Shared subprocess runner used by both agent tools and control nodes.
 //!
-//! Both [`CommandTool`](crate::agents::CommandTool) and
+//! Both [`CommandTool`](crate::agent::CommandTool) and
 //! [`ControlNode`](crate::control::ControlNode) follow the same
 //! pattern: spawn a process, write JSON to stdin, read line-delimited JSON
 //! from stdout, and return results. This module extracts the common

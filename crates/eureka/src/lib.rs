@@ -11,9 +11,10 @@
 //! | [`graph`] | Pure topology: nodes, edges, ports, artifacts, validation |
 //! | [`scheduler`] | Event-driven graph executor |
 //! | [`manifest`] | YAML graph format — loads a file into a [`graph::GraphSpec`] |
-//! | [`agents`] | LLM-backed nodes: `AgentDef`, `LlmClient`, `LlmAgentNode` |
+//! | [`agent`] | LLM-backed nodes: `AgentDef`, `LlmClient`, `LlmAgentNode` |
 //! | [`control`] | Subprocess-backed control nodes and the shared process runner |
 //! | [`config`] | Typed, layered runtime configuration |
+//! | [`persistence`] | Durable run records, checkpoints, and event history |
 //! | [`session`] | Assembles all of the above into a single runnable session |
 
 // The strict workspace lints deny unwrap/expect in production code. Tests,
@@ -41,22 +42,22 @@
     )
 )]
 
-pub mod agents;
+pub mod agent;
 pub mod config;
 pub mod control;
 pub mod error;
+pub mod event_log;
 pub mod graph;
 pub mod manager;
 pub mod manifest;
+pub mod persistence;
 pub mod rag;
-pub mod run;
 pub mod scheduler;
 pub mod session;
-pub mod tracing;
 
 pub use error::EngineError;
 pub use manager::{CreateRunRequest, RunManager};
-pub use run::{
+pub use persistence::{
     open_persistence, ActivationSnapshot, CheckpointReason, CheckpointStore, EventStore,
     FileRunStore, InMemoryRunPersistence, PendingInput, PersistenceError, Revision, RunCheckpoint,
     RunEnvironment, RunEvent, RunFilter, RunOutput, RunPersistence, RunRecord, RunRepository,

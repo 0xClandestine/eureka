@@ -20,8 +20,8 @@ use axum::{
     Router,
 };
 use eureka::config::EurekaConfig;
-use eureka::run::{open_persistence, RunCheckpoint, RunPersistence};
-use eureka::tracing::iso_now_rfc3339;
+use eureka::event_log::iso_now_rfc3339;
+use eureka::persistence::{open_persistence, RunCheckpoint, RunPersistence};
 use eureka::RunManager;
 use serde::{Deserialize, Serialize};
 use tokio::signal;
@@ -278,7 +278,7 @@ async fn get_run_handler(
 async fn events_run_handler(
     State(state): State<DaemonState>,
     AxumPath(id): AxumPath<uuid::Uuid>,
-) -> Result<Json<Vec<eureka::run::RunEvent>>, StatusCode> {
+) -> Result<Json<Vec<eureka::persistence::RunEvent>>, StatusCode> {
     state
         .manager
         .get_events(id)
