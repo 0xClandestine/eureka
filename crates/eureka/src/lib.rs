@@ -48,6 +48,7 @@ pub mod error;
 pub mod graph;
 pub mod manager;
 pub mod manifest;
+pub mod rag;
 pub mod run;
 pub mod scheduler;
 pub mod session;

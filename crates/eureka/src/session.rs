@@ -66,6 +66,10 @@ pub struct Session {
     scheduler_signal: Option<mpsc::Sender<SchedulerSignal>>,
     /// Optional shared sink used by a run manager to observe the active sender.
     scheduler_signal_sink: Option<Arc<tokio::sync::Mutex<Option<mpsc::Sender<SchedulerSignal>>>>>,
+    /// Optional RAG vector index for query-time retrieval (attached to agents).
+    rag_index: Option<crate::rag::RagIndexHandle>,
+    /// Optional RAG indexer for post-activation document embedding.
+    rag_indexer: Option<Arc<crate::rag::RagIndexer>>,
 }
 
 impl Session {
@@ -155,6 +159,8 @@ impl Session {
             event_store: None,
             scheduler_signal: None,
             scheduler_signal_sink: None,
+            rag_index: None,
+            rag_indexer: None,
         })
     }
 
@@ -247,6 +253,8 @@ impl Session {
             checkpoint_store: None,
             event_store: None,
             scheduler_signal: None,
+            rag_index: None,
+            rag_indexer: None,
             scheduler_signal_sink: None,
         })
     }
@@ -400,6 +408,29 @@ impl Session {
             "Starting Eureka session"
         );
 
+        // Lazily initialize RAG on first run when enabled.
+        if self.rag_index.is_none() {
+            if let Some(rag_cfg) = self.config.rag.as_ref().filter(|r| r.enabled) {
+                if let Some(ref db_path) = self.db_path {
+                    match crate::rag::build_rag_components(
+                        rag_cfg,
+                        db_path,
+                        &self.session_id.to_string(),
+                    )
+                    .await
+                    {
+                        Ok((handle, indexer)) => {
+                            self.rag_index = Some(handle);
+                            self.rag_indexer = Some(indexer);
+                        }
+                        Err(e) => warn!("RAG initialization failed (running without RAG): {e}"),
+                    }
+                } else {
+                    warn!("RAG requires a db_path but none was configured; running without RAG");
+                }
+            }
+        }
+
         let mut record = RunRecord::new(self.session_id, self.config.graph.clone(), goal.clone());
         record.status = RunStatus::Running;
         if let Some(store) = store {
@@ -445,7 +476,10 @@ impl Session {
         // Create the scheduler
         let max_in_flight = self.config.scheduler.max_in_flight;
         let budget = self.config.budget.clone();
-        let scheduler = Scheduler::new(self.spec.clone(), nodes, budget, max_in_flight);
+        let mut scheduler = Scheduler::new(self.spec.clone(), nodes, budget, max_in_flight);
+        if let Some(indexer) = &self.rag_indexer {
+            scheduler = scheduler.with_rag_indexer(Arc::clone(indexer));
+        }
         let mut scheduler = if let Some(store) = &self.checkpoint_store {
             scheduler.with_checkpoint_store(
                 Arc::clone(store),
@@ -717,12 +751,34 @@ impl Session {
             .map_or(self.default_model.as_str(), String::as_str)
             .to_string();
 
-        let client_arc = self.get_or_create_client(&model_id).map_err(|e| {
+        let base_client = self.get_or_create_client(&model_id).map_err(|e| {
             EngineError::NodeCreation(format!(
                 "Failed to build LLM client for model '{model_id}' (agent '{}'): {e}",
                 agent_spec.id
             ))
         })?;
+
+        // Attach RAG dynamic_context if the index is ready and this agent is
+        // in the configured allow-list (empty list = all agents).
+        let client_arc = if let (Some(rag_index), Some(rag_cfg)) =
+            (&self.rag_index, self.config.rag.as_ref().filter(|r| r.enabled))
+        {
+            if rag_cfg.agent_ids.is_empty()
+                || rag_cfg.agent_ids.contains(&agent_spec.id)
+            {
+                build_rag_client(&self.config, &model_id, rag_index.clone(), rag_cfg.top_k)
+                    .map_err(|e| {
+                        EngineError::NodeCreation(format!(
+                            "Failed to build RAG-enabled client for agent '{}': {e}",
+                            agent_spec.id
+                        ))
+                    })?
+            } else {
+                base_client
+            }
+        } else {
+            base_client
+        };
 
         Ok(BoxedNode::new(LlmAgentNode::with_environment(
             Arc::new(agent_def),
@@ -869,6 +925,53 @@ fn build_llm_client(
         ProviderKind::Together => Ok(provider!(together, "TOGETHER_API_KEY")),
         ProviderKind::XAI => Ok(provider!(xai, "XAI_API_KEY")),
         ProviderKind::Ollama => Ok(provider!(
+            ollama,
+            "OLLAMA_API_KEY",
+            "Failed to initialise Ollama client (check OLLAMA_API_BASE_URL)"
+        )),
+    }
+}
+
+/// Build a type-erased `LlmClient` with a RAG index attached via
+/// `dynamic_context`. Mirrors `build_llm_client` but calls `.with_rag()`
+/// before boxing so each RAG-enabled agent gets its own retrieval path.
+fn build_rag_client(
+    config: &EurekaConfig,
+    model_id: &str,
+    rag_index: crate::rag::RagIndexHandle,
+    top_k: usize,
+) -> Result<Arc<dyn LlmClient>, anyhow::Error> {
+    let pricing = config.provider.pricing.clone();
+    macro_rules! provider_rag {
+        ($provider:ident, $env_key:expr) => {{
+            let client = $provider::Client::from_env()
+                .context(concat!($env_key, " environment variable not set"))?;
+            let rig_client = RigClient::new(client.completion_model(model_id), pricing.clone())
+                .with_rag(rag_index, top_k);
+            let r: Arc<dyn LlmClient> = Arc::new(rig_client);
+            r
+        }};
+        ($provider:ident, $env_key:expr, $msg:expr) => {{
+            let client = $provider::Client::from_env().context($msg)?;
+            let rig_client = RigClient::new(client.completion_model(model_id), pricing.clone())
+                .with_rag(rag_index, top_k);
+            let r: Arc<dyn LlmClient> = Arc::new(rig_client);
+            r
+        }};
+    }
+    match config.provider.kind {
+        ProviderKind::Anthropic => Ok(provider_rag!(anthropic, "ANTHROPIC_API_KEY")),
+        ProviderKind::OpenAI => Ok(provider_rag!(openai, "OPENAI_API_KEY")),
+        ProviderKind::OpenRouter => Ok(provider_rag!(openrouter, "OPENROUTER_API_KEY")),
+        ProviderKind::Gemini => Ok(provider_rag!(gemini, "GEMINI_API_KEY")),
+        ProviderKind::Groq => Ok(provider_rag!(groq, "GROQ_API_KEY")),
+        ProviderKind::Mistral => Ok(provider_rag!(mistral, "MISTRAL_API_KEY")),
+        ProviderKind::Cohere => Ok(provider_rag!(cohere, "COHERE_API_KEY")),
+        ProviderKind::DeepSeek => Ok(provider_rag!(deepseek, "DEEPSEEK_API_KEY")),
+        ProviderKind::Perplexity => Ok(provider_rag!(perplexity, "PERPLEXITY_API_KEY")),
+        ProviderKind::Together => Ok(provider_rag!(together, "TOGETHER_API_KEY")),
+        ProviderKind::XAI => Ok(provider_rag!(xai, "XAI_API_KEY")),
+        ProviderKind::Ollama => Ok(provider_rag!(
             ollama,
             "OLLAMA_API_KEY",
             "Failed to initialise Ollama client (check OLLAMA_API_BASE_URL)"

@@ -11,6 +11,7 @@ use crate::graph::artifact::Artifact;
 use crate::graph::edge::Edge;
 use crate::graph::node::{BoxedNode, Emit, NodeCtx, NodeError, NodeUsage, PortMsg};
 use crate::graph::spec::GraphSpec;
+use crate::rag::RagIndexer;
 use crate::run::{
     ActivationSnapshot, CheckpointReason, CheckpointStore, PendingInput, Revision, RunCheckpoint,
     RunOutput,
@@ -110,6 +111,8 @@ pub struct Scheduler {
     checkpoint_store: Option<Arc<dyn CheckpointStore>>,
     /// Identity metadata required to validate checkpoints.
     checkpoint_identity: Option<CheckpointIdentity>,
+    /// Optional RAG indexer — spawns embedding tasks after each activation.
+    rag_indexer: Option<Arc<RagIndexer>>,
 }
 
 impl Scheduler {
@@ -137,7 +140,16 @@ impl Scheduler {
             event_rx: Some(event_rx),
             checkpoint_store: None,
             checkpoint_identity: None,
+            rag_indexer: None,
         }
+    }
+
+    /// Attach a RAG indexer that spawns best-effort embedding tasks after
+    /// each successful node activation.
+    #[must_use]
+    pub fn with_rag_indexer(mut self, indexer: Arc<RagIndexer>) -> Self {
+        self.rag_indexer = Some(indexer);
+        self
     }
 
     /// Attach a durable checkpoint backend and run identity.
@@ -496,6 +508,24 @@ impl Scheduler {
                                         emit_count: emits.len(),
                                         outputs: event_outputs,
                                     }).await;
+
+                                    // Best-effort RAG indexing: spawn a
+                                    // background task for each emission.
+                                    if let Some(indexer) = &self.rag_indexer {
+                                        for emit in &emits {
+                                            let idx = Arc::clone(indexer);
+                                            let art = emit.artifact.clone();
+                                            let nid = node_id.clone();
+                                            let rnd = round;
+                                            tokio::spawn(async move {
+                                                if let Err(e) =
+                                                    idx.index_artifact(&nid, rnd, &art).await
+                                                {
+                                                    warn!("rag index failed: {e}");
+                                                }
+                                            });
+                                        }
+                                    }
 
                                     for emit in emits {
                                         if outbound.get(&node_id).is_none_or(|edges| !edges.iter().any(|edge| edge.from_port == emit.port)) {

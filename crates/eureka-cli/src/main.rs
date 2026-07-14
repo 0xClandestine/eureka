@@ -146,6 +146,9 @@ enum SessionCommands {
 /// Main entry point.
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    // Register sqlite-vec extension before any SQLite connection is opened.
+    eureka::rag::init::register_sqlite_vec();
+
     // Initialize tracing
     tracing_subscriber::fmt()
         .with_env_filter(

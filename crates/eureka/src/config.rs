@@ -420,6 +420,62 @@ const fn default_true() -> bool {
     true
 }
 
+// ---------------------------------------------------------------------------
+// RAG
+// ---------------------------------------------------------------------------
+
+/// Supported embedding providers for RAG.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum EmbeddingProvider {
+    /// `OpenAI` embeddings (`OPENAI_API_KEY`).
+    #[serde(rename = "openai")]
+    OpenAI,
+    /// Cohere embeddings (`COHERE_API_KEY`).
+    #[serde(rename = "cohere")]
+    Cohere,
+    /// Ollama local embeddings (`OLLAMA_BASE_URL`, optional).
+    #[serde(rename = "ollama")]
+    Ollama,
+}
+
+/// Configuration for Retrieval-Augmented Generation.
+///
+/// Add a `[rag]` section to `eureka.toml` to enable. Requires an embedding
+/// API key (or a running Ollama server for local embeddings).
+///
+/// **Example:**
+/// ```toml
+/// [rag]
+/// enabled = true
+/// embedding_provider = "openai"
+/// embedding_model = "text-embedding-3-small"
+/// top_k = 5
+/// session_scoped = true
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RagConfig {
+    /// Enable or disable RAG for this run.
+    pub enabled: bool,
+    /// Embedding provider to use.
+    pub embedding_provider: EmbeddingProvider,
+    /// Embedding model name (provider-specific).
+    pub embedding_model: String,
+    /// Number of top documents retrieved per agent turn.
+    pub top_k: usize,
+    /// Artifact kinds to index. Empty means all kinds are indexed.
+    #[serde(default)]
+    pub index_kinds: Vec<String>,
+    /// Agent IDs to attach dynamic context to. Empty means all agents.
+    #[serde(default)]
+    pub agent_ids: Vec<String>,
+    /// Restrict retrieval to the current session only.
+    #[serde(default = "default_true")]
+    pub session_scoped: bool,
+    /// Embedding output dimensions (required for Ollama; ignored otherwise).
+    #[serde(default)]
+    pub embedding_ndims: Option<usize>,
+}
+
 /// The top-level Eureka configuration.
 ///
 /// The agents directory is always `<graph_dir>/agents/` and is not configurable
@@ -447,6 +503,9 @@ pub struct EurekaConfig {
     pub agent_overrides: HashMap<String, AgentConfig>,
     /// Tracing configuration for durable `SQLite` event history.
     pub tracing: TracingConfig,
+    /// Optional RAG configuration. Absent or `enabled = false` disables RAG.
+    #[serde(default)]
+    pub rag: Option<RagConfig>,
 }
 
 impl Default for EurekaConfig {

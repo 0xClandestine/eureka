@@ -92,13 +92,27 @@ pub struct RigClient<M> {
     model: M,
     /// Optional per-input/per-output pricing for the cost backstop.
     pricing: Option<crate::config::Pricing>,
+    /// Optional RAG index handle and `top_k` for `dynamic_context`.
+    rag: Option<(crate::rag::RagIndexHandle, usize)>,
 }
 
 impl<M: CompletionModel + Clone + Send + Sync + 'static> RigClient<M> {
     /// Wrap a rig completion model with optional per-input/per-output pricing
     /// used to populate [`NodeUsage::cost_usd`].
     pub const fn new(model: M, pricing: Option<crate::config::Pricing>) -> Self {
-        Self { model, pricing }
+        Self {
+            model,
+            pricing,
+            rag: None,
+        }
+    }
+
+    /// Attach a RAG index so every agent turn retrieves the top-`k` most
+    /// relevant documents via `AgentBuilder::dynamic_context`.
+    #[must_use]
+    pub fn with_rag(mut self, index: crate::rag::RagIndexHandle, top_k: usize) -> Self {
+        self.rag = Some((index, top_k));
+        self
     }
 }
 
@@ -175,12 +189,15 @@ impl<M: CompletionModel + Clone + Send + Sync + 'static> LlmClient for RigClient
             })
             .collect();
 
-        let agent = AgentBuilder::new(self.model.clone())
+        let mut builder = AgentBuilder::new(self.model.clone())
             .preamble(&full_preamble)
-            .temperature(temperature)
-            .tool(submit)
-            .tools(command_tools)
-            .build();
+            .temperature(temperature);
+
+        if let Some((index, top_k)) = &self.rag {
+            builder = builder.dynamic_context(*top_k, index.clone());
+        }
+
+        let agent = builder.tool(submit).tools(command_tools).build();
 
         // Use the extended prompt path so we get a PromptResponse with
         // aggregated token usage across all turns of the agent loop.
