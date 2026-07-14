@@ -46,7 +46,7 @@ pub mod agent;
 pub mod config;
 pub mod control;
 pub mod error;
-pub mod event_log;
+pub mod time;
 pub mod graph;
 pub mod manager;
 pub mod manifest;
