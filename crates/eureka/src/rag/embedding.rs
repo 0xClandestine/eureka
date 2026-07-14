@@ -12,7 +12,7 @@ use std::sync::Arc;
 
 use rig_core::client::{EmbeddingsClient, ProviderClient};
 use rig_core::embeddings::{EmbeddingModel, EmbeddingsBuilder};
-use rig_core::providers::{cohere, ollama, openai};
+use rig_core::providers::{cohere, gemini, llamafile, ollama, openai, openrouter, together, voyageai};
 use rig_core::vector_store::InsertDocuments;
 use rig_sqlite::SqliteVectorStore;
 
@@ -61,6 +61,49 @@ pub async fn build_rag_components(
             let client = ollama::Client::from_env()
                 .map_err(|e| EngineError::Store(format!("Ollama client init failed: {e}")))?;
             let model = client.embedding_model_with_ndims(&cfg.embedding_model, ndims);
+            build_with_model(model, cfg, db_path, session_id).await
+        }
+        EmbeddingProvider::VoyageAI => {
+            let client = voyageai::Client::from_env()
+                .map_err(|e| EngineError::Store(format!("VoyageAI client init failed: {e}")))?;
+            let model = cfg.embedding_ndims.map_or_else(
+                || client.embedding_model(&cfg.embedding_model),
+                |n| client.embedding_model_with_ndims(&cfg.embedding_model, n),
+            );
+            build_with_model(model, cfg, db_path, session_id).await
+        }
+        EmbeddingProvider::Gemini => {
+            let client = gemini::Client::from_env()
+                .map_err(|e| EngineError::Store(format!("Gemini client init failed: {e}")))?;
+            // Gemini infers ndims from the model name automatically.
+            let model = client.embedding_model(&cfg.embedding_model);
+            build_with_model(model, cfg, db_path, session_id).await
+        }
+        EmbeddingProvider::Together => {
+            let client = together::Client::from_env()
+                .map_err(|e| EngineError::Store(format!("Together client init failed: {e}")))?;
+            let model = cfg.embedding_ndims.map_or_else(
+                || client.embedding_model(&cfg.embedding_model),
+                |n| client.embedding_model_with_ndims(&cfg.embedding_model, n),
+            );
+            build_with_model(model, cfg, db_path, session_id).await
+        }
+        EmbeddingProvider::Llamafile => {
+            let client = llamafile::Client::from_env()
+                .map_err(|e| EngineError::Store(format!("Llamafile client init failed: {e}")))?;
+            let model = cfg.embedding_ndims.map_or_else(
+                || client.embedding_model(&cfg.embedding_model),
+                |n| client.embedding_model_with_ndims(&cfg.embedding_model, n),
+            );
+            build_with_model(model, cfg, db_path, session_id).await
+        }
+        EmbeddingProvider::OpenRouter => {
+            let client = openrouter::Client::from_env()
+                .map_err(|e| EngineError::Store(format!("OpenRouter client init failed: {e}")))?;
+            let model = cfg.embedding_ndims.map_or_else(
+                || client.embedding_model(&cfg.embedding_model),
+                |n| client.embedding_model_with_ndims(&cfg.embedding_model, n),
+            );
             build_with_model(model, cfg, db_path, session_id).await
         }
     }

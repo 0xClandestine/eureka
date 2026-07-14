@@ -433,9 +433,29 @@ pub enum EmbeddingProvider {
     /// Cohere embeddings (`COHERE_API_KEY`).
     #[serde(rename = "cohere")]
     Cohere,
-    /// Ollama local embeddings (`OLLAMA_BASE_URL`, optional).
+    /// Ollama local embeddings (`OLLAMA_BASE_URL`, required).
     #[serde(rename = "ollama")]
     Ollama,
+    /// `VoyageAI` embeddings — dedicated embedding API (`VOYAGE_API_KEY`).
+    /// Model-specific dimension defaults apply; `embedding_ndims` overrides.
+    #[serde(rename = "voyageai")]
+    VoyageAI,
+    /// Gemini embeddings (`GEMINI_API_KEY`).
+    /// Dimensions are inferred from the model name automatically.
+    #[serde(rename = "gemini")]
+    Gemini,
+    /// Together `AI` embeddings — large OSS model catalogue (`TOGETHER_API_KEY`).
+    /// Set `embedding_ndims` to match the chosen model's output dimensions.
+    #[serde(rename = "together")]
+    Together,
+    /// Llamafile local embeddings (`LLAMAFILE_API_BASE_URL`).
+    /// Set `embedding_ndims` if the model does not advertise its dimensions.
+    #[serde(rename = "llamafile")]
+    Llamafile,
+    /// `OpenRouter` embeddings (`OPENROUTER_API_KEY`).
+    /// `embedding_ndims` is optional; omitting it lets the model decide.
+    #[serde(rename = "openrouter")]
+    OpenRouter,
 }
 
 /// Configuration for Retrieval-Augmented Generation.
