@@ -19,27 +19,31 @@ The co-scientist is a closed-loop scientific hypothesis engine. A single `Goal` 
 
 The graph contains eight nodes: five LLM agent nodes and three subprocess control nodes.
 
+```mermaid
+flowchart TD
+    Goal([Goal]) --> plan
+
+    plan -->|PlanConfig| generation
+    generation -->|Hypotheses| critic
+    critic -->|Reviews| advocate
+    advocate -->|Reviews| ranking
+
+    ranking -->|top: Hypotheses| evolution
+    ranking -->|state: Ranking| meta_review
+    ranking -->|state: Ranking| supervisor
+    evolution -->|Hypotheses| proximity
+    proximity -->|unique: Hypotheses| supervisor
+    proximity -->|graph: ProximityGraph| ranking
+
+    advocate -.->|rebuttal ⟳| critic
+    supervisor -.->|continue ⟳| critic
+    meta_review -.->|Insights ⟳| generation
+    meta_review -.->|Insights ⟳| critic
+    meta_review -.->|Insights ⟳| advocate
+    meta_review -.->|Insights ⟳| evolution
 ```
-Goal
- │
- ▼
-plan ──PlanConfig──► generation ──Hypotheses──► critic ──Reviews──► advocate
-                         ▲                         ▲         │
-                         │   (feedback)             └─────────┘ (feedback: rebuttal)
-                         │                         Reviews
-                         │                            │
-                    meta_review ◄──Ranking──── ranking ◄──────────────────┘
-                         │                       │  │
-                    Insights (feedback)           │  └──ProximityGraph──► ranking (graph)
-                         │                     top│       ▲
-                         ▼                        ▼       │
-                    generation              evolution ──► proximity ──► supervisor
-                    critic                                                  │
-                    advocate                                         continue (feedback)
-                    evolution                                               │
-                                                                           ▼
-                                                                         critic
-```
+
+Solid edges carry artifacts in the current round. Dashed edges (`⟳`) are feedback — artifacts arrive in round N+1.
 
 ### Artifact Kinds
 
