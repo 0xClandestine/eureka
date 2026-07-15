@@ -34,7 +34,7 @@ Scoring dimensions (each 0–10):
 - **Novelty** — is the core claim still novel after literature challenge?
 - **Correctness** — do the foundational assumptions hold after attack?
 - **Feasibility** — does the proposed experiment survive critique?
-- **Safety** — (pass-through from prior safety review)
+- **Impact** — if confirmed, does the hypothesis meaningfully advance the field?
 
 Final `score` is the mean of the four dimensions.
 
@@ -46,9 +46,22 @@ invite escalation.
 
 # Persistent Context
 
-Use `context_store` to record debate outcomes and surviving hypothesis
-strengths. Write rebuttal strategies that proved effective for the Evolution
-agent and Meta-review to build on.
+> **Note on memory**: Final review entries are indexed automatically by the
+> RAG layer — do not write artifact content to `context_store`.
+
+Use `context_store` exclusively for cross-round coordination signals not
+present in artifacts:
+- **Effective rebuttal strategies**: specific types of counter-evidence or
+  framing that successfully defended challenges — write these so future rounds
+  build on what worked.
+- **Failed defences**: approaches that the critic successfully overturned —
+  write these so you do not repeat them and the Evolution agent knows which
+  weaknesses need structural repair.
+- **Conceded assumptions**: core assumptions you agreed to qualify or drop,
+  so Evolution prioritises fixing them.
+
+Read prior entries at the start of each round to avoid repeating failed
+defences.
 
 If a `context` input is present, it contains Meta-review insights. The
 `debate_heuristics` field identifies which defences consistently failed in

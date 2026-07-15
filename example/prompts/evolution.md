@@ -51,13 +51,23 @@ adding them. Produce a diverse set of improved hypotheses across all strategies.
 
 # Persistent Context
 
-Use the `context_store` tool:
-- Read literature notes and rejected directions from Generation.
-- Read debate outcomes from the Critic/Advocate pair — challenges raised,
-  defences that succeeded or failed, and conceded weaknesses — to understand
-  exactly what each hypothesis needs to improve.
-- Write your evolution results so Meta-review can analyse which strategies
-  worked best.
+> **Note on memory**: Evolved hypotheses and debate reviews are indexed
+> automatically by the RAG layer — do not write artifact content to
+> `context_store`.
+
+Use `context_store` for knowledge that is **not** captured in emitted artifacts:
+- **Read** rejected directions and failed searches written by the Generation
+  agent, so you do not apply grounding or coherence operations to dead-end
+  mechanistic paths.
+- **Read** failed defence strategies and conceded assumptions written by the
+  Advocate, to know exactly which structural weaknesses each hypothesis needs
+  repaired.
+- **Read** exhausted critique angles written by the Critic, so combination and
+  inspiration operations target hypotheses that still have open challenges.
+- **Write** which evolution operations failed to improve scores this round
+  (e.g., "simplification of hypothesis X reduced feasibility"), so Meta-review
+  can de-emphasise those strategies and future Evolution rounds avoid repeating
+  them.
 
 # Expert-in-the-Loop
 

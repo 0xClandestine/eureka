@@ -43,13 +43,40 @@ tool_defs:
     timeout_secs: 10
 
 agents:
-  - id: generation
-    description: Drafts novel hypotheses from the research goal via literature
-                 exploration, self-play debates, and assumption decomposition
-    prompt: prompts/generation.md
+  - id: plan
+    description: Parses the raw research goal into a structured research plan
+                 configuration (domain, focus areas, constraints, criteria) that
+                 guides all downstream agents
+    prompt: prompts/plan.md
     inputs:
       - port: in
         kind: Goal
+    outputs:
+      - port: out
+        kind: PlanConfig
+    output_schema:
+      type: object
+      required: [plan]
+      properties:
+        plan:
+          type: object
+          required: [domain, research_goal, focus_areas, hypothesis_criteria, evaluation_criteria]
+          properties:
+            domain:              { type: string, description: "Primary scientific field" }
+            research_goal:       { type: string, description: "Clarified one-sentence goal" }
+            constraints:         { type: array, items: { type: string }, description: "Explicit scope limitations" }
+            focus_areas:         { type: array, items: { type: string }, description: "Specific sub-areas or mechanisms to explore" }
+            methods_to_avoid:    { type: array, items: { type: string }, description: "Out-of-scope or infeasible approaches" }
+            hypothesis_criteria: { type: array, items: { type: string }, description: "Checklist a hypothesis must satisfy to be on-topic" }
+            evaluation_criteria: { type: array, items: { type: string }, description: "How to judge whether a hypothesis addresses the goal" }
+
+  - id: generation
+    description: Drafts novel hypotheses from the structured research plan via
+                 literature exploration, assumption decomposition, and research expansion
+    prompt: prompts/generation.md
+    inputs:
+      - port: in
+        kind: PlanConfig
       - port: context
         kind: Insights
         required: false
@@ -74,33 +101,6 @@ agents:
               testable_predictions: { type: array, items: { type: string }, description: "Falsifiable, concrete predictions" }
               proposed_experiment:  { type: string, description: "Concrete experimental design for validation" }
               citations:            { type: array, items: { type: object }, description: "Supporting literature references" }
-
-  - id: safety_review
-    description: Screens hypotheses for dual-use risk, ethical compliance,
-                 experimental safety, and regulatory alignment before review
-    prompt: prompts/safety_review.md
-    inputs:
-      - port: in
-        kind: Hypotheses
-    outputs:
-      - port: out
-        kind: Hypotheses
-    output_schema:
-      type: object
-      required: [hypotheses]
-      properties:
-        hypotheses:
-          type: array
-          description: Filtered set of safe hypotheses with safety assessments attached
-          items:
-            type: object
-            required: [hypothesis, safe, recommendation]
-            properties:
-              hypothesis:     { type: object, description: "Full hypothesis object pass-through" }
-              safe:           { type: boolean, description: "True if hypothesis passes all safety checks" }
-              safety_concerns: { type: array, items: { type: string } }
-              recommendation: { type: string, enum: [proceed, revise, reject] }
-              rationale:      { type: string }
 
   - id: critic
     description: Adversarial reviewer — challenges hypotheses through literature
@@ -325,7 +325,7 @@ control:
     timeout_secs: 10
 
 # ── Graph topology ─────────────────────────────────────────────────────
-# Forward pipeline: generation → safety_review → critic → advocate → ranking
+# Forward pipeline: plan → generation → critic → advocate → ranking
 #                   → evolution → proximity → supervisor
 # Debate loop:      advocate → critic (feedback — each outer round the critic
 #                   sharpens its challenge using the advocate's prior rebuttal)
@@ -334,12 +334,12 @@ control:
 #                   ranking.state → supervisor (statistics)
 edges:
   # ── Forward pipeline ──
-  - from_node: generation
+  - from_node: plan
     from_port: out
-    to_node: safety_review
+    to_node: generation
     to_port: in
 
-  - from_node: safety_review
+  - from_node: generation
     from_port: out
     to_node: critic
     to_port: in

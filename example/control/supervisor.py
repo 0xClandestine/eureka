@@ -94,6 +94,18 @@ def _compute_stats(hypotheses: list, elo_ratings: dict, round_num: int) -> dict:
     statements = {h.get("statement", "") for h in hypotheses}
     unique_count = len(statements)
 
+    # Generation vs Evolution effectiveness (based on top-k hypotheses).
+    # Evolved hypotheses carry an "operation" field set by the Evolution agent.
+    gen_elos: list[float] = []
+    evo_elos: list[float] = []
+    for h in hypotheses:
+        item_id = h.get("statement", "")
+        elo = float(elo_ratings.get(item_id, 1200.0))
+        if h.get("operation"):
+            evo_elos.append(elo)
+        else:
+            gen_elos.append(elo)
+
     return {
         "round": round_num,
         "total_hypotheses_generated": n_total,
@@ -103,6 +115,11 @@ def _compute_stats(hypotheses: list, elo_ratings: dict, round_num: int) -> dict:
         "min_elo": round(min_elo, 1),
         "elo_spread": round(elo_spread, 1),
         "unique_statements": unique_count,
+        # Effectiveness split — used by Supervisor to recommend emphasis next round
+        "generation_count": len(gen_elos),
+        "generation_avg_elo": round(sum(gen_elos) / len(gen_elos), 1) if gen_elos else 0.0,
+        "evolution_count": len(evo_elos),
+        "evolution_avg_elo": round(sum(evo_elos) / len(evo_elos), 1) if evo_elos else 0.0,
     }
 
 
@@ -204,6 +221,17 @@ def main() -> None:
         _save_context(db_path, session_id, round_num, "hypotheses", hypotheses)
         _save_context(db_path, session_id, round_num, "elo_ratings", elo_ratings)
 
+    # Derive recommended emphasis for the next round from effectiveness data.
+    # If evolution-originated hypotheses score higher on average, favour more
+    # evolution; otherwise favour fresh generation.
+    gen_avg = stats.get("generation_avg_elo", 0.0)
+    evo_avg = stats.get("evolution_avg_elo", 0.0)
+    if evo_avg > gen_avg and stats.get("evolution_count", 0) > 0:
+        recommended_emphasis = "evolution"
+    else:
+        recommended_emphasis = "generation"
+    stats["recommended_emphasis"] = recommended_emphasis
+
     # Terminal check
     if _terminal_condition(stats, config):
         emit = {
@@ -218,7 +246,7 @@ def main() -> None:
         }
     else:
         # Continue the loop — forward hypotheses with ranking metadata so
-        # reflection has full tournament context for recurrent reviews
+        # the critic has full tournament context for recurrent reviews
         emit = {
             "port": "continue",
             "artifact": {
