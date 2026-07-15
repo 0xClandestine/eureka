@@ -55,10 +55,7 @@ impl super::Session {
         let mut record = RunRecord::new(self.session_id, self.config.graph.clone(), goal.clone());
         record.status = RunStatus::Running;
         if let Some(store) = store {
-            store
-                .save(record.clone())
-                .await
-                .map_err(|e| EngineError::Store(e.to_string()))?;
+            store.save(record.clone()).await.map_err(|e| EngineError::Store(e.to_string()))?;
         }
 
         // Construct all nodes from the spec — either from overrides or from manifest.
@@ -79,18 +76,12 @@ impl super::Session {
                     record.status = RunStatus::Failed;
                     record.error = Some(error.to_string());
                     if let Some(store) = store {
-                        store
-                            .save(record)
-                            .await
-                            .map_err(|e| EngineError::Store(e.to_string()))?;
+                        store.save(record).await.map_err(|e| EngineError::Store(e.to_string()))?;
                     }
                     return Err(error);
                 }
             };
-            info!(
-                "Constructed node '{}' (kind: {})",
-                node_spec.id, node_spec.kind
-            );
+            info!("Constructed node '{}' (kind: {})", node_spec.id, node_spec.kind);
             nodes.insert(node_spec.id.clone(), node);
         }
 
@@ -120,12 +111,7 @@ impl super::Session {
 
         // Durable event history is stored in the same persistence backend as
         // run metadata and checkpoints. This replaces the former JSONL trace.
-        let event_store = self
-            .config
-            .tracing
-            .enabled
-            .then(|| self.event_store.clone())
-            .flatten();
+        let event_store = self.config.tracing.enabled.then(|| self.event_store.clone()).flatten();
         let broadcaster = self.event_broadcaster.clone();
         let event_store_for_task = event_store.clone();
         let include_artifacts = self.config.tracing.include_artifacts;
@@ -136,11 +122,7 @@ impl super::Session {
                     let _ = tx.send(event.clone());
                 }
                 match &event {
-                    SchedulerEvent::ActivationStarted {
-                        node_id,
-                        node_kind,
-                        round,
-                    } => {
+                    SchedulerEvent::ActivationStarted { node_id, node_kind, round } => {
                         info!(%node_id, %node_kind, round, "Node activation started");
                     }
                     SchedulerEvent::ActivationCompleted {
@@ -152,29 +134,16 @@ impl super::Session {
                     } => {
                         info!(%node_id, %node_kind, round, emit_count, "Node activation completed");
                     }
-                    SchedulerEvent::ActivationFailed {
-                        node_id,
-                        node_kind,
-                        round,
-                        error,
-                    } => {
+                    SchedulerEvent::ActivationFailed { node_id, node_kind, round, error } => {
                         error!(%node_id, %node_kind, round, %error, "Node activation failed");
                     }
                     SchedulerEvent::CycleCompleted { round } => {
                         info!(round, "Cycle completed");
                     }
-                    SchedulerEvent::ToolCalled {
-                        node_id,
-                        tool,
-                        args_summary,
-                        ..
-                    } => {
+                    SchedulerEvent::ToolCalled { node_id, tool, args_summary, .. } => {
                         info!(%node_id, %tool, %args_summary, "Tool called");
                     }
-                    SchedulerEvent::RunHalted {
-                        reason,
-                        total_rounds,
-                    } => {
+                    SchedulerEvent::RunHalted { reason, total_rounds } => {
                         info!(%reason, total_rounds, "Run halted");
                     }
                     SchedulerEvent::RunPaused { round } => {
@@ -207,10 +176,7 @@ impl super::Session {
         let source_ids = self.spec.source_node_ids();
         let mut initial_artifacts = HashMap::new();
         for source_id in &source_ids {
-            let artifact = Artifact {
-                kind: "Goal".to_string(),
-                data: goal.clone(),
-            };
+            let artifact = Artifact { kind: "Goal".to_string(), data: goal.clone() };
             initial_artifacts.insert(source_id.clone(), vec![artifact]);
         }
 
@@ -243,10 +209,7 @@ impl super::Session {
                     record.stats = Some(stats.clone());
                 }
                 if let Some(store) = store {
-                    store
-                        .save(record)
-                        .await
-                        .map_err(|e| EngineError::Store(e.to_string()))?;
+                    store.save(record).await.map_err(|e| EngineError::Store(e.to_string()))?;
                 }
                 return Err(EngineError::Scheduler(error.to_string()));
             }
@@ -260,10 +223,7 @@ impl super::Session {
         };
         record.stats = Some(stats.clone());
         if let Some(store) = store {
-            store
-                .save(record)
-                .await
-                .map_err(|e| EngineError::Store(e.to_string()))?;
+            store.save(record).await.map_err(|e| EngineError::Store(e.to_string()))?;
         }
         // The scheduler has finished producing events. Drop its event sender,
         // then drain the observer so all queued events reach SQLite before the
@@ -289,19 +249,15 @@ impl super::Session {
 /// Remove potentially large artifact payloads from a completed event.
 fn strip_event_artifacts(event: &SchedulerEvent) -> SchedulerEvent {
     match event {
-        SchedulerEvent::ActivationCompleted {
-            node_id,
-            node_kind,
-            round,
-            emit_count,
-            ..
-        } => SchedulerEvent::ActivationCompleted {
-            node_id: node_id.clone(),
-            node_kind: node_kind.clone(),
-            round: *round,
-            emit_count: *emit_count,
-            outputs: Vec::new(),
-        },
+        SchedulerEvent::ActivationCompleted { node_id, node_kind, round, emit_count, .. } => {
+            SchedulerEvent::ActivationCompleted {
+                node_id: node_id.clone(),
+                node_kind: node_kind.clone(),
+                round: *round,
+                emit_count: *emit_count,
+                outputs: Vec::new(),
+            }
+        }
         other => other.clone(),
     }
 }

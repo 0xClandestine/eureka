@@ -46,12 +46,7 @@ impl LlmAgentNode {
         work_dir: PathBuf,
         environment: RunEnvironment,
     ) -> Self {
-        Self {
-            def,
-            client,
-            work_dir,
-            environment,
-        }
+        Self { def, client, work_dir, environment }
     }
 
     /// The agent name (used as the `kind` string in the node registry).
@@ -87,10 +82,8 @@ impl Node for LlmAgentNode {
         } else {
             // Single (or undeclared) input: use the first available payload
             // verbatim, falling back to null if somehow empty.
-            let data = inputs
-                .into_iter()
-                .next()
-                .map_or(serde_json::Value::Null, |m| m.artifact.data);
+            let data =
+                inputs.into_iter().next().map_or(serde_json::Value::Null, |m| m.artifact.data);
             serde_json::to_string_pretty(&data).map_err(|e| NodeError::Internal(e.to_string()))?
         };
 
@@ -115,27 +108,12 @@ impl Node for LlmAgentNode {
 
         let emits = if self.def.outputs.len() == 1 {
             let port = &self.def.outputs[0];
-            vec![Emit::new(
-                &port.port,
-                Artifact {
-                    kind: port.kind.clone(),
-                    data: output_json,
-                },
-            )]
+            vec![Emit::new(&port.port, Artifact { kind: port.kind.clone(), data: output_json })]
         } else {
             let mut emits = Vec::with_capacity(self.def.outputs.len());
             for port in &self.def.outputs {
-                let data = output_json
-                    .get(&port.port)
-                    .cloned()
-                    .unwrap_or(serde_json::Value::Null);
-                emits.push(Emit::new(
-                    &port.port,
-                    Artifact {
-                        kind: port.kind.clone(),
-                        data,
-                    },
-                ));
+                let data = output_json.get(&port.port).cloned().unwrap_or(serde_json::Value::Null);
+                emits.push(Emit::new(&port.port, Artifact { kind: port.kind.clone(), data }));
             }
             emits
         };
@@ -281,10 +259,7 @@ mod tests {
         let ctx = NodeCtx::new("meta_review", "meta_review", 1, cancel);
         let msg = PortMsg {
             port: "in".into(),
-            artifact: Artifact {
-                kind: "Ranking".to_string(),
-                data: serde_json::json!({}),
-            },
+            artifact: Artifact { kind: "Ranking".to_string(), data: serde_json::json!({}) },
         };
 
         let (emits, _) = node.process(&ctx, vec![msg]).await.unwrap();
@@ -302,11 +277,7 @@ mod tests {
             description: None,
             preamble: "preamble".to_string(),
             inputs: vec![
-                PortDef {
-                    kind: "Goal".to_string(),
-                    port: "in".to_string(),
-                    ..Default::default()
-                },
+                PortDef { kind: "Goal".to_string(), port: "in".to_string(), ..Default::default() },
                 PortDef {
                     kind: "Insights".to_string(),
                     port: "context".to_string(),
@@ -353,9 +324,7 @@ mod tests {
             }
         }
 
-        let client = Arc::new(CaptureClient {
-            captured: std::sync::Mutex::new(None),
-        });
+        let client = Arc::new(CaptureClient { captured: std::sync::Mutex::new(None) });
         let client_dyn: Arc<dyn LlmClient> = client.clone();
         let node = LlmAgentNode::new(def, client_dyn, PathBuf::from("."));
 

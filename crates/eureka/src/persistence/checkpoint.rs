@@ -101,12 +101,7 @@ impl RunCheckpoint {
         }) {
             return Err(PersistenceError::InputConflict { node_id, port });
         }
-        self.pending_inputs.push(PendingInput {
-            node_id,
-            round: self.round,
-            port,
-            artifact,
-        });
+        self.pending_inputs.push(PendingInput { node_id, round: self.round, port, artifact });
         Ok(())
     }
 

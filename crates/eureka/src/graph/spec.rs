@@ -47,10 +47,7 @@ impl GraphSpec {
     /// Get the kind of a node by ID.
     #[must_use]
     pub fn node_kind(&self, id: &str) -> Option<&str> {
-        self.nodes
-            .iter()
-            .find(|n| n.id == id)
-            .map(|n| n.kind.as_str())
+        self.nodes.iter().find(|n| n.id == id).map(|n| n.kind.as_str())
     }
 
     /// Get all nodes that have no non-feedback inbound edges (source nodes).
@@ -60,12 +57,8 @@ impl GraphSpec {
     /// correctly identified as sources that receive the initial goal injection.
     #[must_use]
     pub fn source_node_ids(&self) -> Vec<String> {
-        let has_forward_inbound: std::collections::HashSet<String> = self
-            .edges
-            .iter()
-            .filter(|e| !e.feedback)
-            .map(|e| e.to_node.clone())
-            .collect();
+        let has_forward_inbound: std::collections::HashSet<String> =
+            self.edges.iter().filter(|e| !e.feedback).map(|e| e.to_node.clone()).collect();
         self.nodes
             .iter()
             .filter(|n| !has_forward_inbound.contains(&n.id))

@@ -97,15 +97,7 @@ impl ControlNode {
         // Backward-compatible primary envelope: the first input's port/artifact,
         // plus the full `inputs` array for multi-input-aware scripts.
         let (primary_port, primary_artifact) = inputs.first().map_or_else(
-            || {
-                (
-                    String::new(),
-                    Artifact {
-                        kind: String::new(),
-                        data: serde_json::Value::Null,
-                    },
-                )
-            },
+            || (String::new(), Artifact { kind: String::new(), data: serde_json::Value::Null }),
             |m| (m.port.clone(), m.artifact.clone()),
         );
         let envelope = serde_json::json!({
@@ -120,13 +112,9 @@ impl ControlNode {
             .map_err(|e| NodeError::Internal(format!("Failed to serialize call envelope: {e}")))?;
 
         let config_str = serde_json::to_string(&self.config).unwrap_or_else(|_| "{}".to_string());
-        let environment = self
-            .environment
-            .subprocess_env(&ctx.node_id, ctx.round, &config_str);
-        let envs: Vec<(&str, String)> = environment
-            .iter()
-            .map(|(key, value)| (key.as_str(), value.clone()))
-            .collect();
+        let environment = self.environment.subprocess_env(&ctx.node_id, ctx.round, &config_str);
+        let envs: Vec<(&str, String)> =
+            environment.iter().map(|(key, value)| (key.as_str(), value.clone())).collect();
 
         let (binary, rest) = self.command.split_first().ok_or_else(|| {
             NodeError::Internal("Control node command array is empty".to_string())
@@ -181,10 +169,7 @@ impl ControlNode {
                 })?
                 .to_string();
 
-            let data = artifact_val
-                .get("data")
-                .cloned()
-                .unwrap_or(serde_json::Value::Null);
+            let data = artifact_val.get("data").cloned().unwrap_or(serde_json::Value::Null);
 
             emits.push(Emit::new(port, Artifact { kind, data }));
         }
@@ -244,29 +229,18 @@ mod tests {
 
     #[tokio::test]
     async fn test_echo_control_node() {
-        if std::process::Command::new("python3")
-            .arg("--version")
-            .output()
-            .is_err()
-        {
+        if std::process::Command::new("python3").arg("--version").output().is_err() {
             return;
         }
 
-        let node = ControlNode::new(
-            echo_def(),
-            "test-session".to_string(),
-            None,
-            serde_json::Value::Null,
-        );
+        let node =
+            ControlNode::new(echo_def(), "test-session".to_string(), None, serde_json::Value::Null);
 
         let cancel = CancellationToken::new();
         let ctx = NodeCtx::new("echo-node", "echo-node", 0, cancel);
         let msg = PortMsg {
             port: "in".to_string(),
-            artifact: Artifact {
-                kind: "Test".to_string(),
-                data: serde_json::json!({"value": 42}),
-            },
+            artifact: Artifact { kind: "Test".to_string(), data: serde_json::json!({"value": 42}) },
         };
 
         let (emits, _) = node.process(&ctx, vec![msg]).await.unwrap();
@@ -281,11 +255,7 @@ mod tests {
         // its inputs. The call envelope now includes an `inputs` array; legacy
         // scripts reading `envelope["artifact"]` keep working via the
         // backward-compatible primary fields.
-        if std::process::Command::new("python3")
-            .arg("--version")
-            .output()
-            .is_err()
-        {
+        if std::process::Command::new("python3").arg("--version").output().is_err() {
             return;
         }
         let def = ControlNodeDef {
@@ -310,17 +280,11 @@ mod tests {
         let inputs = vec![
             PortMsg {
                 port: "in".into(),
-                artifact: Artifact {
-                    kind: "Goal".to_string(),
-                    data: serde_json::json!({}),
-                },
+                artifact: Artifact { kind: "Goal".to_string(), data: serde_json::json!({}) },
             },
             PortMsg {
                 port: "context".into(),
-                artifact: Artifact {
-                    kind: "Insights".to_string(),
-                    data: serde_json::json!({}),
-                },
+                artifact: Artifact { kind: "Insights".to_string(), data: serde_json::json!({}) },
             },
         ];
         let (emits, _) = node.process(&ctx, inputs).await.unwrap();

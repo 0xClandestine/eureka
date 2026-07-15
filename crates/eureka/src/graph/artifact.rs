@@ -44,10 +44,7 @@ impl Artifact {
         if kind.is_empty() {
             return Err(serde_json::Error::custom("artifact kind must not be empty"));
         }
-        Ok(Self {
-            kind,
-            data: serde_json::to_value(value)?,
-        })
+        Ok(Self { kind, data: serde_json::to_value(value)? })
     }
 
     /// Deserialize the artifact's payload into a typed value.
@@ -74,10 +71,7 @@ mod tests {
     #[test]
     fn test_artifact_roundtrip() {
         let data = json!({ "goal": "Test Goal" });
-        let artifact = Artifact {
-            kind: "Goal".to_string(),
-            data: data.clone(),
-        };
+        let artifact = Artifact { kind: "Goal".to_string(), data: data.clone() };
         assert_eq!(artifact.kind, "Goal");
         assert_eq!(artifact.data, data);
     }

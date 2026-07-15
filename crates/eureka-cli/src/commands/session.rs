@@ -43,13 +43,13 @@ impl DaemonClient {
     /// # Errors
     /// Returns an error on connection failure, non-2xx status, or invalid JSON.
     async fn post(&self, path: &str, body: &Value) -> Result<Value> {
-        let resp = self
-            .client
-            .post(format!("{}{}", self.base_url, path))
-            .json(body)
-            .send()
-            .await
-            .context("Failed to connect to daemon. Is it running? (`eureka daemon status`)")?;
+        let resp =
+            self.client
+                .post(format!("{}{}", self.base_url, path))
+                .json(body)
+                .send()
+                .await
+                .context("Failed to connect to daemon. Is it running? (`eureka daemon status`)")?;
         if !resp.status().is_success() {
             let status = resp.status();
             let text = resp.text().await.unwrap_or_default();
@@ -152,10 +152,7 @@ pub async fn execute_list(data_dir: &Path) -> Result<()> {
         return Ok(());
     }
 
-    println!(
-        "{:<38} {:<12} {:<8} {:<10} Goal",
-        "ID", "Status", "Rounds", "Elapsed"
-    );
+    println!("{:<38} {:<12} {:<8} {:<10} Goal", "ID", "Status", "Rounds", "Elapsed");
     println!("{}", "-".repeat(100));
 
     for run in &runs {
@@ -163,15 +160,9 @@ pub async fn execute_list(data_dir: &Path) -> Result<()> {
         let status = run["status"].as_str().unwrap_or("?");
         let rounds = run["stats"]["rounds_completed"].as_u64().unwrap_or(0);
         let elapsed = run["stats"]["elapsed_secs"].as_f64().unwrap_or(0.0);
-        let goal = run["goal"]["goal"]
-            .as_str()
-            .or_else(|| run["goal"].as_str())
-            .unwrap_or("?");
+        let goal = run["goal"]["goal"].as_str().or_else(|| run["goal"].as_str()).unwrap_or("?");
 
-        println!(
-            "{id:<38} {status:<12} {rounds:<8} {:<10} {goal}",
-            format_elapsed(elapsed)
-        );
+        println!("{id:<38} {status:<12} {rounds:<8} {:<10} {goal}", format_elapsed(elapsed));
     }
     Ok(())
 }
@@ -183,18 +174,10 @@ pub async fn execute_list(data_dir: &Path) -> Result<()> {
 pub async fn execute_status(data_dir: &Path, id: &str) -> Result<()> {
     let client = DaemonClient::connect(data_dir)?;
     let uuid = parse_uuid(id)?;
-    let run = client
-        .get(
-            &format!("/runs/{uuid}"),
-            &format!("Session '{id}' not found"),
-        )
-        .await?;
+    let run = client.get(&format!("/runs/{uuid}"), &format!("Session '{id}' not found")).await?;
 
     let status = run["status"].as_str().unwrap_or("unknown");
-    let goal = run["goal"]["goal"]
-        .as_str()
-        .or_else(|| run["goal"].as_str())
-        .unwrap_or("?");
+    let goal = run["goal"]["goal"].as_str().or_else(|| run["goal"].as_str()).unwrap_or("?");
     let graph = run["graph"].as_str().unwrap_or("?");
     let created = run["created_at"].as_str().unwrap_or("?");
     let error = run["error"].as_str();
@@ -242,10 +225,7 @@ pub async fn execute_output(
         &format!("No checkpoint found for session '{id}' (session may still be running or no outputs produced yet)"),
     ).await?;
 
-    let outputs = checkpoint["outputs"]
-        .as_array()
-        .map(Vec::as_slice)
-        .unwrap_or_default();
+    let outputs = checkpoint["outputs"].as_array().map(Vec::as_slice).unwrap_or_default();
 
     if outputs.is_empty() {
         println!("No outputs in checkpoint.");
@@ -267,10 +247,7 @@ pub async fn execute_output(
         }
         for output in node_outputs {
             if json_output {
-                println!(
-                    "{}",
-                    serde_json::to_string_pretty(output).unwrap_or_default()
-                );
+                println!("{}", serde_json::to_string_pretty(output).unwrap_or_default());
             } else {
                 print_output_summary(output);
             }
@@ -295,12 +272,8 @@ pub async fn execute_wait(data_dir: &Path, id: &str, timeout_secs: Option<u64>) 
         if start.elapsed().as_secs() > timeout {
             anyhow::bail!("Timed out after {timeout}s waiting for session {id}");
         }
-        let run = client
-            .get(
-                &format!("/runs/{uuid}"),
-                &format!("Session '{id}' not found"),
-            )
-            .await?;
+        let run =
+            client.get(&format!("/runs/{uuid}"), &format!("Session '{id}' not found")).await?;
         let status = run["status"].as_str().unwrap_or("unknown");
 
         match status {
@@ -346,12 +319,7 @@ pub async fn execute_wait(data_dir: &Path, id: &str, timeout_secs: Option<u64>) 
 pub async fn execute_signal(data_dir: &Path, id: &str, action: &str) -> Result<()> {
     let client = DaemonClient::connect(data_dir)?;
     let uuid = parse_uuid(id)?;
-    client
-        .post_simple(
-            &format!("/runs/{uuid}/{action}"),
-            &format!("Session {id} {action}d."),
-        )
-        .await
+    client.post_simple(&format!("/runs/{uuid}/{action}"), &format!("Session {id} {action}d.")).await
 }
 
 /// Pause a running session.

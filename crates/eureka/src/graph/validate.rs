@@ -27,19 +27,13 @@ impl ValidationResult {
     /// Create a new valid result.
     #[must_use]
     pub const fn valid() -> Self {
-        Self {
-            valid: true,
-            errors: vec![],
-        }
+        Self { valid: true, errors: vec![] }
     }
 
     /// Create a new invalid result with errors.
     #[must_use]
     pub const fn invalid(errors: Vec<GraphError>) -> Self {
-        Self {
-            valid: false,
-            errors,
-        }
+        Self { valid: false, errors }
     }
 }
 
@@ -106,14 +100,8 @@ pub fn validate_graph(spec: &GraphSpec, registry: &PortRegistry) -> ValidationRe
     let mut adjacency: HashMap<&str, Vec<&Edge>> = HashMap::new();
     let mut reverse_adjacency: HashMap<&str, Vec<&Edge>> = HashMap::new();
     for edge in &spec.edges {
-        adjacency
-            .entry(edge.from_node.as_str())
-            .or_default()
-            .push(edge);
-        reverse_adjacency
-            .entry(edge.to_node.as_str())
-            .or_default()
-            .push(edge);
+        adjacency.entry(edge.from_node.as_str()).or_default().push(edge);
+        reverse_adjacency.entry(edge.to_node.as_str()).or_default().push(edge);
     }
 
     // 1. Port kind match check
@@ -159,10 +147,8 @@ pub fn validate_graph(spec: &GraphSpec, registry: &PortRegistry) -> ValidationRe
         if let Some(kind) = registry.get(&node.kind) {
             let required = kind.required_inputs();
             for req_port in required {
-                let accepts_goal = kind
-                    .inputs
-                    .iter()
-                    .any(|p| p.name == req_port && p.kind == "Goal");
+                let accepts_goal =
+                    kind.inputs.iter().any(|p| p.name == req_port && p.kind == "Goal");
                 if accepts_goal {
                     continue;
                 }
@@ -185,9 +171,7 @@ pub fn validate_graph(spec: &GraphSpec, registry: &PortRegistry) -> ValidationRe
         .nodes
         .iter()
         .filter(|n| {
-            registry
-                .get(&n.kind)
-                .is_some_and(|ps| ps.inputs.iter().any(|p| p.kind == "Goal"))
+            registry.get(&n.kind).is_some_and(|ps| ps.inputs.iter().any(|p| p.kind == "Goal"))
         })
         .map(|n| n.id.as_str())
         .collect();
@@ -195,12 +179,8 @@ pub fn validate_graph(spec: &GraphSpec, registry: &PortRegistry) -> ValidationRe
     let sources: Vec<&str> = if source_candidates.is_empty() {
         // Only non-feedback inbound edges count for source detection: a node
         // that receives inputs exclusively on feedback edges is still a source.
-        let has_non_feedback_inbound: HashSet<&str> = spec
-            .edges
-            .iter()
-            .filter(|e| !e.feedback)
-            .map(|e| e.to_node.as_str())
-            .collect();
+        let has_non_feedback_inbound: HashSet<&str> =
+            spec.edges.iter().filter(|e| !e.feedback).map(|e| e.to_node.as_str()).collect();
         spec.nodes
             .iter()
             .map(|n| n.id.as_str())
@@ -261,9 +241,7 @@ pub fn validate_graph(spec: &GraphSpec, registry: &PortRegistry) -> ValidationRe
         .nodes
         .iter()
         .filter(|n| {
-            registry
-                .get(&n.kind)
-                .is_some_and(|ps| ps.outputs.iter().any(|p| p.name == "halt"))
+            registry.get(&n.kind).is_some_and(|ps| ps.outputs.iter().any(|p| p.name == "halt"))
         })
         .map(|n| n.id.as_str())
         .collect();
@@ -271,9 +249,7 @@ pub fn validate_graph(spec: &GraphSpec, registry: &PortRegistry) -> ValidationRe
     let sccs = tarjan_scc(spec);
     for (scc_index, scc) in sccs.iter().enumerate() {
         if scc.len() > 1 || (scc.len() == 1 && has_self_loop(spec, scc[0].as_str())) {
-            let has_governor = scc
-                .iter()
-                .any(|node_id| governor_nodes.contains(node_id.as_str()));
+            let has_governor = scc.iter().any(|node_id| governor_nodes.contains(node_id.as_str()));
             if !has_governor {
                 errors.push(GraphError::UngovernedCycle(format!(
                     "SCC #{} ({}) has no governor node (a node with a 'halt' output port). \
@@ -295,9 +271,7 @@ pub fn validate_graph(spec: &GraphSpec, registry: &PortRegistry) -> ValidationRe
 
         let has_terminal_output = spec.nodes.iter().any(|node| {
             registry.get(&node.kind).is_some_and(|ps| {
-                ps.outputs
-                    .iter()
-                    .any(|p| !all_input_kinds.contains(p.kind.as_str()))
+                ps.outputs.iter().any(|p| !all_input_kinds.contains(p.kind.as_str()))
             })
         });
 
@@ -326,18 +300,14 @@ pub fn validate_graph(spec: &GraphSpec, registry: &PortRegistry) -> ValidationRe
 #[must_use]
 fn tarjan_scc(spec: &GraphSpec) -> Vec<Vec<String>> {
     let node_ids: Vec<&str> = spec.nodes.iter().map(|n| n.id.as_str()).collect();
-    let index_map: HashMap<&str, usize> = node_ids
-        .iter()
-        .enumerate()
-        .map(|(i, id)| (*id, i))
-        .collect();
+    let index_map: HashMap<&str, usize> =
+        node_ids.iter().enumerate().map(|(i, id)| (*id, i)).collect();
 
     let mut adj: Vec<Vec<usize>> = vec![vec![]; node_ids.len()];
     for edge in &spec.edges {
-        if let (Some(&from), Some(&to)) = (
-            index_map.get(edge.from_node.as_str()),
-            index_map.get(edge.to_node.as_str()),
-        ) {
+        if let (Some(&from), Some(&to)) =
+            (index_map.get(edge.from_node.as_str()), index_map.get(edge.to_node.as_str()))
+        {
             adj[from].push(to);
         }
     }
@@ -413,9 +383,7 @@ fn tarjan_scc(spec: &GraphSpec) -> Vec<Vec<String>> {
 /// Check if a node has a self-loop (edge to itself).
 #[must_use]
 fn has_self_loop(spec: &GraphSpec, node_id: &str) -> bool {
-    spec.edges
-        .iter()
-        .any(|e| e.from_node == node_id && e.to_node == node_id)
+    spec.edges.iter().any(|e| e.from_node == node_id && e.to_node == node_id)
 }
 
 #[cfg(test)]
@@ -516,19 +484,12 @@ mod tests {
                     description: None,
                 },
             ],
-            edges: vec![
-                Edge::new("gen", "out", "ref", "in"),
-                Edge::new("ref", "out", "gov", "in"),
-            ],
+            edges: vec![Edge::new("gen", "out", "ref", "in"), Edge::new("ref", "out", "gov", "in")],
             metadata: serde_json::Value::Null,
         };
 
         let result = validate_graph(&spec, &registry);
-        assert!(
-            result.valid,
-            "expected valid graph but got errors: {:?}",
-            result.errors
-        );
+        assert!(result.valid, "expected valid graph but got errors: {:?}", result.errors);
     }
 
     #[test]
@@ -560,10 +521,7 @@ mod tests {
 
         let result = validate_graph(&spec, &registry);
         assert!(!result.valid);
-        assert!(result
-            .errors
-            .iter()
-            .any(|e| matches!(e, GraphError::PortKindMismatch(_))));
+        assert!(result.errors.iter().any(|e| matches!(e, GraphError::PortKindMismatch(_))));
     }
 
     #[test]
@@ -586,10 +544,7 @@ mod tests {
 
         let result = validate_graph(&spec, &registry);
         assert!(!result.valid);
-        assert!(result
-            .errors
-            .iter()
-            .any(|e| matches!(e, GraphError::DanglingPort(_))));
+        assert!(result.errors.iter().any(|e| matches!(e, GraphError::DanglingPort(_))));
     }
 
     #[test]
@@ -605,9 +560,6 @@ mod tests {
 
         let result = validate_graph(&spec, &registry);
         assert!(!result.valid);
-        assert!(result
-            .errors
-            .iter()
-            .any(|e| matches!(e, GraphError::UnknownNode(_))));
+        assert!(result.errors.iter().any(|e| matches!(e, GraphError::UnknownNode(_))));
     }
 }

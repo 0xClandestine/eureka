@@ -28,11 +28,8 @@ pub struct ListArgs {
 ///
 /// Returns an error if the config or manifest cannot be loaded.
 pub fn execute(args: ListArgs) -> Result<()> {
-    let config_path = if args.config_path.is_empty() {
-        "eureka.toml".to_string()
-    } else {
-        args.config_path
-    };
+    let config_path =
+        if args.config_path.is_empty() { "eureka.toml".to_string() } else { args.config_path };
     let config = EurekaConfig::load(Some(Path::new(&config_path)))
         .with_context(|| format!("Failed to load config from '{config_path}'"))?;
 
@@ -43,10 +40,7 @@ pub fn execute(args: ListArgs) -> Result<()> {
     println!("║                 Eureka — Graph Manifest                 ║");
     println!("╚══════════════════════════════════════════════════════════╝");
     println!();
-    println!(
-        "  graph:  {}",
-        manifest.name.as_deref().unwrap_or("(unnamed)")
-    );
+    println!("  graph:  {}", manifest.name.as_deref().unwrap_or("(unnamed)"));
     println!("  path:   {}", config.graph);
     println!(
         "  nodes:  {} ({} agents, {} control)",

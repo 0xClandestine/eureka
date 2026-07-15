@@ -21,18 +21,12 @@ impl AgentConfig {
     /// Return the per-agent override for `agent_id`, or `self` if none exists.
     #[must_use]
     pub fn resolve_for(global: &Self, overrides: &HashMap<String, Self>, agent_id: &str) -> Self {
-        overrides
-            .get(agent_id)
-            .cloned()
-            .unwrap_or_else(|| global.clone())
+        overrides.get(agent_id).cloned().unwrap_or_else(|| global.clone())
     }
 }
 
 impl Default for AgentConfig {
     fn default() -> Self {
-        Self {
-            temperature: 0.7,
-            max_iterations: 10,
-        }
+        Self { temperature: 0.7, max_iterations: 10 }
     }
 }

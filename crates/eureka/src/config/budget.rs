@@ -179,27 +179,15 @@ mod tests {
 
     #[test]
     fn test_budget_exhaustion_cost() {
-        let budget = Budget {
-            max_cost_usd: 10.0,
-            ..Budget::default()
-        };
-        let stats = RunStats {
-            total_cost_usd: 15.0,
-            ..RunStats::default()
-        };
+        let budget = Budget { max_cost_usd: 10.0, ..Budget::default() };
+        let stats = RunStats { total_cost_usd: 15.0, ..RunStats::default() };
         assert!(stats.is_budget_exhausted(&budget).is_some());
     }
 
     #[test]
     fn test_budget_exhaustion_tokens() {
-        let budget = Budget {
-            max_tokens: 1000,
-            ..Budget::default()
-        };
-        let stats = RunStats {
-            total_tokens: 1500,
-            ..RunStats::default()
-        };
+        let budget = Budget { max_tokens: 1000, ..Budget::default() };
+        let stats = RunStats { total_tokens: 1500, ..RunStats::default() };
         assert!(stats.is_budget_exhausted(&budget).is_some());
     }
 

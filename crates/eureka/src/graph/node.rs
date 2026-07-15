@@ -34,10 +34,7 @@ impl Emit {
     /// Create a new emission on the given port with the given artifact.
     #[must_use]
     pub fn new(port: impl Into<String>, artifact: Artifact) -> Self {
-        Self {
-            port: port.into(),
-            artifact,
-        }
+        Self { port: port.into(), artifact }
     }
 }
 
@@ -68,13 +65,7 @@ impl NodeCtx {
         round: u32,
         cancel: tokio_util::sync::CancellationToken,
     ) -> Self {
-        Self {
-            node_id: node_id.into(),
-            node_kind: node_kind.into(),
-            round,
-            cancel,
-            event_tx: None,
-        }
+        Self { node_id: node_id.into(), node_kind: node_kind.into(), round, cancel, event_tx: None }
     }
 
     /// Check if the run has been cancelled.
@@ -136,18 +127,9 @@ impl NodeUsage {
         pricing: Option<&crate::config::Pricing>,
     ) -> Self {
         // Fall back to input+output when the provider omits an aggregate.
-        let total = if total_tokens == 0 {
-            input_tokens + output_tokens
-        } else {
-            total_tokens
-        };
+        let total = if total_tokens == 0 { input_tokens + output_tokens } else { total_tokens };
         let cost_usd = pricing.map_or(0.0, |p| p.cost(input_tokens, output_tokens));
-        Self {
-            input_tokens,
-            output_tokens,
-            total_tokens: total,
-            cost_usd,
-        }
+        Self { input_tokens, output_tokens, total_tokens: total, cost_usd }
     }
 }
 
@@ -212,9 +194,7 @@ impl BoxedNode {
     /// Wrap a `Node` as a `BoxedNode`.
     #[must_use]
     pub fn new(node: impl Node + 'static) -> Self {
-        Self {
-            inner: Arc::new(node),
-        }
+        Self { inner: Arc::new(node) }
     }
 
     /// Get the port specification.
@@ -256,10 +236,7 @@ mod tests {
             inputs: Vec<PortMsg>,
         ) -> Result<(Vec<Emit>, NodeUsage), NodeError> {
             Ok((
-                inputs
-                    .into_iter()
-                    .map(|m| Emit::new(m.port, m.artifact))
-                    .collect(),
+                inputs.into_iter().map(|m| Emit::new(m.port, m.artifact)).collect(),
                 NodeUsage::default(),
             ))
         }
@@ -284,10 +261,7 @@ mod tests {
     #[test]
     fn test_node_usage_from_rig_usage_with_pricing() {
         // Gotcha #4: cost must be computed from separate input/output rates.
-        let pricing = crate::config::Pricing {
-            input_per_million: 0.27,
-            output_per_million: 1.10,
-        };
+        let pricing = crate::config::Pricing { input_per_million: 0.27, output_per_million: 1.10 };
         // 1M input, 0.5M output, no aggregate total reported.
         let usage = NodeUsage::from_rig_usage(1_000_000, 500_000, 0, Some(&pricing));
         assert_eq!(usage.input_tokens, 1_000_000);

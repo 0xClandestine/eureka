@@ -3,9 +3,8 @@
 /// Produce an RFC 3339 / ISO 8601 UTC timestamp string without a date-time dependency.
 #[must_use]
 pub fn iso_now_rfc3339() -> String {
-    let now = std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default();
+    let now =
+        std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).unwrap_or_default();
     let secs = now.as_secs();
     let time_secs = secs % 86_400;
     let hours = time_secs / 3_600;

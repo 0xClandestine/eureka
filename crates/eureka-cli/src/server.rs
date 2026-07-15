@@ -85,9 +85,7 @@ pub fn track_live_state(
                         SchedulerEvent::ActivationStarted { node_id, .. } => {
                             s.active_nodes.insert(node_id.clone());
                         }
-                        SchedulerEvent::ActivationCompleted {
-                            node_id, outputs, ..
-                        } => {
+                        SchedulerEvent::ActivationCompleted { node_id, outputs, .. } => {
                             s.active_nodes.remove(node_id.as_str());
                             if !outputs.is_empty() {
                                 s.node_outputs.insert(node_id.clone(), outputs.clone());
@@ -242,11 +240,7 @@ async fn event_history_handler(
     let (Some(store), Some(id)) = (s.run_store, s.run_id) else {
         return Err(axum::http::StatusCode::NOT_FOUND);
     };
-    store
-        .load_events(id)
-        .await
-        .map(Json)
-        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)
+    store.load_events(id).await.map(Json).map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 /// Request body for creating a new run.
@@ -269,10 +263,7 @@ struct InputBody {
 
 /// Extract the `RunManager` from the server state, returning 404 if absent.
 fn manager_or_404(state: &ServerState) -> Result<RunManager, axum::http::StatusCode> {
-    state
-        .manager
-        .clone()
-        .ok_or(axum::http::StatusCode::NOT_FOUND)
+    state.manager.clone().ok_or(axum::http::StatusCode::NOT_FOUND)
 }
 
 /// `POST /runs` — create and start a managed run.
@@ -285,10 +276,7 @@ async fn create_run_handler(
         .create_run(CreateRunRequest { goal: body.goal })
         .await
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?;
-    Ok((
-        axum::http::StatusCode::ACCEPTED,
-        Json(serde_json::json!({ "id": id })),
-    ))
+    Ok((axum::http::StatusCode::ACCEPTED, Json(serde_json::json!({ "id": id }))))
 }
 
 /// `GET /runs` — list managed runs.
@@ -296,11 +284,7 @@ async fn list_runs_handler(
     State(state): State<ServerState>,
 ) -> Result<Json<Vec<RunRecord>>, axum::http::StatusCode> {
     let manager = manager_or_404(&state)?;
-    manager
-        .list_runs()
-        .await
-        .map(Json)
-        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)
+    manager.list_runs().await.map(Json).map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 /// `GET /runs/:id` — retrieve one managed run.
@@ -390,9 +374,5 @@ async fn events_handler(
         })
     });
 
-    Sse::new(stream).keep_alive(
-        KeepAlive::new()
-            .interval(Duration::from_secs(15))
-            .text("ping"),
-    )
+    Sse::new(stream).keep_alive(KeepAlive::new().interval(Duration::from_secs(15)).text("ping"))
 }

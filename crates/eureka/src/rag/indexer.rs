@@ -96,11 +96,7 @@ impl RagIndexer {
         index_kinds: HashSet<String>,
         session_id: String,
     ) -> Self {
-        Self {
-            embed_and_insert,
-            index_kinds,
-            session_id,
-        }
+        Self { embed_and_insert, index_kinds, session_id }
     }
 
     /// Chunk `artifact`, build [`RagDocument`]s, and insert them into the

@@ -50,12 +50,7 @@ impl RunManager {
         persistence: Arc<dyn RunPersistence>,
         db_directory: Option<PathBuf>,
     ) -> Self {
-        Self {
-            config,
-            persistence,
-            db_directory,
-            active: Arc::new(Mutex::new(HashMap::new())),
-        }
+        Self { config, persistence, db_directory, active: Arc::new(Mutex::new(HashMap::new())) }
     }
 
     /// Return the run record, if it exists.
@@ -63,10 +58,7 @@ impl RunManager {
     /// # Errors
     /// Returns `EngineError::Store` on persistence failures.
     pub async fn get_run(&self, run_id: uuid::Uuid) -> Result<Option<RunRecord>, EngineError> {
-        self.persistence
-            .get(run_id)
-            .await
-            .map_err(|error| EngineError::Store(error.to_string()))
+        self.persistence.get(run_id).await.map_err(|error| EngineError::Store(error.to_string()))
     }
 
     /// List all persisted run records.
@@ -74,10 +66,7 @@ impl RunManager {
     /// # Errors
     /// Returns `EngineError::Store` on persistence failures.
     pub async fn list_runs(&self) -> Result<Vec<RunRecord>, EngineError> {
-        self.persistence
-            .list()
-            .await
-            .map_err(|error| EngineError::Store(error.to_string()))
+        self.persistence.list().await.map_err(|error| EngineError::Store(error.to_string()))
     }
 
     /// Load the latest durable checkpoint for a run.
@@ -247,10 +236,8 @@ impl RunManager {
 
         let config = self.config.clone();
         let persistence = Arc::clone(&self.persistence);
-        let db_path = self
-            .db_directory
-            .as_ref()
-            .map(|directory| directory.join(format!("{run_id}.sqlite")));
+        let db_path =
+            self.db_directory.as_ref().map(|directory| directory.join(format!("{run_id}.sqlite")));
         let active = Arc::clone(&self.active);
         tokio::spawn(async move {
             let result = async {
@@ -259,13 +246,9 @@ impl RunManager {
                 session.set_event_store(persistence.clone());
                 session.set_scheduler_signal_sink(Arc::clone(&slot));
                 if let Some(checkpoint) = checkpoint {
-                    session
-                        .resume_with_store(goal, Some(persistence.as_ref()), checkpoint)
-                        .await
+                    session.resume_with_store(goal, Some(persistence.as_ref()), checkpoint).await
                 } else {
-                    session
-                        .run_with_store(goal, Some(persistence.as_ref()))
-                        .await
+                    session.run_with_store(goal, Some(persistence.as_ref())).await
                 }
             }
             .await;

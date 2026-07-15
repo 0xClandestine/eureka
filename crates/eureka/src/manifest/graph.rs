@@ -168,11 +168,7 @@ edges:
                     raw: "prompts/gen.md".into(),
                     absolute: PathBuf::from("/tmp/prompts/gen.md"),
                 },
-                inputs: vec![PortDef {
-                    port: "in".into(),
-                    kind: "Goal".into(),
-                    required: None,
-                }],
+                inputs: vec![PortDef { port: "in".into(), kind: "Goal".into(), required: None }],
                 outputs: vec![PortDef {
                     port: "out".into(),
                     kind: "Hypotheses".into(),
@@ -220,15 +216,8 @@ agents:
             agents: vec![AgentSpec {
                 id: "gen".into(),
                 description: None,
-                prompt: PromptPath {
-                    raw: "p.md".into(),
-                    absolute: PathBuf::from("p.md"),
-                },
-                inputs: vec![PortDef {
-                    port: "in".into(),
-                    kind: "Goal".into(),
-                    required: None,
-                }],
+                prompt: PromptPath { raw: "p.md".into(), absolute: PathBuf::from("p.md") },
+                inputs: vec![PortDef { port: "in".into(), kind: "Goal".into(), required: None }],
                 outputs: vec![PortDef {
                     port: "out".into(),
                     kind: "Hypotheses".into(),
@@ -250,16 +239,8 @@ agents:
                     required: None,
                 }],
                 outputs: vec![
-                    PortDef {
-                        port: "continue".into(),
-                        kind: "Hypotheses".into(),
-                        required: None,
-                    },
-                    PortDef {
-                        port: "halt".into(),
-                        kind: "Control".into(),
-                        required: None,
-                    },
+                    PortDef { port: "continue".into(), kind: "Hypotheses".into(), required: None },
+                    PortDef { port: "halt".into(), kind: "Control".into(), required: None },
                 ],
                 config: serde_json::json!({}),
                 timeout_secs: 10,

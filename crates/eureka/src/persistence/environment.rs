@@ -71,10 +71,7 @@ impl RunEnvironment {
             ("EUREKA_NODE_ID".to_string(), node_id.to_string()),
             ("EUREKA_ROUND".to_string(), round.to_string()),
             ("EUREKA_CONFIG".to_string(), config_json.to_string()),
-            (
-                "EUREKA_DB_SCHEMA_VERSION".to_string(),
-                self.database_schema_version.to_string(),
-            ),
+            ("EUREKA_DB_SCHEMA_VERSION".to_string(), self.database_schema_version.to_string()),
             ("EUREKA_DB_NAMESPACE".to_string(), node_id.to_string()),
         ];
         if let Some(path) = &self.db_path {

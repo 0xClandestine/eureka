@@ -59,10 +59,7 @@ struct DaemonState {
 pub async fn execute_start(port: u16, config_path: Option<String>, data_dir: &Path) -> Result<()> {
     // Create the data directory
     std::fs::create_dir_all(data_dir).with_context(|| {
-        format!(
-            "Failed to create daemon data directory '{}'",
-            data_dir.display()
-        )
+        format!("Failed to create daemon data directory '{}'", data_dir.display())
     })?;
 
     // Load configuration
@@ -104,10 +101,7 @@ pub async fn execute_start(port: u16, config_path: Option<String>, data_dir: &Pa
     );
 
     // Build the daemon state and HTTP router
-    let state = DaemonState {
-        manager,
-        data_dir: data_dir.to_path_buf(),
-    };
+    let state = DaemonState { manager, data_dir: data_dir.to_path_buf() };
 
     let app = build_daemon_router(state);
 
@@ -120,9 +114,7 @@ pub async fn execute_start(port: u16, config_path: Option<String>, data_dir: &Pa
     tracing::info!("Daemon HTTP server → http://127.0.0.1:{port}");
 
     // Run until Ctrl+C or SIGTERM
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown_signal())
-        .await?;
+    axum::serve(listener, app).with_graceful_shutdown(shutdown_signal()).await?;
 
     // Clean up daemon info on graceful shutdown
     remove_daemon_info(data_dir);
@@ -154,20 +146,15 @@ fn build_daemon_router(state: DaemonState) -> Router {
 /// Returns an error if no daemon is running or the PID cannot be read.
 pub fn execute_stop(data_dir: &Path) -> Result<()> {
     let info = read_daemon_info(data_dir)?;
-    let pid_int: i32 = info
-        .pid
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("PID {} is out of range", info.pid))?;
+    let pid_int: i32 =
+        info.pid.try_into().map_err(|_| anyhow::anyhow!("PID {} is out of range", info.pid))?;
     let pid = nix::unistd::Pid::from_raw(pid_int);
 
     // Check if the process is actually running
     let running = nix::sys::signal::kill(pid, None).is_ok();
     if !running {
         remove_daemon_info(data_dir);
-        anyhow::bail!(
-            "Daemon (PID {}) is not running; cleaned up stale info",
-            info.pid
-        );
+        anyhow::bail!("Daemon (PID {}) is not running; cleaned up stale info", info.pid);
     }
 
     println!("Stopping daemon (PID {})...", info.pid);
@@ -201,10 +188,8 @@ pub fn execute_stop(data_dir: &Path) -> Result<()> {
 /// Returns an error if the daemon info file cannot be read.
 pub fn execute_status(data_dir: &Path) -> Result<()> {
     let info = read_daemon_info(data_dir)?;
-    let pid_int: i32 = info
-        .pid
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("PID {} is out of range", info.pid))?;
+    let pid_int: i32 =
+        info.pid.try_into().map_err(|_| anyhow::anyhow!("PID {} is out of range", info.pid))?;
     let pid = nix::unistd::Pid::from_raw(pid_int);
 
     if nix::sys::signal::kill(pid, None).is_ok() {
@@ -216,10 +201,7 @@ pub fn execute_status(data_dir: &Path) -> Result<()> {
         Ok(())
     } else {
         remove_daemon_info(data_dir);
-        anyhow::bail!(
-            "Daemon (PID {}) is not running; stale info cleaned up",
-            info.pid
-        );
+        anyhow::bail!("Daemon (PID {}) is not running; stale info cleaned up", info.pid);
     }
 }
 
@@ -235,10 +217,7 @@ async fn create_run_handler(
     let manager = state.manager.clone();
     let goal = body.get("goal").cloned().unwrap_or(body);
     let request = eureka::CreateRunRequest { goal };
-    let id = manager
-        .create_run(request)
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let id = manager.create_run(request).await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
     Ok((StatusCode::ACCEPTED, Json(serde_json::json!({ "id": id }))))
 }
 
@@ -246,16 +225,10 @@ async fn create_run_handler(
 async fn list_runs_handler(
     State(state): State<DaemonState>,
 ) -> Result<Json<Vec<serde_json::Value>>, StatusCode> {
-    let records = state
-        .manager
-        .clone()
-        .list_runs()
-        .await
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
-    let values: Vec<serde_json::Value> = records
-        .into_iter()
-        .map(|r| serde_json::to_value(r).unwrap_or_default())
-        .collect();
+    let records =
+        state.manager.clone().list_runs().await.map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)?;
+    let values: Vec<serde_json::Value> =
+        records.into_iter().map(|r| serde_json::to_value(r).unwrap_or_default()).collect();
     Ok(Json(values))
 }
 
@@ -279,12 +252,7 @@ async fn events_run_handler(
     State(state): State<DaemonState>,
     AxumPath(id): AxumPath<uuid::Uuid>,
 ) -> Result<Json<Vec<eureka::persistence::RunEvent>>, StatusCode> {
-    state
-        .manager
-        .get_events(id)
-        .await
-        .map(Json)
-        .map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
+    state.manager.get_events(id).await.map(Json).map_err(|_| StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 /// `GET /runs/{id}/checkpoint` — get the latest checkpoint (outputs, round, etc.).
@@ -332,21 +300,13 @@ async fn input_run_handler(
 ) -> Result<Json<RunCheckpoint>, StatusCode> {
     let manager = state.manager.clone();
 
-    let node_id = body
-        .get("node_id")
-        .and_then(|v| v.as_str())
-        .ok_or(StatusCode::BAD_REQUEST)?;
-    let port = body
-        .get("port")
-        .and_then(|v| v.as_str())
-        .ok_or(StatusCode::BAD_REQUEST)?;
+    let node_id = body.get("node_id").and_then(|v| v.as_str()).ok_or(StatusCode::BAD_REQUEST)?;
+    let port = body.get("port").and_then(|v| v.as_str()).ok_or(StatusCode::BAD_REQUEST)?;
     let artifact_kind = body.get("kind").and_then(|v| v.as_str()).unwrap_or("Goal");
     let artifact_data = body.get("data").cloned().unwrap_or(serde_json::Value::Null);
 
-    let artifact = eureka::graph::artifact::Artifact {
-        kind: artifact_kind.to_string(),
-        data: artifact_data,
-    };
+    let artifact =
+        eureka::graph::artifact::Artifact { kind: artifact_kind.to_string(), data: artifact_data };
 
     manager
         .submit_input(id, node_id, port, artifact)
@@ -384,10 +344,7 @@ fn write_daemon_info(data_dir: &Path, info: &DaemonInfo) -> Result<()> {
 pub(crate) fn read_daemon_info(data_dir: &Path) -> Result<DaemonInfo> {
     let path = daemon_info_path(data_dir);
     let content = std::fs::read_to_string(&path).with_context(|| {
-        format!(
-            "No daemon info at '{}'. Is the daemon running?",
-            path.display()
-        )
+        format!("No daemon info at '{}'. Is the daemon running?", path.display())
     })?;
     serde_json::from_str(&content).context("Failed to parse daemon info")
 }
@@ -451,10 +408,7 @@ mod tests {
         let dir = TempDir::new().unwrap();
         let result = read_daemon_info(dir.path());
         assert!(result.is_err());
-        assert!(result
-            .unwrap_err()
-            .to_string()
-            .contains("Is the daemon running"));
+        assert!(result.unwrap_err().to_string().contains("Is the daemon running"));
     }
 
     #[test]

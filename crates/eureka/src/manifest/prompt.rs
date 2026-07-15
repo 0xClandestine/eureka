@@ -56,9 +56,6 @@ impl Serialize for PromptPath {
 impl<'de> Deserialize<'de> for PromptPath {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
         let raw = String::deserialize(deserializer)?;
-        Ok(Self {
-            absolute: PathBuf::from(&raw),
-            raw,
-        })
+        Ok(Self { absolute: PathBuf::from(&raw), raw })
     }
 }

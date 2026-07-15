@@ -227,8 +227,7 @@ impl Scheduler {
             return Err(SchedulerError::CheckpointMismatch);
         }
         identity.revision = Some(checkpoint.revision);
-        self.run_until_signal(HashMap::new(), Some(checkpoint))
-            .await
+        self.run_until_signal(HashMap::new(), Some(checkpoint)).await
     }
 
     /// Run the graph and return `Ok` only when it drains normally.
@@ -246,9 +245,7 @@ impl Scheduler {
         let outbound: HashMap<String, Vec<Edge>> = {
             let mut map: HashMap<String, Vec<Edge>> = HashMap::new();
             for edge in &self.spec.edges {
-                map.entry(edge.from_node.clone())
-                    .or_default()
-                    .push(edge.clone());
+                map.entry(edge.from_node.clone()).or_default().push(edge.clone());
             }
             map
         };
@@ -273,9 +270,8 @@ impl Scheduler {
         let mut ready_activations: Vec<ActivationSnapshot> = Vec::new();
         let mut in_flight: HashMap<u64, ActivationSnapshot> = HashMap::new();
         let mut next_activation_id: u64 = 0;
-        let mut outputs: Vec<RunOutput> = checkpoint
-            .as_ref()
-            .map_or_else(Vec::new, |item| item.outputs.clone());
+        let mut outputs: Vec<RunOutput> =
+            checkpoint.as_ref().map_or_else(Vec::new, |item| item.outputs.clone());
 
         // Synchronized round model: a round is one forward wave starting from
         // source injections and feedback inputs. Forward edges stay in the
@@ -286,9 +282,8 @@ impl Scheduler {
         // `rounds_completed` thus counts fully drained cycles, not arbitrary
         // feedback crossings.
         let mut current_round: u32 = checkpoint.as_ref().map_or(0, |item| item.round);
-        let mut round_pending: HashMap<u32, usize> = checkpoint
-            .as_ref()
-            .map_or_else(HashMap::new, |item| item.round_pending.clone());
+        let mut round_pending: HashMap<u32, usize> =
+            checkpoint.as_ref().map_or_else(HashMap::new, |item| item.round_pending.clone());
         if let Some(item) = &checkpoint {
             self.stats = item.stats.clone();
             for pending in &item.pending_inputs {
@@ -337,17 +332,15 @@ impl Scheduler {
                     // Delivering the goal artifact into the source node's first
                     // input port; this either fires immediately (single-input
                     // node) or buffers until the remaining required inputs arrive.
-                    let port = self.nodes[source_id]
-                        .ports()
-                        .input_names()
-                        .into_iter()
-                        .next()
-                        .ok_or_else(|| {
-                            SchedulerError::Internal(format!(
-                                "source node '{source_id}' has no input ports; \
+                    let port =
+                        self.nodes[source_id].ports().input_names().into_iter().next().ok_or_else(
+                            || {
+                                SchedulerError::Internal(format!(
+                                    "source node '{source_id}' has no input ports; \
                                  cannot inject initial artifact"
-                            ))
-                        })?;
+                                ))
+                            },
+                        )?;
                     let dispatched = self.deliver_input(
                         source_id,
                         // The first declared input port receives the goal.
@@ -371,11 +364,7 @@ impl Scheduler {
             let Some(node) = self.nodes.get(&snapshot.node_id).cloned() else {
                 return Err(SchedulerError::NodeNotFound(snapshot.node_id));
             };
-            let node_kind = self
-                .spec
-                .node_kind(&snapshot.node_id)
-                .unwrap_or("unknown")
-                .to_string();
+            let node_kind = self.spec.node_kind(&snapshot.node_id).unwrap_or("unknown").to_string();
             let id = next_activation_id;
             next_activation_id = next_activation_id.saturating_add(1);
             in_flight.insert(id, snapshot.clone());
@@ -690,10 +679,9 @@ impl Scheduler {
         outputs: &[RunOutput],
         reason: CheckpointReason,
     ) -> Result<(), SchedulerError> {
-        let (Some(store), Some(identity)) = (
-            self.checkpoint_store.clone(),
-            self.checkpoint_identity.as_mut(),
-        ) else {
+        let (Some(store), Some(identity)) =
+            (self.checkpoint_store.clone(), self.checkpoint_identity.as_mut())
+        else {
             return Ok(());
         };
         let pending_inputs = input_buffer
@@ -802,9 +790,7 @@ impl Scheduler {
         handles: &TaskHandles,
         tasks: &mut JoinSet<()>,
     ) -> Result<usize, SchedulerError> {
-        let bucket = input_buffer
-            .entry((node_id.to_string(), round))
-            .or_default();
+        let bucket = input_buffer.entry((node_id.to_string(), round)).or_default();
         bucket.insert(port.to_string(), artifact);
 
         // Determine readiness: are all required input ports present?
@@ -821,17 +807,12 @@ impl Scheduler {
         }
 
         // Drain the buffer for this (node, round) into a joined input vec.
-        let bucket = input_buffer
-            .remove(&(node_id.to_string(), round))
-            .unwrap_or_default();
+        let bucket = input_buffer.remove(&(node_id.to_string(), round)).unwrap_or_default();
         let mut inputs: Vec<PortMsg> = Vec::with_capacity(ports.inputs.len());
         // Emit required inputs first, then any optional inputs that arrived.
         for p in &ports.inputs {
             if let Some(art) = bucket.get(&p.name) {
-                inputs.push(PortMsg {
-                    port: p.name.clone(),
-                    artifact: art.clone(),
-                });
+                inputs.push(PortMsg { port: p.name.clone(), artifact: art.clone() });
             }
         }
 
@@ -847,11 +828,7 @@ impl Scheduler {
         *next_activation_id = next_activation_id.saturating_add(1);
         in_flight.insert(
             id,
-            ActivationSnapshot {
-                node_id: node_id.to_string(),
-                round,
-                inputs: inputs.clone(),
-            },
+            ActivationSnapshot { node_id: node_id.to_string(), round, inputs: inputs.clone() },
         );
         let activation = Activation {
             id,
@@ -1059,10 +1036,7 @@ mod tests {
         let result = scheduler
             .run(HashMap::from([(
                 "failing".into(),
-                vec![Artifact {
-                    kind: "Goal".into(),
-                    data: serde_json::json!({}),
-                }],
+                vec![Artifact { kind: "Goal".into(), data: serde_json::json!({}) }],
             )]))
             .await;
         assert!(matches!(
@@ -1119,10 +1093,7 @@ mod tests {
         let result = scheduler
             .run(HashMap::from([(
                 "source".into(),
-                vec![Artifact {
-                    kind: "Goal".into(),
-                    data: serde_json::json!({}),
-                }],
+                vec![Artifact { kind: "Goal".into(), data: serde_json::json!({}) }],
             )]))
             .await;
         assert!(matches!(result, Err(SchedulerError::Paused(_))));
@@ -1179,19 +1150,10 @@ mod tests {
         signal_tx.send(SchedulerSignal::Pause).await.unwrap();
         let input = HashMap::from([(
             "source".into(),
-            vec![Artifact {
-                kind: "Goal".into(),
-                data: serde_json::json!({"value": 1}),
-            }],
+            vec![Artifact { kind: "Goal".into(), data: serde_json::json!({"value": 1}) }],
         )]);
-        assert!(matches!(
-            scheduler.run(input).await,
-            Err(SchedulerError::Paused(_))
-        ));
-        let checkpoint = CheckpointStore::load_checkpoint(&*store, run_id)
-            .await
-            .unwrap()
-            .unwrap();
+        assert!(matches!(scheduler.run(input).await, Err(SchedulerError::Paused(_))));
+        let checkpoint = CheckpointStore::load_checkpoint(&*store, run_id).await.unwrap().unwrap();
         assert_eq!(checkpoint.round_pending.get(&0), Some(&1));
 
         let mut restored_nodes = HashMap::new();
@@ -1201,10 +1163,7 @@ mod tests {
             .with_checkpoint_store(checkpoint_store, run_id, "graph", "config");
         let stats = restored.run_from_checkpoint(checkpoint).await.unwrap();
         assert_eq!(stats.rounds_completed, 0);
-        assert!(CheckpointStore::load_checkpoint(&*store, run_id)
-            .await
-            .unwrap()
-            .is_some());
+        assert!(CheckpointStore::load_checkpoint(&*store, run_id).await.unwrap().is_some());
     }
 
     #[tokio::test]
@@ -1226,10 +1185,7 @@ mod tests {
         // Regression (H3): a single source routing >256 new activations must
         // not block the single consumer loop on a bounded activation channel.
         const N: usize = 300;
-        let goal = Artifact {
-            kind: "Goal".to_string(),
-            data: serde_json::json!({}),
-        };
+        let goal = Artifact { kind: "Goal".to_string(), data: serde_json::json!({}) };
         let source = BoxedNode::new(TestNode {
             ports: PortSpec::new(
                 vec![PortSpecEntry {
@@ -1354,10 +1310,7 @@ mod tests {
         let mut nodes = HashMap::new();
         nodes.insert(
             "gen".to_string(),
-            BoxedNode::new(JoiningNode {
-                received: Arc::clone(&received),
-                ports: join_ports,
-            }),
+            BoxedNode::new(JoiningNode { received: Arc::clone(&received), ports: join_ports }),
         );
         nodes.insert(
             "goal_src".to_string(),
@@ -1436,10 +1389,7 @@ mod tests {
             metadata: serde_json::Value::Null,
         };
         let mut scheduler = Scheduler::new(spec, nodes, Budget::default(), 4);
-        let goal = Artifact {
-            kind: "Goal".to_string(),
-            data: serde_json::json!({}),
-        };
+        let goal = Artifact { kind: "Goal".to_string(), data: serde_json::json!({}) };
         let initial = HashMap::from([
             ("goal_src".to_string(), vec![goal.clone()]),
             ("ctx_src".to_string(), vec![goal]),
@@ -1447,11 +1397,7 @@ mod tests {
         scheduler.run(initial).await.unwrap();
 
         let calls = received.lock().unwrap().clone();
-        assert_eq!(
-            calls.len(),
-            1,
-            "joining node should be activated exactly once, got {calls:?}"
-        );
+        assert_eq!(calls.len(), 1, "joining node should be activated exactly once, got {calls:?}");
         let mut ports = calls[0].clone();
         ports.sort();
         assert_eq!(ports, vec!["context".to_string(), "in".to_string()]);
@@ -1482,10 +1428,7 @@ mod tests {
                 Ok((
                     vec![Emit::new(
                         "out",
-                        Artifact {
-                            kind: "Goal".to_string(),
-                            data: serde_json::json!({}),
-                        },
+                        Artifact { kind: "Goal".to_string(), data: serde_json::json!({}) },
                     )],
                     self.usage,
                 ))
@@ -1514,13 +1457,7 @@ mod tests {
         );
 
         let mut nodes = HashMap::new();
-        nodes.insert(
-            "src".to_string(),
-            BoxedNode::new(UsageNode {
-                usage,
-                ports: ports.clone(),
-            }),
-        );
+        nodes.insert("src".to_string(), BoxedNode::new(UsageNode { usage, ports: ports.clone() }));
         // A sink so the emit has somewhere to go and the run terminates.
         nodes.insert(
             "sink".to_string(),
@@ -1562,10 +1499,7 @@ mod tests {
         let stats = scheduler
             .run(HashMap::from([(
                 "src".to_string(),
-                vec![Artifact {
-                    kind: "Goal".to_string(),
-                    data: serde_json::json!({}),
-                }],
+                vec![Artifact { kind: "Goal".to_string(), data: serde_json::json!({}) }],
             )]))
             .await
             .unwrap();
@@ -1601,10 +1535,7 @@ mod tests {
             ) -> Result<(Vec<Emit>, crate::graph::node::NodeUsage), NodeError> {
                 tokio::time::sleep(self.delay).await;
                 Ok((
-                    inputs
-                        .into_iter()
-                        .map(|m| Emit::new("out", m.artifact))
-                        .collect(),
+                    inputs.into_iter().map(|m| Emit::new("out", m.artifact)).collect(),
                     crate::graph::node::NodeUsage::default(),
                 ))
             }
@@ -1626,20 +1557,10 @@ mod tests {
         );
         let delay = Duration::from_millis(250);
         let mut nodes = HashMap::new();
-        nodes.insert(
-            "a".to_string(),
-            BoxedNode::new(SlowNode {
-                delay,
-                ports: slow_ports.clone(),
-            }),
-        );
-        nodes.insert(
-            "b".to_string(),
-            BoxedNode::new(SlowNode {
-                delay,
-                ports: slow_ports.clone(),
-            }),
-        );
+        nodes
+            .insert("a".to_string(), BoxedNode::new(SlowNode { delay, ports: slow_ports.clone() }));
+        nodes
+            .insert("b".to_string(), BoxedNode::new(SlowNode { delay, ports: slow_ports.clone() }));
         nodes.insert(
             "sink".to_string(),
             BoxedNode::new(TestNode {
@@ -1679,21 +1600,13 @@ mod tests {
                     description: None,
                 },
             ],
-            edges: vec![
-                Edge::new("a", "out", "sink", "in"),
-                Edge::new("b", "out", "sink", "in"),
-            ],
+            edges: vec![Edge::new("a", "out", "sink", "in"), Edge::new("b", "out", "sink", "in")],
             metadata: serde_json::Value::Null,
         };
         let mut scheduler = Scheduler::new(spec, nodes, Budget::default(), 4);
-        let goal = Artifact {
-            kind: "Goal".to_string(),
-            data: serde_json::json!({}),
-        };
-        let initial = HashMap::from([
-            ("a".to_string(), vec![goal.clone()]),
-            ("b".to_string(), vec![goal]),
-        ]);
+        let goal = Artifact { kind: "Goal".to_string(), data: serde_json::json!({}) };
+        let initial =
+            HashMap::from([("a".to_string(), vec![goal.clone()]), ("b".to_string(), vec![goal])]);
         let start = Instant::now();
         scheduler.run(initial).await.unwrap();
         let elapsed = start.elapsed();
@@ -1759,10 +1672,7 @@ mod tests {
                     Ok((
                         vec![Emit::new(
                             "halt",
-                            Artifact {
-                                kind: "Halt".to_string(),
-                                data: serde_json::json!({}),
-                            },
+                            Artifact { kind: "Halt".to_string(), data: serde_json::json!({}) },
                         )],
                         crate::graph::node::NodeUsage::default(),
                     ))
@@ -1773,10 +1683,7 @@ mod tests {
                     Ok((
                         vec![Emit::new(
                             "continue",
-                            Artifact {
-                                kind: "Goal".to_string(),
-                                data: serde_json::json!({}),
-                            },
+                            Artifact { kind: "Goal".to_string(), data: serde_json::json!({}) },
                         )],
                         crate::graph::node::NodeUsage::default(),
                     ))
@@ -1810,10 +1717,7 @@ mod tests {
                 inputs: Vec<PortMsg>,
             ) -> Result<(Vec<Emit>, crate::graph::node::NodeUsage), NodeError> {
                 Ok((
-                    inputs
-                        .into_iter()
-                        .map(|m| Emit::new("out", m.artifact))
-                        .collect(),
+                    inputs.into_iter().map(|m| Emit::new("out", m.artifact)).collect(),
                     crate::graph::node::NodeUsage::default(),
                 ))
             }
@@ -1826,12 +1730,7 @@ mod tests {
         // per feedback *emit* that crossed — here one emit fans out to two
         // feedback edges, which must still count as ONE cycle.
         let mut nodes = HashMap::new();
-        nodes.insert(
-            "sup".to_string(),
-            BoxedNode::new(SupNode {
-                rounds_left: Mutex::new(2),
-            }),
-        );
+        nodes.insert("sup".to_string(), BoxedNode::new(SupNode { rounds_left: Mutex::new(2) }));
         nodes.insert("echo_a".to_string(), BoxedNode::new(EchoNode));
         nodes.insert("echo_b".to_string(), BoxedNode::new(EchoNode));
 
@@ -1868,14 +1767,8 @@ mod tests {
         };
 
         let mut scheduler = Scheduler::new(spec, nodes, Budget::default(), 4);
-        let goal = Artifact {
-            kind: "Goal".to_string(),
-            data: serde_json::json!({}),
-        };
-        let stats = scheduler
-            .run(HashMap::from([("sup".to_string(), vec![goal])]))
-            .await
-            .unwrap();
+        let goal = Artifact { kind: "Goal".to_string(), data: serde_json::json!({}) };
+        let stats = scheduler.run(HashMap::from([("sup".to_string(), vec![goal])])).await.unwrap();
 
         // The supervisor ran 3 times (initial + 2 continues) then halted. With
         // the synchronized model, each fully-drained cycle is one round. The

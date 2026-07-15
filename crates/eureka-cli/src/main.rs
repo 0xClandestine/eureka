@@ -205,12 +205,7 @@ async fn main() -> anyhow::Result<()> {
                 commands::daemon::execute_status(&data_dir)?;
             }
         },
-        Commands::Start {
-            goal,
-            description,
-            domain,
-            max_rounds,
-        } => {
+        Commands::Start { goal, description, domain, max_rounds } => {
             commands::session::execute_start(
                 &data_dir,
                 &goal,
@@ -242,24 +237,11 @@ async fn main() -> anyhow::Result<()> {
             SessionCommands::Cancel { id } => {
                 commands::session::execute_cancel(&data_dir, &id).await?;
             }
-            SessionCommands::Inject {
-                id,
-                node,
-                port,
-                data,
-            } => {
+            SessionCommands::Inject { id, node, port, data } => {
                 commands::session::execute_inject(&data_dir, &id, &node, &port, &data).await?;
             }
         },
-        Commands::Run {
-            goal,
-            description,
-            domain,
-            max_rounds,
-            output,
-            verbose,
-            port,
-        } => {
+        Commands::Run { goal, description, domain, max_rounds, output, verbose, port } => {
             commands::run::execute(commands::run::RunArgs {
                 config_path: cli.config.unwrap_or_else(|| "eureka.toml".to_string()),
                 goal,
@@ -287,8 +269,6 @@ async fn main() -> anyhow::Result<()> {
 
 /// Get the default daemon data directory (~/.eureka).
 fn default_data_dir() -> PathBuf {
-    let home = std::env::var("HOME")
-        .ok()
-        .map_or_else(|| PathBuf::from("."), PathBuf::from);
+    let home = std::env::var("HOME").ok().map_or_else(|| PathBuf::from("."), PathBuf::from);
     home.join(".eureka")
 }

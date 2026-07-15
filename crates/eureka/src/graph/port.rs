@@ -97,38 +97,25 @@ impl PortSpec {
     /// Get the kind expected by an input port.
     #[must_use]
     pub fn input_kind(&self, name: &str) -> Option<ArtifactKind> {
-        self.inputs
-            .iter()
-            .find(|p| p.name == name)
-            .map(|p| p.kind.clone())
+        self.inputs.iter().find(|p| p.name == name).map(|p| p.kind.clone())
     }
 
     /// Get the kind emitted by an output port.
     #[must_use]
     pub fn output_kind(&self, name: &str) -> Option<ArtifactKind> {
-        self.outputs
-            .iter()
-            .find(|p| p.name == name)
-            .map(|p| p.kind.clone())
+        self.outputs.iter().find(|p| p.name == name).map(|p| p.kind.clone())
     }
 
     /// Check if an input port exists and is required.
     #[must_use]
     pub fn is_input_required(&self, name: &str) -> bool {
-        self.inputs
-            .iter()
-            .find(|p| p.name == name)
-            .is_some_and(|p| p.required)
+        self.inputs.iter().find(|p| p.name == name).is_some_and(|p| p.required)
     }
 
     /// Return all required input port names.
     #[must_use]
     pub fn required_inputs(&self) -> Vec<String> {
-        self.inputs
-            .iter()
-            .filter(|p| p.required)
-            .map(|p| p.name.clone())
-            .collect()
+        self.inputs.iter().filter(|p| p.required).map(|p| p.name.clone()).collect()
     }
 
     /// Return all output port names.
@@ -203,11 +190,7 @@ mod tests {
         assert!(!PortSpec::new(vec![entry], vec![]).is_input_required("graph"));
 
         // And the default (None) is still required for backward compat.
-        let default = PortDef {
-            port: "in".to_string(),
-            kind: "Goal".to_string(),
-            required: None,
-        };
+        let default = PortDef { port: "in".to_string(), kind: "Goal".to_string(), required: None };
         assert!(default.to_input_spec().required);
     }
 }

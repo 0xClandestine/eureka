@@ -31,10 +31,7 @@ pub fn execute(graph_path: &str) -> Result<()> {
         println!("✓ Graph specification is valid.");
         Ok(())
     } else {
-        println!(
-            "✗ Graph validation failed with {} errors:",
-            result.errors.len()
-        );
+        println!("✗ Graph validation failed with {} errors:", result.errors.len());
         for (i, err) in result.errors.iter().enumerate() {
             println!("  {}. {err}", i + 1);
         }
@@ -47,16 +44,10 @@ pub fn execute(graph_path: &str) -> Result<()> {
 fn build_registry_from_manifest(manifest: &GraphManifest) -> PortRegistry {
     let mut reg = PortRegistry::new();
     for agent in &manifest.agents {
-        reg.register(
-            agent.id.clone(),
-            PortSpec::from_defs(&agent.inputs, &agent.outputs),
-        );
+        reg.register(agent.id.clone(), PortSpec::from_defs(&agent.inputs, &agent.outputs));
     }
     for ctrl in &manifest.control {
-        reg.register(
-            ctrl.kind.clone(),
-            PortSpec::from_defs(&ctrl.inputs, &ctrl.outputs),
-        );
+        reg.register(ctrl.kind.clone(), PortSpec::from_defs(&ctrl.inputs, &ctrl.outputs));
     }
     reg
 }

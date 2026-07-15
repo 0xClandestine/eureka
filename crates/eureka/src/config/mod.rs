@@ -116,12 +116,9 @@ impl Default for EurekaConfig {
     /// fail in practice. Panics (via `unreachable!`) only if `DEFAULT_TOML`
     /// itself is malformed, which is caught by tests.
     fn default() -> Self {
-        Figment::new()
-            .merge(Toml::string(DEFAULT_TOML))
-            .extract::<Self>()
-            .unwrap_or_else(|_| {
-                unreachable!("DEFAULT_TOML must always produce a valid EurekaConfig")
-            })
+        Figment::new().merge(Toml::string(DEFAULT_TOML)).extract::<Self>().unwrap_or_else(|_| {
+            unreachable!("DEFAULT_TOML must always produce a valid EurekaConfig")
+        })
     }
 }
 
@@ -173,9 +170,7 @@ impl EurekaConfig {
         // `EUREKA_BUDGET_MAXWALLCLOCK`. See the field docs on `Budget`.
         figment = figment.merge(Env::prefixed("EUREKA_"));
 
-        figment
-            .extract()
-            .map_err(|e| ConfigError::ParseError(e.to_string()))
+        figment.extract().map_err(|e| ConfigError::ParseError(e.to_string()))
     }
 }
 
@@ -273,10 +268,7 @@ max_rounds = 6
 
         let config = EurekaConfig::load(Some(&toml_path)).unwrap();
         assert_eq!(config.provider.kind, ProviderKind::Anthropic);
-        assert_eq!(
-            config.provider.generation_model.as_deref(),
-            Some("claude-sonnet-4-20250514")
-        );
+        assert_eq!(config.provider.generation_model.as_deref(), Some("claude-sonnet-4-20250514"));
         assert_eq!(config.scheduler.max_in_flight, 4);
         assert!((config.budget.max_cost_usd - 10.0).abs() < f64::EPSILON);
         assert_eq!(config.budget.max_rounds, 6);
@@ -333,10 +325,7 @@ max_rounds = 6
     fn test_pricing_cost_splits_input_and_output() {
         // Gotcha #4: cost must use separate input/output rates, not a flat
         // per-model rate. 1M input @ $0.27 + 0.5M output @ $1.10 = $0.82.
-        let pricing = Pricing {
-            input_per_million: 0.27,
-            output_per_million: 1.10,
-        };
+        let pricing = Pricing { input_per_million: 0.27, output_per_million: 1.10 };
         let cost = pricing.cost(1_000_000, 500_000);
         assert!((cost - 0.82).abs() < 1e-9, "expected 0.82, got {cost}");
         assert!(pricing.is_configured());

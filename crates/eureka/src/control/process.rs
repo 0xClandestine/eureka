@@ -47,12 +47,7 @@ impl ProcessOutput {
         } else {
             stdout.to_string()
         };
-        Self {
-            stdout: capped,
-            stderr: stderr.to_string(),
-            exit_code: status,
-            success,
-        }
+        Self { stdout: capped, stderr: stderr.to_string(), exit_code: status, success }
     }
 }
 
@@ -92,10 +87,8 @@ pub async fn run_subprocess(
         cmd.env(key, val);
     }
 
-    let mut child = cmd.spawn().map_err(|e| ControlError::Spawn {
-        binary: binary.to_string(),
-        source: e,
-    })?;
+    let mut child =
+        cmd.spawn().map_err(|e| ControlError::Spawn { binary: binary.to_string(), source: e })?;
 
     // Take the pipes so we can drive stdin/stdout/stderr concurrently.
     let mut stdin = child.stdin.take();
@@ -148,12 +141,7 @@ pub async fn run_subprocess(
     let stdout_buf = stdout_task.await.unwrap_or_default();
     let stderr_buf = stderr_task.await.unwrap_or_default();
 
-    Ok(ProcessOutput::from_parts(
-        &stdout_buf,
-        &stderr_buf,
-        status.code(),
-        status.success(),
-    ))
+    Ok(ProcessOutput::from_parts(&stdout_buf, &stderr_buf, status.code(), status.success()))
 }
 
 #[cfg(test)]
@@ -162,36 +150,29 @@ mod tests {
 
     #[tokio::test]
     async fn test_echo() {
-        let out = run_subprocess("echo", &["hello".into()], None, &[], "", 5)
-            .await
-            .unwrap();
+        let out = run_subprocess("echo", &["hello".into()], None, &[], "", 5).await.unwrap();
         assert!(out.success);
         assert_eq!(out.stdout, "hello");
     }
 
     #[tokio::test]
     async fn test_stdin_passthrough() {
-        let out = run_subprocess("cat", &[], None, &[], "hello stdin", 5)
-            .await
-            .unwrap();
+        let out = run_subprocess("cat", &[], None, &[], "hello stdin", 5).await.unwrap();
         assert!(out.success);
         assert_eq!(out.stdout, "hello stdin");
     }
 
     #[tokio::test]
     async fn test_nonzero_exit() {
-        let out = run_subprocess("sh", &["-c".into(), "exit 1".into()], None, &[], "", 5)
-            .await
-            .unwrap();
+        let out =
+            run_subprocess("sh", &["-c".into(), "exit 1".into()], None, &[], "", 5).await.unwrap();
         assert!(!out.success);
         assert_eq!(out.exit_code, Some(1));
     }
 
     #[tokio::test]
     async fn test_timeout() {
-        let err = run_subprocess("sleep", &["10".into()], None, &[], "", 1)
-            .await
-            .unwrap_err();
+        let err = run_subprocess("sleep", &["10".into()], None, &[], "", 1).await.unwrap_err();
         assert!(matches!(err, ControlError::Timeout { .. }));
     }
 
@@ -219,10 +200,7 @@ mod tests {
         let big_stdin = "x".repeat(200_000);
         let out = run_subprocess(
             "sh",
-            &[
-                "-c".into(),
-                "yes hello | head -c 200000; cat >/dev/null".into(),
-            ],
+            &["-c".into(), "yes hello | head -c 200000; cat >/dev/null".into()],
             None,
             &[],
             &big_stdin,
@@ -241,9 +219,7 @@ mod tests {
         // panic when slicing into a multi-byte UTF-8 sequence. Pipe a large run
         // of a multibyte char through `cat` so stdout exceeds the cap.
         let payload = "\u{e9}".repeat(MAX_OUTPUT_BYTES + 100);
-        let out = run_subprocess("cat", &[], None, &[], &payload, 10)
-            .await
-            .unwrap();
+        let out = run_subprocess("cat", &[], None, &[], &payload, 10).await.unwrap();
         assert!(out.success);
         assert!(out.stdout.ends_with("[truncated]"));
     }

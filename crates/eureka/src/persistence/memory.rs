@@ -59,9 +59,7 @@ impl RunRepository for InMemoryRunPersistence {
         expected: Revision,
     ) -> Result<RunRecord, PersistenceError> {
         let mut runs = self.runs.write().await;
-        let current = runs
-            .get(&record.id)
-            .ok_or(PersistenceError::NotFound(record.id))?;
+        let current = runs.get(&record.id).ok_or(PersistenceError::NotFound(record.id))?;
         if current.revision != expected {
             return Err(PersistenceError::RevisionConflict {
                 run_id: record.id,
@@ -113,25 +111,15 @@ impl EventStore for InMemoryRunPersistence {
     ) -> Result<RunEvent, PersistenceError> {
         let mut events = self.events.write().await;
         let sequence = events.get(&run_id).map_or(0, |items| items.len() as u64);
-        let entry = RunEvent {
-            run_id,
-            sequence,
-            timestamp_ms: super::sqlite::unix_timestamp_ms(),
-            event,
-        };
+        let entry =
+            RunEvent { run_id, sequence, timestamp_ms: super::sqlite::unix_timestamp_ms(), event };
         events.entry(run_id).or_default().push(entry.clone());
         drop(events);
         Ok(entry)
     }
 
     async fn load_events(&self, run_id: uuid::Uuid) -> Result<Vec<RunEvent>, PersistenceError> {
-        Ok(self
-            .events
-            .read()
-            .await
-            .get(&run_id)
-            .cloned()
-            .unwrap_or_default())
+        Ok(self.events.read().await.get(&run_id).cloned().unwrap_or_default())
     }
 
     async fn delete_events(&self, run_id: uuid::Uuid) -> Result<(), PersistenceError> {
@@ -162,15 +150,11 @@ impl RunStore for InMemoryRunPersistence {
     }
 
     async fn get(&self, id: uuid::Uuid) -> std::io::Result<Option<RunRecord>> {
-        self.get_versioned(id)
-            .await
-            .map_err(|error| std::io::Error::other(error.to_string()))
+        self.get_versioned(id).await.map_err(|error| std::io::Error::other(error.to_string()))
     }
 
     async fn delete(&self, id: uuid::Uuid) -> std::io::Result<()> {
-        self.delete_versioned(id)
-            .await
-            .map_err(|error| std::io::Error::other(error.to_string()))
+        self.delete_versioned(id).await.map_err(|error| std::io::Error::other(error.to_string()))
     }
 
     async fn list(&self) -> std::io::Result<Vec<RunRecord>> {
@@ -237,10 +221,7 @@ impl FileRunStore {
     /// Create a file store rooted at `directory`.
     #[must_use]
     pub fn new(directory: impl Into<PathBuf>) -> Self {
-        Self {
-            directory: Arc::new(directory.into()),
-            lock: Arc::new(tokio::sync::Mutex::new(())),
-        }
+        Self { directory: Arc::new(directory.into()), lock: Arc::new(tokio::sync::Mutex::new(())) }
     }
 
     /// Return the directory containing run records.
@@ -337,18 +318,11 @@ impl FileRunStore {
 impl RunRepository for FileRunStore {
     async fn create(&self, mut record: RunRecord) -> Result<RunRecord, PersistenceError> {
         let _guard = self.lock.lock().await;
-        if self
-            .read_record(record.id)
-            .await
-            .map_err(PersistenceError::from)?
-            .is_some()
-        {
+        if self.read_record(record.id).await.map_err(PersistenceError::from)?.is_some() {
             return Err(PersistenceError::AlreadyExists(record.id));
         }
         record.revision = Revision::default();
-        self.write_record(&record)
-            .await
-            .map_err(PersistenceError::from)?;
+        self.write_record(&record).await.map_err(PersistenceError::from)?;
         Ok(record)
     }
 
@@ -375,9 +349,7 @@ impl RunRepository for FileRunStore {
             });
         }
         record.revision = Revision(expected.0.saturating_add(1));
-        self.write_record(&record)
-            .await
-            .map_err(PersistenceError::from)?;
+        self.write_record(&record).await.map_err(PersistenceError::from)?;
         Ok(record)
     }
 
@@ -422,9 +394,7 @@ impl CheckpointStore for FileRunStore {
         .await
         .map_err(io_err)??;
         if let Some(expected) = expected {
-            let actual = current
-                .as_ref()
-                .map_or_else(Revision::default, |item| item.revision);
+            let actual = current.as_ref().map_or_else(Revision::default, |item| item.revision);
             if actual != expected {
                 return Err(PersistenceError::RevisionConflict {
                     run_id: checkpoint.run_id,
@@ -515,18 +485,12 @@ mod tests {
         assert_eq!(values.get("EUREKA_SESSION_ID"), Some(&"run-1".to_string()));
         assert_eq!(values.get("EUREKA_NODE_ID"), Some(&"ranker".to_string()));
         assert_eq!(values.get("EUREKA_ROUND"), Some(&"3".to_string()));
-        assert_eq!(
-            values.get("EUREKA_DB_PATH"),
-            Some(&"run.sqlite".to_string())
-        );
+        assert_eq!(values.get("EUREKA_DB_PATH"), Some(&"run.sqlite".to_string()));
         assert_eq!(
             values.get("EUREKA_DB_SCHEMA_VERSION"),
             Some(&DATABASE_SCHEMA_VERSION.to_string())
         );
-        assert_eq!(
-            values.get("EUREKA_DB_NAMESPACE"),
-            Some(&"ranker".to_string())
-        );
+        assert_eq!(values.get("EUREKA_DB_NAMESPACE"), Some(&"ranker".to_string()));
     }
 
     #[tokio::test]
@@ -550,26 +514,19 @@ mod tests {
         let directory = tempfile::tempdir().unwrap();
         let store = FileRunStore::new(directory.path());
         let id = uuid::Uuid::now_v7();
-        let created = RunRepository::create(
-            &store,
-            RunRecord::new(id, "graph.yml", serde_json::json!({})),
-        )
-        .await
-        .unwrap();
+        let created =
+            RunRepository::create(&store, RunRecord::new(id, "graph.yml", serde_json::json!({})))
+                .await
+                .unwrap();
         let mut updated = created.clone();
         updated.status = RunStatus::Running;
-        let updated = RunRepository::save_if_revision(&store, updated, created.revision)
-            .await
-            .unwrap();
+        let updated =
+            RunRepository::save_if_revision(&store, updated, created.revision).await.unwrap();
         let mut stale = created;
         stale.status = RunStatus::Failed;
-        let error = RunRepository::save_if_revision(&store, stale, Revision(0))
-            .await
-            .unwrap_err();
+        let error = RunRepository::save_if_revision(&store, stale, Revision(0)).await.unwrap_err();
         assert!(matches!(error, PersistenceError::RevisionConflict { .. }));
-        let records = RunRepository::list(&store, RunFilter::default())
-            .await
-            .unwrap();
+        let records = RunRepository::list(&store, RunFilter::default()).await.unwrap();
         assert_eq!(records, vec![updated]);
     }
 
@@ -581,21 +538,15 @@ mod tests {
         let store = FileRunStore::new(directory.path());
         let run_id = uuid::Uuid::now_v7();
         let checkpoint = RunCheckpoint::new(run_id, "graph-v1".into(), "config-v1".into());
-        let saved = CheckpointStore::save_checkpoint(&store, checkpoint, None)
-            .await
-            .unwrap();
+        let saved = CheckpointStore::save_checkpoint(&store, checkpoint, None).await.unwrap();
         assert_eq!(saved.revision, Revision(1));
-        let loaded = CheckpointStore::load_checkpoint(&store, run_id)
-            .await
-            .unwrap()
-            .unwrap();
+        let loaded = CheckpointStore::load_checkpoint(&store, run_id).await.unwrap().unwrap();
         assert_eq!(loaded, saved);
 
         let mut next = saved.clone();
         next.round = 2;
-        let next = CheckpointStore::save_checkpoint(&store, next, Some(saved.revision))
-            .await
-            .unwrap();
+        let next =
+            CheckpointStore::save_checkpoint(&store, next, Some(saved.revision)).await.unwrap();
         assert_eq!(next.revision, Revision(2));
         let mut stale = next.clone();
         stale.round = 1;
@@ -611,12 +562,10 @@ mod tests {
 
         let store = InMemoryRunPersistence::new();
         let id = uuid::Uuid::now_v7();
-        let record = RunRepository::create(
-            &store,
-            RunRecord::new(id, "graph.yml", serde_json::json!({})),
-        )
-        .await
-        .unwrap();
+        let record =
+            RunRepository::create(&store, RunRecord::new(id, "graph.yml", serde_json::json!({})))
+                .await
+                .unwrap();
         let checkpoint = CheckpointStore::save_checkpoint(
             &store,
             RunCheckpoint::new(id, "graph".into(), "config".into()),
@@ -625,9 +574,6 @@ mod tests {
         .await
         .unwrap();
         assert_eq!(checkpoint.revision, Revision(1));
-        assert_eq!(
-            RunRepository::get_versioned(&store, id).await.unwrap(),
-            Some(record)
-        );
+        assert_eq!(RunRepository::get_versioned(&store, id).await.unwrap(), Some(record));
     }
 }
