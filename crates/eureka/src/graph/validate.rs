@@ -521,7 +521,7 @@ mod tests {
         };
 
         let result = validate_graph(&spec, &registry);
-        let _ = result;
+        assert!(result.valid, "expected valid graph but got errors: {:?}", result.errors);
     }
 
     #[test]

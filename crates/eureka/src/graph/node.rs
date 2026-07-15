@@ -91,17 +91,6 @@ pub enum NodeError {
     #[error("Agent error: {0}")]
     Agent(String),
 
-    /// The artifact kind does not match the expected port kind.
-    #[error("Port kind mismatch on port {port}: expected {expected:?}, got {got:?}")]
-    PortKind {
-        /// The port name.
-        port: String,
-        /// The expected artifact kind.
-        expected: &'static str,
-        /// The actual artifact kind.
-        got: String,
-    },
-
     /// A timeout occurred during processing.
     #[error("Node processing timed out: {0}")]
     Timeout(String),

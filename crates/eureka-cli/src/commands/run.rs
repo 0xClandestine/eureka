@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use eureka::config::{Budget, EurekaConfig};
-use eureka::persistence::{open_persistence, CheckpointStore, RunPersistence, RunStore};
+use eureka::persistence::{open_persistence, CheckpointStore, EventStore, RunPersistence};
 use eureka::{RunManager, Session};
 use tokio::sync::broadcast;
 
@@ -78,11 +78,12 @@ pub async fn execute(args: RunArgs) -> Result<()> {
     } else {
         None
     };
-    let persistence: Arc<dyn RunPersistence> = open_persistence(
-        db_path.clone().ok_or_else(|| anyhow::anyhow!("failed to create session directory"))?,
-    )
-    .await
-    .context("Failed to open SQLite persistence")?;
+    let persistence: Arc<dyn RunPersistence> = match db_path.clone() {
+        Some(path) => open_persistence(path)
+            .await
+            .context("Failed to open SQLite persistence")?,
+        None => Arc::new(eureka::InMemoryRunPersistence::new()),
+    };
 
     let manager = RunManager::new(
         config.clone(),
@@ -99,10 +100,8 @@ pub async fn execute(args: RunArgs) -> Result<()> {
     // Create the session — loads the manifest, validates, preps for run
     let mut session = Session::new(config, &session_id.to_string(), db_path)
         .context("Failed to create session")?;
-    let checkpoint_store: Arc<dyn CheckpointStore> =
-        Arc::clone(&persistence) as Arc<dyn CheckpointStore>;
-    session.set_checkpoint_store(checkpoint_store);
-    session.set_event_store(Arc::clone(&persistence));
+    session.set_checkpoint_store(Arc::clone(&persistence) as Arc<dyn CheckpointStore>);
+    session.set_event_store(Arc::clone(&persistence) as Arc<dyn EventStore>);
 
     tracing::info!(
         goal = %args.goal,

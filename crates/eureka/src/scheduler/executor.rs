@@ -337,16 +337,21 @@ impl Scheduler {
                     // Delivering the goal artifact into the source node's first
                     // input port; this either fires immediately (single-input
                     // node) or buffers until the remaining required inputs arrive.
+                    let port = self.nodes[source_id]
+                        .ports()
+                        .input_names()
+                        .into_iter()
+                        .next()
+                        .ok_or_else(|| {
+                            SchedulerError::Internal(format!(
+                                "source node '{source_id}' has no input ports; \
+                                 cannot inject initial artifact"
+                            ))
+                        })?;
                     let dispatched = self.deliver_input(
                         source_id,
                         // The first declared input port receives the goal.
-                        self.nodes[source_id]
-                            .ports()
-                            .input_names()
-                            .first()
-                            .cloned()
-                            .unwrap_or_default()
-                            .as_str(),
+                        port.as_str(),
                         artifact.clone(),
                         current_round,
                         &mut input_buffer,

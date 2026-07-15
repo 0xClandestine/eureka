@@ -61,6 +61,36 @@ enum Commands {
     #[command(subcommand)]
     Session(SessionCommands),
 
+    /// Run a research session directly (no daemon required).
+    Run {
+        /// The research goal (title).
+        goal: String,
+
+        /// Description of the research question.
+        #[arg(short, long)]
+        description: Option<String>,
+
+        /// Domain of study.
+        #[arg(short = 'D', long, default_value = "general")]
+        domain: String,
+
+        /// Maximum number of rounds.
+        #[arg(short = 'r', long)]
+        max_rounds: Option<u32>,
+
+        /// Output file path for run stats JSON.
+        #[arg(short, long)]
+        output: Option<String>,
+
+        /// Verbose output.
+        #[arg(short, long)]
+        verbose: bool,
+
+        /// Port for the observability UI server (0 = disabled).
+        #[arg(long, default_value_t = 7773)]
+        port: u16,
+    },
+
     /// Validate a graph specification file.
     Validate {
         /// Path to the graph spec file.
@@ -221,6 +251,27 @@ async fn main() -> anyhow::Result<()> {
                 commands::session::execute_inject(&data_dir, &id, &node, &port, &data).await?;
             }
         },
+        Commands::Run {
+            goal,
+            description,
+            domain,
+            max_rounds,
+            output,
+            verbose,
+            port,
+        } => {
+            commands::run::execute(commands::run::RunArgs {
+                config_path: cli.config.unwrap_or_else(|| "eureka.toml".to_string()),
+                goal,
+                description,
+                domain,
+                max_rounds,
+                output,
+                verbose,
+                port,
+            })
+            .await?;
+        }
         Commands::Validate { graph } => {
             commands::validate::execute(&graph)?;
         }
