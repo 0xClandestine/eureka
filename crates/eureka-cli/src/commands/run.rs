@@ -58,7 +58,12 @@ pub async fn execute(args: RunArgs) -> Result<()> {
     // lives alongside the graph.
     let graph_path = Path::new(&config.graph);
     let graph_dir = graph_path.parent().unwrap_or_else(|| Path::new("."));
-    let sessions_dir = graph_dir.join(".eureka").join("sessions");
+    // Canonicalize to an absolute path so EUREKA_DB_PATH is absolute when
+    // passed to tool subprocesses that run with current_dir = graph_dir.
+    // Without this, a relative db_path resolves incorrectly inside the subprocess.
+    let graph_dir_abs =
+        std::fs::canonicalize(graph_dir).unwrap_or_else(|_| graph_dir.to_path_buf());
+    let sessions_dir = graph_dir_abs.join(".eureka").join("sessions");
     let db_path = sessions_dir.join(format!("{session_id}.sqlite"));
     if let Err(e) = std::fs::create_dir_all(&sessions_dir) {
         tracing::warn!(
