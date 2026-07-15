@@ -317,7 +317,12 @@ pub fn validate_graph(spec: &GraphSpec, registry: &PortRegistry) -> ValidationRe
     }
 }
 
-/// Tarjan's strongly connected components algorithm.
+/// Tarjan's strongly connected components algorithm (iterative).
+///
+/// Uses an explicit work stack instead of recursion to avoid stack overflow on
+/// large graphs.  Each work-stack frame carries the node being visited and the
+/// index into its adjacency list that should be processed next, mirroring the
+/// recursive call/return structure without growing the thread stack.
 #[must_use]
 fn tarjan_scc(spec: &GraphSpec) -> Vec<Vec<String>> {
     let node_ids: Vec<&str> = spec.nodes.iter().map(|n| n.id.as_str()).collect();
@@ -338,69 +343,67 @@ fn tarjan_scc(spec: &GraphSpec) -> Vec<Vec<String>> {
     }
 
     let n = node_ids.len();
-    let mut index = 0usize;
+    let mut next_index = 0usize;
     let mut indices: Vec<usize> = vec![usize::MAX; n];
     let mut lowlink: Vec<usize> = vec![0; n];
     let mut on_stack: Vec<bool> = vec![false; n];
-    let mut stack: Vec<usize> = Vec::new();
+    let mut scc_stack: Vec<usize> = Vec::new();
     let mut sccs: Vec<Vec<String>> = Vec::new();
 
-    #[allow(clippy::items_after_statements, clippy::too_many_arguments)]
-    fn strongconnect(
-        v: usize,
-        index: &mut usize,
-        indices: &mut Vec<usize>,
-        lowlink: &mut Vec<usize>,
-        on_stack: &mut Vec<bool>,
-        stack: &mut Vec<usize>,
-        adj: &[Vec<usize>],
-        node_ids: &[&str],
-        sccs: &mut Vec<Vec<String>>,
-    ) {
-        indices[v] = *index;
-        lowlink[v] = *index;
-        *index += 1;
-        stack.push(v);
-        on_stack[v] = true;
+    // Work-stack frame: (node, next_child_index).
+    // On entry the frame has next_child_index = 0 (process first child next).
+    // After visiting a child we return here with an incremented index.
+    let mut work: Vec<(usize, usize)> = Vec::new();
 
-        for &w in &adj[v] {
-            if indices[w] == usize::MAX {
-                strongconnect(
-                    w, index, indices, lowlink, on_stack, stack, adj, node_ids, sccs,
-                );
-                lowlink[v] = lowlink[v].min(lowlink[w]);
-            } else if on_stack[w] {
-                lowlink[v] = lowlink[v].min(indices[w]);
-            }
+    for root in 0..n {
+        if indices[root] != usize::MAX {
+            continue;
         }
 
-        if lowlink[v] == indices[v] {
-            let mut scc: Vec<String> = Vec::new();
-            while let Some(w) = stack.pop() {
-                on_stack[w] = false;
-                scc.push(node_ids[w].to_string());
-                if w == v {
-                    break;
+        // Push the root as if we "called" strongconnect(root).
+        work.push((root, 0));
+        indices[root] = next_index;
+        lowlink[root] = next_index;
+        next_index += 1;
+        scc_stack.push(root);
+        on_stack[root] = true;
+
+        while let Some((v, child_idx)) = work.last_mut() {
+            let v = *v;
+            if *child_idx < adj[v].len() {
+                let w = adj[v][*child_idx];
+                *child_idx += 1;
+                if indices[w] == usize::MAX {
+                    // Tree edge — "recurse" into w.
+                    work.push((w, 0));
+                    indices[w] = next_index;
+                    lowlink[w] = next_index;
+                    next_index += 1;
+                    scc_stack.push(w);
+                    on_stack[w] = true;
+                } else if on_stack[w] {
+                    // Back edge.
+                    lowlink[v] = lowlink[v].min(indices[w]);
+                }
+            } else {
+                // All children of v processed — "return" from strongconnect(v).
+                work.pop();
+                if let Some(&(parent, _)) = work.last() {
+                    lowlink[parent] = lowlink[parent].min(lowlink[v]);
+                }
+                if lowlink[v] == indices[v] {
+                    let mut scc: Vec<String> = Vec::new();
+                    while let Some(w) = scc_stack.pop() {
+                        on_stack[w] = false;
+                        scc.push(node_ids[w].to_string());
+                        if w == v {
+                            break;
+                        }
+                    }
+                    scc.sort();
+                    sccs.push(scc);
                 }
             }
-            scc.sort();
-            sccs.push(scc);
-        }
-    }
-
-    for v in 0..n {
-        if indices[v] == usize::MAX {
-            strongconnect(
-                v,
-                &mut index,
-                &mut indices,
-                &mut lowlink,
-                &mut on_stack,
-                &mut stack,
-                &adj,
-                &node_ids,
-                &mut sccs,
-            );
         }
     }
 

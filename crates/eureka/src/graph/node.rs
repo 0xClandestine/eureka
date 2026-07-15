@@ -106,7 +106,7 @@ pub enum NodeError {
 
 /// Resource usage reported by a node for a single activation.
 ///
-/// The scheduler accumulates these into [`crate::graph::control::RunStats`] so
+/// The scheduler accumulates these into [`crate::config::RunStats`] so
 /// the cost/token budget backstops can fire. LLM-backed nodes populate token
 /// counts (and an optional best-effort cost when a per-model rate is
 /// configured); subprocess and mock nodes return the zero default.

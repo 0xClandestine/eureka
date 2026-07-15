@@ -122,7 +122,7 @@ impl super::Session {
         for tool in &agent_def.tools {
             if tool.name.eq_ignore_ascii_case("submit") {
                 return Err(EngineError::NodeCreation(format!(
-                    "Agent '{}' declares a tool named 'submit', which is reserved
+                    "Agent '{}' declares a tool named 'submit', which is reserved \
                      for the agent's terminal output tool. Rename the tool.",
                     agent_spec.id
                 )));
@@ -253,7 +253,7 @@ impl super::Session {
         node_config: &serde_json::Value,
     ) -> BoxedNode {
         let def = ControlNodeDef {
-            name: format!("{}.{}", ctrl_spec.kind, ctrl_spec.id),
+            name: format!("{}::{}", ctrl_spec.kind, ctrl_spec.id),
             work_dir: self.graph_dir.clone(),
             command: ctrl_spec.command.clone(),
             inputs: ctrl_spec.inputs.clone(),
