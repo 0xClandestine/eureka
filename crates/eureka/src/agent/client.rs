@@ -253,24 +253,33 @@ impl<M: CompletionModel + Clone + Send + Sync + 'static> LlmClient for RigClient
             .prompt(initial_message)
             .max_turns(max_iterations as usize)
             .extended_details()
-            .await
-            .map_err(|e| AgentError::Provider(e.to_string()))?;
+            .await;
 
-        let usage = NodeUsage::from_rig_usage(
-            response.usage.input_tokens,
-            response.usage.output_tokens,
-            response.usage.total_tokens,
-            self.pricing.as_ref(),
-        );
-
+        // Check submit result before propagating any error: the agent may have
+        // called submit on its final turn and Rig still returns MaxTurnsError.
         let submitted =
             result.lock().map_err(|e| AgentError::Provider(format!("lock poisoned: {e}")))?.take();
 
-        let value = submitted.ok_or_else(|| {
-            AgentError::ExtractionFailed(
-                "Agent exhausted iterations without calling submit".to_string(),
-            )
-        })?;
+        let (value, usage) = match (response, submitted) {
+            (Ok(resp), Some(v)) => {
+                let u = NodeUsage::from_rig_usage(
+                    resp.usage.input_tokens,
+                    resp.usage.output_tokens,
+                    resp.usage.total_tokens,
+                    self.pricing.as_ref(),
+                );
+                (v, u)
+            }
+            // Submit called on the last turn; Rig raises MaxTurnsError but the
+            // result is valid.  Usage is unavailable, so use zero.
+            (Err(_), Some(v)) => (v, NodeUsage::default()),
+            (Ok(_), None) => {
+                return Err(AgentError::ExtractionFailed(
+                    "Agent exhausted iterations without calling submit".to_string(),
+                ));
+            }
+            (Err(e), None) => return Err(AgentError::Provider(e.to_string())),
+        };
 
         Ok((value, usage))
     }
