@@ -130,9 +130,8 @@ impl Session {
             client_cache.insert(default_model.clone(), client);
         }
 
-        let session_id = uuid::Uuid::parse_str(session_id).map_err(|e| {
-            EngineError::Run(format!("invalid session UUID '{session_id}': {e}"))
-        })?;
+        let session_id = uuid::Uuid::parse_str(session_id)
+            .map_err(|e| EngineError::Run(format!("invalid session UUID '{session_id}': {e}")))?;
 
         Ok(Self {
             config,

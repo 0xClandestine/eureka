@@ -130,8 +130,7 @@ impl super::Session {
         }
 
         // Connect MCP servers declared by this agent.
-        let mcp_connections =
-            connect_mcp_servers(&agent_def.mcp_servers, &self.graph_dir).await?;
+        let mcp_connections = connect_mcp_servers(&agent_def.mcp_servers, &self.graph_dir).await?;
 
         // Validate MCP tool names: must not be 'submit', must not clash with
         // CommandTools, and must be unique across all MCP servers for this agent.
@@ -147,7 +146,10 @@ impl super::Session {
                         agent_spec.id
                     )));
                 }
-                if command_names.iter().any(|n| n.eq_ignore_ascii_case(&mcp_tool.name)) {
+                if command_names
+                    .iter()
+                    .any(|n| n.eq_ignore_ascii_case(&mcp_tool.name))
+                {
                     return Err(EngineError::NodeCreation(format!(
                         "Agent '{}': MCP tool '{}' conflicts with a CommandTool of the \
                          same name. Tool names must be unique across all sources.",
@@ -298,10 +300,7 @@ async fn connect_mcp_servers(
     let mut connections = Vec::with_capacity(specs.len());
     for spec in specs {
         let conn = connect_one_server(spec, graph_dir).await.map_err(|e| {
-            EngineError::NodeCreation(format!(
-                "Failed to connect MCP server '{}': {e}",
-                spec.name
-            ))
+            EngineError::NodeCreation(format!("Failed to connect MCP server '{}': {e}", spec.name))
         })?;
         connections.push(conn);
     }
@@ -337,8 +336,7 @@ async fn connect_one_server(
             })
         }
         McpTransport::Http { uri } => {
-            let transport =
-                rmcp::transport::StreamableHttpClientTransport::from_uri(uri.as_str());
+            let transport = rmcp::transport::StreamableHttpClientTransport::from_uri(uri.as_str());
             let service = rmcp::model::ClientInfo::default()
                 .serve(transport)
                 .await
@@ -414,4 +412,3 @@ pub(super) fn build_client(
         )),
     }
 }
-

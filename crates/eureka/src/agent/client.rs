@@ -373,8 +373,12 @@ impl Tool for Submit {
     }
 
     async fn call(&self, args: Self::Args) -> Result<Self::Output, Self::Error> {
-        if let Ok(mut guard) = self.result.lock() {
-            *guard = Some(args);
+        match self.result.lock() {
+            Ok(mut guard) => *guard = Some(args),
+            Err(e) => {
+                tracing::error!("submit result mutex poisoned: {e}");
+                return Err(SubmitError);
+            }
         }
         Ok("Output submitted.".to_string())
     }

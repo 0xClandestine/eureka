@@ -308,11 +308,18 @@ fn strip_event_artifacts(event: &SchedulerEvent) -> SchedulerEvent {
 
 /// Compute a stable content hash for checkpoint identity validation.
 fn stable_hash<T: serde::Serialize>(value: &T) -> String {
-    let bytes = serde_json::to_vec(value).unwrap_or_default();
-    let mut hash: u64 = 14_695_981_039_346_656_037;
-    for byte in bytes {
-        hash ^= u64::from(byte);
-        hash = hash.wrapping_mul(1_099_511_628_211);
+    match serde_json::to_vec(value) {
+        Ok(bytes) => {
+            let mut hash: u64 = 14_695_981_039_346_656_037;
+            for byte in bytes {
+                hash ^= u64::from(byte);
+                hash = hash.wrapping_mul(1_099_511_628_211);
+            }
+            format!("{hash:016x}")
+        }
+        Err(e) => {
+            error!("stable_hash: serialization failed — checkpoint identity will not match: {e}");
+            format!("error:{e}")
+        }
     }
-    format!("{hash:016x}")
 }

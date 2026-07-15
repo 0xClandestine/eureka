@@ -450,10 +450,13 @@ impl Scheduler {
                         }
                         Some(SchedulerSignal::Pause) => {
                             info!(round = current_round, "Run paused");
-                            let _ = self
+                            if let Err(e) = self
                                 .event_tx
                                 .send(SchedulerEvent::RunPaused { round: current_round })
-                                .await;
+                                .await
+                            {
+                                tracing::debug!(error = %e, "scheduler event dropped");
+                            }
                             tasks.abort_all();
                             self.stats.elapsed_secs = start.elapsed().as_secs_f64();
                             self.persist_checkpoint(
@@ -506,13 +509,15 @@ impl Scheduler {
                                             "data": e.artifact.data,
                                         }))
                                         .collect();
-                                    let _ = self.event_tx.send(SchedulerEvent::ActivationCompleted {
+                                    if let Err(e) = self.event_tx.send(SchedulerEvent::ActivationCompleted {
                                         node_id: node_id.clone(),
                                         node_kind: node_kind.clone(),
                                         round,
                                         emit_count: emits.len(),
                                         outputs: event_outputs,
-                                    }).await;
+                                    }).await {
+                                        tracing::debug!(error = %e, "scheduler event dropped");
+                                    }
 
                                     // Best-effort RAG indexing: spawn a
                                     // background task for each emission.
@@ -563,12 +568,14 @@ impl Scheduler {
                                 Err(err) => {
                                     warn!(%node_id, error = %err, "Node activation failed");
                                     let error_text = err.to_string();
-                                    let _ = self.event_tx.send(SchedulerEvent::ActivationFailed {
+                                    if let Err(e) = self.event_tx.send(SchedulerEvent::ActivationFailed {
                                         node_id: node_id.clone(),
                                         node_kind: node_kind.clone(),
                                         round,
                                         error: error_text.clone(),
-                                    }).await;
+                                    }).await {
+                                        tracing::debug!(error = %e, "scheduler event dropped");
+                                    }
                                     self.cancel.cancel();
                                     tasks.abort_all();
                                     self.stats.elapsed_secs = start.elapsed().as_secs_f64();
@@ -592,9 +599,11 @@ impl Scheduler {
                                 current_round += 1;
                                 self.stats.rounds_completed = current_round;
                                 advanced_round = true;
-                                let _ = self.event_tx.send(SchedulerEvent::CycleCompleted {
+                                if let Err(e) = self.event_tx.send(SchedulerEvent::CycleCompleted {
                                     round: current_round,
-                                }).await;
+                                }).await {
+                                    tracing::debug!(error = %e, "scheduler event dropped");
+                                }
                             }
                             if advanced_round {
                                 self.persist_checkpoint(
@@ -604,7 +613,27 @@ impl Scheduler {
                                     &in_flight,
                                     &outputs,
                                     CheckpointReason::RoundCompleted,
-                                ).await?;
+                                )
+                                .await?;
+                                // Check max_rounds immediately after advancing to avoid
+                                // a one-round overshoot before the ticker fires.
+                                if let Some(reason) =
+                                    self.stats.is_budget_exhausted(&self.budget)
+                                {
+                                    info!(%reason, "Budget exhausted, halting run");
+                                    if let Err(e) = self
+                                        .event_tx
+                                        .send(SchedulerEvent::RunHalted {
+                                            reason,
+                                            total_rounds: self.stats.rounds_completed,
+                                        })
+                                        .await
+                                    {
+                                        tracing::debug!(error = %e, "scheduler event dropped");
+                                    }
+                                    tasks.abort_all();
+                                    break;
+                                }
                             }
                         }
                         None => {
@@ -619,10 +648,12 @@ impl Scheduler {
                     self.stats.elapsed_secs = start.elapsed().as_secs_f64();
                     if let Some(reason) = self.stats.is_budget_exhausted(&self.budget) {
                         info!(%reason, "Budget exhausted, halting run");
-                        let _ = self.event_tx.send(SchedulerEvent::RunHalted {
-                            reason: reason.clone(),
+                        if let Err(e) = self.event_tx.send(SchedulerEvent::RunHalted {
+                            reason,
                             total_rounds: self.stats.rounds_completed,
-                        }).await;
+                        }).await {
+                            tracing::debug!(error = %e, "scheduler event dropped");
+                        }
                         tasks.abort_all();
                         break;
                     }
@@ -858,13 +889,16 @@ fn spawn_activation(
     let inputs = activation.inputs;
 
     tasks.spawn(async move {
-        let _ = event_tx
+        if let Err(e) = event_tx
             .send(SchedulerEvent::ActivationStarted {
                 node_id: node_id.clone(),
                 node_kind: node_kind.clone(),
                 round,
             })
-            .await;
+            .await
+        {
+            tracing::debug!(error = %e, "scheduler event dropped");
+        }
 
         // Acquire a permit, bailing out promptly if cancelled while
         // waiting for a free slot.

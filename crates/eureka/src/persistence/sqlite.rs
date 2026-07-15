@@ -135,7 +135,9 @@ impl SqliteRunPersistence {
     {
         let conn = Arc::clone(&self.conn);
         tokio::task::spawn_blocking(move || {
-            let guard = conn.lock().map_err(|_| io_err("connection mutex poisoned"))?;
+            let guard = conn
+                .lock()
+                .map_err(|_| io_err("connection mutex poisoned"))?;
             operation(&*guard)
         })
         .await

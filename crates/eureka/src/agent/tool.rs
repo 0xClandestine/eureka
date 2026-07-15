@@ -57,7 +57,7 @@ impl CommandTool {
 
     /// Create a command tool with an explicit run environment.
     #[must_use]
-    pub const fn with_environment(
+    pub fn with_environment(
         def: Arc<ToolDef>,
         node_id: String,
         node_kind: String,
@@ -84,13 +84,18 @@ impl CommandTool {
 
         if let Some(tx) = &self.event_tx {
             let summary = args_summary(&args_val);
-            let _ = tx.try_send(SchedulerEvent::ToolCalled {
-                node_id: self.node_id.clone(),
-                node_kind: self.node_kind.clone(),
-                round: self.round,
-                tool: self.def.name.clone(),
-                args_summary: summary,
-            });
+            if tx
+                .try_send(SchedulerEvent::ToolCalled {
+                    node_id: self.node_id.clone(),
+                    node_kind: self.node_kind.clone(),
+                    round: self.round,
+                    tool: self.def.name.clone(),
+                    args_summary: summary,
+                })
+                .is_err()
+            {
+                tracing::debug!("ToolCalled event dropped: channel full or closed");
+            }
         }
 
         let argv = interpolate(&self.def.command, &args_val);
