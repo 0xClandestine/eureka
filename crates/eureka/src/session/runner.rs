@@ -71,7 +71,7 @@ impl super::Session {
             let node_result = if let Some(override_node) = self.node_overrides.get(&node_spec.id) {
                 Ok(override_node.clone())
             } else {
-                self.construct_node(node_spec)
+                self.construct_node(node_spec).await
             };
             let node = match node_result {
                 Ok(node) => node,

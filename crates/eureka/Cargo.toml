@@ -21,7 +21,8 @@ tracing = "0.1"
 uuid = { version = "1", features = ["v7", "serde"] }
 serde_json = "1"
 serde_yaml = "0.9"
-rig-core = { package = "rig-core", version = "0.40", features = ["derive"] }
+rig-core = { package = "rig-core", version = "0.40", features = ["derive", "rmcp"] }
+rmcp = { version = "1.7.0", features = ["client", "transport-child-process", "transport-streamable-http-client-reqwest"] }
 anyhow = "1"
 figment = { version = "0.10", features = ["toml", "env"] }
 rusqlite = { version = "0.32", features = ["bundled"] }

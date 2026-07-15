@@ -213,6 +213,7 @@ fn test_coscientist_validates() {
                     timeout_secs: t.timeout_secs,
                 })
                 .collect(),
+            mcp_servers: vec![],
         };
         nodes.insert(
             agent_spec.id.clone(),

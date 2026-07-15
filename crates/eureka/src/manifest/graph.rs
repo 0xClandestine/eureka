@@ -181,6 +181,7 @@ edges:
                 config: serde_json::json!({}),
                 tools: vec![],
                 output_schema: serde_json::json!({ "type": "object" }),
+                mcp_servers: vec![],
             }],
             control: vec![],
             edges: vec![],
@@ -236,6 +237,7 @@ agents:
                 config: serde_json::json!({}),
                 tools: vec![],
                 output_schema: serde_json::json!({ "type": "object" }),
+                mcp_servers: vec![],
             }],
             control: vec![ControlSpec {
                 id: "gov".into(),

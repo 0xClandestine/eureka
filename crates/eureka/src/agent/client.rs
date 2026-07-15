@@ -4,6 +4,7 @@
 //! one or more turns optionally calling shell tools, and terminates by calling
 //! the `submit` tool with its structured JSON output.
 
+use std::any::Any;
 use std::sync::{Arc, Mutex};
 
 use crate::graph::node::NodeUsage;
@@ -86,6 +87,31 @@ pub trait LlmClient: Send + Sync {
     }
 }
 
+// ---------------------------------------------------------------------------
+// McpConnection
+// ---------------------------------------------------------------------------
+
+/// A live MCP server connection held by `RigClient` for the session lifetime.
+///
+/// Established during `SessionBuilder::build_agent_node` and kept alive for
+/// every activation of the agent.  The `_service` field holds the
+/// `RunningService` value (type-erased to avoid a transport type parameter);
+/// dropping it closes the connection and — for stdio servers — kills the
+/// subprocess.
+pub(crate) struct McpConnection {
+    /// Tools advertised by the server at connect time.
+    pub tools: Vec<rmcp::model::Tool>,
+    /// Sink for dispatching `call_tool` requests to the server.
+    pub sink: rmcp::service::ServerSink,
+    /// Keeps the underlying `RunningService` (and its transport) alive.
+    /// Type-erased because stdio and HTTP produce different generic types.
+    pub _service: Box<dyn Any + Send + Sync>,
+}
+
+// ---------------------------------------------------------------------------
+// RigClient
+// ---------------------------------------------------------------------------
+
 /// A `LlmClient` backed by any `rig` `CompletionModel`.
 pub struct RigClient<M> {
     /// The underlying rig completion model.
@@ -94,16 +120,20 @@ pub struct RigClient<M> {
     pricing: Option<crate::config::Pricing>,
     /// Optional RAG index handle and `top_k` for `dynamic_context`.
     rag: Option<(crate::rag::RagIndexHandle, usize)>,
+    /// Live MCP server connections for this agent.  Empty for most agents.
+    mcp: Vec<McpConnection>,
 }
 
 impl<M: CompletionModel + Clone + Send + Sync + 'static> RigClient<M> {
     /// Wrap a rig completion model with optional per-input/per-output pricing
     /// used to populate [`NodeUsage::cost_usd`].
-    pub const fn new(model: M, pricing: Option<crate::config::Pricing>) -> Self {
+    #[must_use]
+    pub fn new(model: M, pricing: Option<crate::config::Pricing>) -> Self {
         Self {
             model,
             pricing,
             rag: None,
+            mcp: Vec::new(),
         }
     }
 
@@ -112,6 +142,16 @@ impl<M: CompletionModel + Clone + Send + Sync + 'static> RigClient<M> {
     #[must_use]
     pub fn with_rag(mut self, index: crate::rag::RagIndexHandle, top_k: usize) -> Self {
         self.rag = Some((index, top_k));
+        self
+    }
+
+    /// Attach pre-connected MCP server connections.
+    ///
+    /// Called by `SessionBuilder::build_agent_node` after establishing all
+    /// server connections declared in the agent's `mcp_servers` list.
+    #[must_use]
+    pub(crate) fn with_mcp(mut self, mcp: Vec<McpConnection>) -> Self {
+        self.mcp = mcp;
         self
     }
 }
@@ -171,8 +211,19 @@ impl<M: CompletionModel + Clone + Send + Sync + 'static> LlmClient for RigClient
             result: Arc::clone(&result),
         };
 
-        let tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
-        let full_preamble = build_preamble(preamble, &tool_names, max_iterations, output_schema);
+        let command_tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
+        let mcp_tool_names: Vec<String> = self
+            .mcp
+            .iter()
+            .flat_map(|c| c.tools.iter().map(|t| t.name.to_string()))
+            .collect();
+        let all_tool_names: Vec<&str> = command_tool_names
+            .iter()
+            .copied()
+            .chain(mcp_tool_names.iter().map(String::as_str))
+            .collect();
+        let full_preamble =
+            build_preamble(preamble, &all_tool_names, max_iterations, output_schema);
 
         let command_tools: Vec<Box<dyn rig_core::tool::ToolDyn>> = tools
             .iter()
@@ -189,15 +240,24 @@ impl<M: CompletionModel + Clone + Send + Sync + 'static> LlmClient for RigClient
             })
             .collect();
 
-        let mut builder = AgentBuilder::new(self.model.clone())
+        let mut base_builder = AgentBuilder::new(self.model.clone())
             .preamble(&full_preamble)
             .temperature(temperature);
 
         if let Some((index, top_k)) = &self.rag {
-            builder = builder.dynamic_context(*top_k, index.clone());
+            base_builder = base_builder.dynamic_context(*top_k, index.clone());
         }
 
-        let agent = builder.tool(submit).tools(command_tools).build();
+        // Transition to WithBuilderTools by adding the terminal submit tool first,
+        // then chain command tools and MCP tools (all in WithBuilderTools state).
+        let mut builder = base_builder.tool(submit).tools(command_tools);
+
+        // Register MCP tools for each connected server.
+        for conn in &self.mcp {
+            builder = builder.rmcp_tools(conn.tools.clone(), conn.sink.clone());
+        }
+
+        let agent = builder.build();
 
         // Use the extended prompt path so we get a PromptResponse with
         // aggregated token usage across all turns of the agent loop.

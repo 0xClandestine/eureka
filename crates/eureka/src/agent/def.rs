@@ -2,7 +2,7 @@
 //!
 //! Agents are loaded at startup from the YAML manifest's `agents[]` array,
 //! not from separate files. Each agent carries its preamble, port specs,
-//! LLM config, output schema, and shell tool definitions.
+//! LLM config, output schema, shell tool definitions, and MCP server specs.
 
 pub use crate::config::AgentConfig;
 pub use crate::graph::port::PortDef;
@@ -34,6 +34,30 @@ const fn default_tool_timeout() -> u32 {
     30
 }
 
+/// Runtime transport for an MCP server connection.
+#[derive(Debug, Clone)]
+pub enum McpTransport {
+    /// Stdio subprocess. `command[0]` is the binary.
+    Stdio {
+        /// Full argv (already path-resolved by `AgentSpec::resolve_paths`).
+        command: Vec<String>,
+    },
+    /// Streamable-HTTP server reachable at this URI.
+    Http {
+        /// Full HTTP URI (e.g. `"http://localhost:9000"`).
+        uri: String,
+    },
+}
+
+/// A resolved MCP server definition — runtime counterpart of `McpServerSpec`.
+#[derive(Debug, Clone)]
+pub struct McpServerDef {
+    /// Unique label for this server within the agent.
+    pub name: String,
+    /// How to connect to the server.
+    pub transport: McpTransport,
+}
+
 /// A fully loaded agent definition.
 ///
 /// Produced by the session from a YAML `AgentSpec` + prompt file.
@@ -55,6 +79,8 @@ pub struct AgentDef {
     pub output_schema: serde_json::Value,
     /// Shell tools available to the agent during its loop. May be empty.
     pub tools: Vec<ToolDef>,
+    /// MCP servers to connect at session-build time.  May be empty.
+    pub mcp_servers: Vec<McpServerDef>,
 }
 
 impl AgentDef {

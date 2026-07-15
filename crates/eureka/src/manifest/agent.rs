@@ -7,6 +7,33 @@ use crate::graph::port::PortDef;
 use super::control::ToolSpec;
 use super::prompt::PromptPath;
 
+/// MCP transport variant — how this server is reached.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "transport", rename_all = "lowercase")]
+pub enum McpTransportSpec {
+    /// Spawn a local subprocess; communicate over stdin/stdout.
+    Stdio {
+        /// Subprocess argv. `command[0]` is the binary.
+        /// Resolved against the manifest base directory at load time.
+        command: Vec<String>,
+    },
+    /// Connect to an already-running HTTP server.
+    Http {
+        /// Full HTTP URI, e.g. `"http://localhost:9000"`.
+        uri: String,
+    },
+}
+
+/// An MCP server declaration inside an agent's manifest entry.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct McpServerSpec {
+    /// Unique label for this server within the agent.  Used in logs and errors.
+    pub name: String,
+    /// Transport type and its required parameters.
+    #[serde(flatten)]
+    pub transport: McpTransportSpec,
+}
+
 /// An LLM-powered agent definition, loaded from the YAML manifest.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AgentSpec {
@@ -32,6 +59,9 @@ pub struct AgentSpec {
     pub tools: Vec<ToolSpec>,
     /// JSON Schema for the agent's structured output.
     pub output_schema: serde_json::Value,
+    /// MCP servers to connect at session-build time.  Defaults to empty.
+    #[serde(default)]
+    pub mcp_servers: Vec<McpServerSpec>,
 }
 
 impl AgentSpec {
@@ -40,6 +70,18 @@ impl AgentSpec {
         self.prompt.resolve(base);
         for tool in &mut self.tools {
             tool.resolve_paths(base);
+        }
+        // Resolve `command[0]` of stdio servers: if the binary exists at the
+        // resolved path, rewrite to absolute; otherwise leave for PATH lookup.
+        for server in &mut self.mcp_servers {
+            if let McpTransportSpec::Stdio { ref mut command } = server.transport {
+                if let Some(bin) = command.first_mut() {
+                    let candidate = base.join(&*bin);
+                    if candidate.exists() {
+                        *bin = candidate.to_string_lossy().into_owned();
+                    }
+                }
+            }
         }
     }
 }

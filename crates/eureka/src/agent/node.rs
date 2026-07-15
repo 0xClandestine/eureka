@@ -193,6 +193,7 @@ mod tests {
             config: AgentConfig::default(),
             output_schema: serde_json::json!({ "type": "object" }),
             tools: vec![],
+            mcp_servers: vec![],
         })
     }
 
@@ -272,6 +273,7 @@ mod tests {
             config: AgentConfig::default(),
             output_schema: serde_json::json!({ "type": "object" }),
             tools: vec![],
+            mcp_servers: vec![],
         });
 
         let node = LlmAgentNode::new(def, Arc::new(SplitClient), PathBuf::from("."));
@@ -319,6 +321,7 @@ mod tests {
             config: AgentConfig::default(),
             output_schema: serde_json::json!({ "type": "object" }),
             tools: vec![],
+            mcp_servers: vec![],
         });
 
         struct CaptureClient {

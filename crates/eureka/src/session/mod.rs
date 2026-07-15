@@ -488,8 +488,8 @@ mod tests {
         }
     }
 
-    #[test]
-    fn test_build_agent_node_rejects_submit_tool_name() {
+    #[tokio::test]
+    async fn test_build_agent_node_rejects_submit_tool_name() {
         // Regression (M2): a tool named 'submit' would shadow the terminal
         // submit tool and the agent could never terminate.
         let dir = tempfile::TempDir::new().unwrap();
@@ -522,7 +522,7 @@ edges: []
         let mut session =
             Session::new(config, "00000000-0000-0000-0000-000000000000", None).unwrap();
         let agent_spec = session.manifest.agents.first().unwrap().clone();
-        let result = session.build_agent_node(&agent_spec);
+        let result = session.build_agent_node(&agent_spec).await;
         let err = match result {
             Ok(_) => panic!("build_agent_node must reject a tool named 'submit'"),
             Err(e) => e,
