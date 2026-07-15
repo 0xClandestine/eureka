@@ -128,13 +128,8 @@ impl<M: CompletionModel + Clone + Send + Sync + 'static> RigClient<M> {
     /// Wrap a rig completion model with optional per-input/per-output pricing
     /// used to populate [`NodeUsage::cost_usd`].
     #[must_use]
-    pub fn new(model: M, pricing: Option<crate::config::Pricing>) -> Self {
-        Self {
-            model,
-            pricing,
-            rag: None,
-            mcp: Vec::new(),
-        }
+    pub const fn new(model: M, pricing: Option<crate::config::Pricing>) -> Self {
+        Self { model, pricing, rag: None, mcp: Vec::new() }
     }
 
     /// Attach a RAG index so every agent turn retrieves the top-`k` most
@@ -206,17 +201,11 @@ impl<M: CompletionModel + Clone + Send + Sync + 'static> LlmClient for RigClient
     ) -> Result<(serde_json::Value, NodeUsage), AgentError> {
         let result: Arc<Mutex<Option<serde_json::Value>>> = Arc::new(Mutex::new(None));
 
-        let submit = Submit {
-            schema: output_schema.clone(),
-            result: Arc::clone(&result),
-        };
+        let submit = Submit { schema: output_schema.clone(), result: Arc::clone(&result) };
 
         let command_tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
-        let mcp_tool_names: Vec<String> = self
-            .mcp
-            .iter()
-            .flat_map(|c| c.tools.iter().map(|t| t.name.to_string()))
-            .collect();
+        let mcp_tool_names: Vec<String> =
+            self.mcp.iter().flat_map(|c| c.tools.iter().map(|t| t.name.to_string())).collect();
         let all_tool_names: Vec<&str> = command_tool_names
             .iter()
             .copied()
@@ -240,9 +229,8 @@ impl<M: CompletionModel + Clone + Send + Sync + 'static> LlmClient for RigClient
             })
             .collect();
 
-        let mut base_builder = AgentBuilder::new(self.model.clone())
-            .preamble(&full_preamble)
-            .temperature(temperature);
+        let mut base_builder =
+            AgentBuilder::new(self.model.clone()).preamble(&full_preamble).temperature(temperature);
 
         if let Some((index, top_k)) = &self.rag {
             base_builder = base_builder.dynamic_context(*top_k, index.clone());
@@ -275,10 +263,8 @@ impl<M: CompletionModel + Clone + Send + Sync + 'static> LlmClient for RigClient
             self.pricing.as_ref(),
         );
 
-        let submitted = result
-            .lock()
-            .map_err(|e| AgentError::Provider(format!("lock poisoned: {e}")))?
-            .take();
+        let submitted =
+            result.lock().map_err(|e| AgentError::Provider(format!("lock poisoned: {e}")))?.take();
 
         let value = submitted.ok_or_else(|| {
             AgentError::ExtractionFailed(

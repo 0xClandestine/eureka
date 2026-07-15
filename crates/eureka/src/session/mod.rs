@@ -22,7 +22,7 @@ use crate::manifest::GraphManifest;
 use crate::persistence::{CheckpointStore, EventStore, RunCheckpoint};
 use crate::scheduler::{SchedulerEvent, SchedulerSignal};
 use tokio::sync::{broadcast, mpsc};
-use tracing::{error, info, warn};
+use tracing::{error, info};
 
 /// A session represents a single Eureka research run.
 pub struct Session {
@@ -97,12 +97,7 @@ impl Session {
             return Err(EngineError::Graph(GraphError::ParseError(format!(
                 "Graph validation failed with {} errors: {}",
                 result.errors.len(),
-                result
-                    .errors
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join("; ")
+                result.errors.iter().map(ToString::to_string).collect::<Vec<_>>().join("; ")
             ))));
         }
 
@@ -113,10 +108,7 @@ impl Session {
             "Graph specification validated successfully"
         );
 
-        let graph_dir = graph_path
-            .parent()
-            .unwrap_or_else(|| Path::new("."))
-            .to_path_buf();
+        let graph_dir = graph_path.parent().unwrap_or_else(|| Path::new(".")).to_path_buf();
         let default_model = config
             .provider
             .generation_model
@@ -192,12 +184,7 @@ impl Session {
             return Err(EngineError::Graph(GraphError::ParseError(format!(
                 "Graph validation failed with {} errors: {}",
                 result.errors.len(),
-                result
-                    .errors
-                    .iter()
-                    .map(ToString::to_string)
-                    .collect::<Vec<_>>()
-                    .join("; ")
+                result.errors.iter().map(ToString::to_string).collect::<Vec<_>>().join("; ")
             ))));
         }
 
@@ -297,15 +284,10 @@ impl Session {
             return Err(EngineError::Run(format!("unknown node '{node_id}'")));
         };
         let Some(spec) = registry.get(&node_spec.kind) else {
-            return Err(EngineError::Run(format!(
-                "unknown node kind '{}'",
-                node_spec.kind
-            )));
+            return Err(EngineError::Run(format!("unknown node kind '{}'", node_spec.kind)));
         };
         let Some(expected) = spec.input_kind(port) else {
-            return Err(EngineError::Run(format!(
-                "unknown input port '{node_id}.{port}'"
-            )));
+            return Err(EngineError::Run(format!("unknown input port '{node_id}.{port}'")));
         };
         if expected != kind {
             return Err(EngineError::Graph(GraphError::PortKindMismatch(format!(
@@ -390,16 +372,10 @@ impl Session {
 fn build_port_registry(manifest: &GraphManifest) -> PortRegistry {
     let mut reg = PortRegistry::new();
     for agent in &manifest.agents {
-        reg.register(
-            agent.id.clone(),
-            PortSpec::from_defs(&agent.inputs, &agent.outputs),
-        );
+        reg.register(agent.id.clone(), PortSpec::from_defs(&agent.inputs, &agent.outputs));
     }
     for ctrl in &manifest.control {
-        reg.register(
-            ctrl.kind.clone(),
-            PortSpec::from_defs(&ctrl.inputs, &ctrl.outputs),
-        );
+        reg.register(ctrl.kind.clone(), PortSpec::from_defs(&ctrl.inputs, &ctrl.outputs));
     }
     reg
 }
@@ -441,10 +417,7 @@ mod tests {
             inputs: Vec<PortMsg>,
         ) -> Result<(Vec<Emit>, crate::graph::node::NodeUsage), NodeError> {
             Ok((
-                inputs
-                    .into_iter()
-                    .map(|m| Emit::new("out", m.artifact))
-                    .collect(),
+                inputs.into_iter().map(|m| Emit::new("out", m.artifact)).collect(),
                 crate::graph::node::NodeUsage::default(),
             ))
         }
@@ -477,10 +450,7 @@ mod tests {
             inputs: Vec<PortMsg>,
         ) -> Result<(Vec<Emit>, crate::graph::node::NodeUsage), NodeError> {
             Ok((
-                inputs
-                    .into_iter()
-                    .map(|m| Emit::new("out", m.artifact))
-                    .collect(),
+                inputs.into_iter().map(|m| Emit::new("out", m.artifact)).collect(),
                 crate::graph::node::NodeUsage::default(),
             ))
         }
@@ -526,10 +496,7 @@ edges: []
             Err(e) => e,
         };
         let msg = err.to_string();
-        assert!(
-            msg.contains("reserved"),
-            "error should explain 'submit' is reserved: {msg}"
-        );
+        assert!(msg.contains("reserved"), "error should explain 'submit' is reserved: {msg}");
     }
 
     #[test]
@@ -538,11 +505,7 @@ edges: []
         // `command[0]` (e.g. "python3") to `graph_dir/python3`. The control
         // node spawns with `current_dir = graph_dir`, so PATH lookup handles
         // bare interpreters and relative script args resolve against work_dir.
-        if std::process::Command::new("python3")
-            .arg("--version")
-            .output()
-            .is_err()
-        {
+        if std::process::Command::new("python3").arg("--version").output().is_err() {
             return; // python3 not installed; cannot exercise spawn path
         }
         let dir = tempfile::TempDir::new().unwrap();
@@ -607,11 +570,7 @@ edges: []
         // Regression (E): when a db_path is provided, the control node must
         // expose it to the subprocess as EUREKA_DB_PATH so the Python control
         // nodes can persist state across rounds.
-        if std::process::Command::new("python3")
-            .arg("--version")
-            .output()
-            .is_err()
-        {
+        if std::process::Command::new("python3").arg("--version").output().is_err() {
             return;
         }
         let dir = tempfile::TempDir::new().unwrap();
@@ -635,12 +594,9 @@ edges: []
         config.graph = graph_path.to_string_lossy().to_string();
 
         let db_path = dir.path().join("session.sqlite");
-        let mut session = Session::new(
-            config,
-            "00000000-0000-0000-0000-000000000000",
-            Some(db_path.clone()),
-        )
-        .expect("session should construct");
+        let mut session =
+            Session::new(config, "00000000-0000-0000-0000-000000000000", Some(db_path.clone()))
+                .expect("session should construct");
 
         let ctrl_spec = session.manifest.control.first().unwrap().clone();
         let boxed = session.build_control_node(&ctrl_spec, &serde_json::Value::Null);
@@ -654,9 +610,7 @@ edges: []
             },
         };
         let rt = tokio::runtime::Runtime::new().unwrap();
-        let (emits, _) = rt
-            .block_on(boxed.process(&ctx, vec![msg]))
-            .expect("spawn ok");
+        let (emits, _) = rt.block_on(boxed.process(&ctx, vec![msg])).expect("spawn ok");
         assert_eq!(emits.len(), 1);
         let db = emits[0].artifact.data["db"].as_str().unwrap_or("");
         assert_eq!(db, db_path.to_string_lossy());
@@ -691,11 +645,7 @@ edges: []
         };
 
         let session = Session::from_parts(config, spec, nodes, uuid::Uuid::nil());
-        assert!(
-            session.is_ok(),
-            "from_parts should succeed: {:?}",
-            session.err()
-        );
+        assert!(session.is_ok(), "from_parts should succeed: {:?}", session.err());
     }
 
     #[test]
@@ -726,9 +676,6 @@ edges: []
         };
 
         let result = Session::from_parts(config, spec, nodes, uuid::Uuid::nil());
-        assert!(
-            result.is_err(),
-            "from_parts should fail when nodes are missing"
-        );
+        assert!(result.is_err(), "from_parts should fail when nodes are missing");
     }
 }

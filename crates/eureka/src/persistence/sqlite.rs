@@ -21,9 +21,7 @@ pub(super) fn io_err(error: impl std::fmt::Display) -> PersistenceError {
 pub(super) fn unix_timestamp_ms() -> u64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |duration| {
-            u64::try_from(duration.as_millis()).unwrap_or(u64::MAX)
-        })
+        .map_or(0, |duration| u64::try_from(duration.as_millis()).unwrap_or(u64::MAX))
 }
 
 /// SQLite-backed run persistence.
@@ -39,9 +37,7 @@ pub struct SqliteRunPersistence {
 
 impl std::fmt::Debug for SqliteRunPersistence {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("SqliteRunPersistence")
-            .field("path", &self.path)
-            .finish_non_exhaustive()
+        f.debug_struct("SqliteRunPersistence").field("path", &self.path).finish_non_exhaustive()
     }
 }
 
@@ -135,10 +131,8 @@ impl SqliteRunPersistence {
     {
         let conn = Arc::clone(&self.conn);
         tokio::task::spawn_blocking(move || {
-            let guard = conn
-                .lock()
-                .map_err(|_| io_err("connection mutex poisoned"))?;
-            operation(&*guard)
+            let guard = conn.lock().map_err(|_| io_err("connection mutex poisoned"))?;
+            operation(&guard)
         })
         .await
         .map_err(io_err)?
@@ -197,22 +191,16 @@ impl RunRepository for SqliteRunPersistence {
         let id_text = id.to_string();
         self.blocking(move |connection| {
             let actual: Option<i64> = connection
-                .query_row(
-                    "SELECT revision FROM eureka_runs WHERE id = ?1",
-                    [&id_text],
-                    |row| row.get(0),
-                )
+                .query_row("SELECT revision FROM eureka_runs WHERE id = ?1", [&id_text], |row| {
+                    row.get(0)
+                })
                 .optional()?;
             let Some(actual) = actual else {
                 return Err(PersistenceError::NotFound(id));
             };
             let actual = Revision(actual);
             if actual != expected {
-                return Err(PersistenceError::RevisionConflict {
-                    run_id: id,
-                    expected,
-                    actual,
-                });
+                return Err(PersistenceError::RevisionConflict { run_id: id, expected, actual });
             }
             record.revision = Revision(expected.0 + 1);
             let updated = serde_json::to_string(&record)?;
@@ -258,12 +246,7 @@ impl RunRepository for SqliteRunPersistence {
             if !exists {
                 return Err(PersistenceError::NotFound(id));
             }
-            connection
-                .execute(
-                    "DELETE FROM eureka_checkpoints WHERE run_id = ?1",
-                    [&id_text],
-                )
-                .ok();
+            connection.execute("DELETE FROM eureka_checkpoints WHERE run_id = ?1", [&id_text]).ok();
             connection.execute("DELETE FROM eureka_events WHERE run_id = ?1", [&id_text])?;
             connection.execute("DELETE FROM eureka_runs WHERE id = ?1", [&id_text])?;
             Ok(())
@@ -280,25 +263,18 @@ impl RunStore for SqliteRunPersistence {
             .await
             .map_err(|error| std::io::Error::other(error.to_string()))?;
         let result = match current {
-            Some(current) => self
-                .save_if_revision(record, current.revision)
-                .await
-                .map(|_| ()),
+            Some(current) => self.save_if_revision(record, current.revision).await.map(|_| ()),
             None => self.create(record).await.map(|_| ()),
         };
         result.map_err(|error| std::io::Error::other(error.to_string()))
     }
 
     async fn get(&self, id: uuid::Uuid) -> std::io::Result<Option<RunRecord>> {
-        self.get_versioned(id)
-            .await
-            .map_err(|error| std::io::Error::other(error.to_string()))
+        self.get_versioned(id).await.map_err(|error| std::io::Error::other(error.to_string()))
     }
 
     async fn delete(&self, id: uuid::Uuid) -> std::io::Result<()> {
-        self.delete_versioned(id)
-            .await
-            .map_err(|error| std::io::Error::other(error.to_string()))
+        self.delete_versioned(id).await.map_err(|error| std::io::Error::other(error.to_string()))
     }
 
     async fn list(&self) -> std::io::Result<Vec<RunRecord>> {
@@ -379,9 +355,7 @@ impl CheckpointStore for SqliteRunPersistence {
                     |row| Ok((row.get(0)?, row.get(1)?)),
                 )
                 .optional()?;
-            let actual = current
-                .as_ref()
-                .map_or_else(Revision::default, |item| Revision(item.1));
+            let actual = current.as_ref().map_or_else(Revision::default, |item| Revision(item.1));
             if let Some(expected) = expected {
                 if actual != expected {
                     return Err(PersistenceError::RevisionConflict {
@@ -429,10 +403,7 @@ impl CheckpointStore for SqliteRunPersistence {
     async fn delete_checkpoint(&self, run_id: uuid::Uuid) -> Result<(), PersistenceError> {
         let id_text = run_id.to_string();
         self.blocking(move |connection| {
-            connection.execute(
-                "DELETE FROM eureka_checkpoints WHERE run_id = ?1",
-                [&id_text],
-            )?;
+            connection.execute("DELETE FROM eureka_checkpoints WHERE run_id = ?1", [&id_text])?;
             Ok(())
         })
         .await

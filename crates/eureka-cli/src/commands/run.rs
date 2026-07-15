@@ -5,7 +5,7 @@ use std::sync::Arc;
 
 use anyhow::{Context, Result};
 use eureka::config::{Budget, EurekaConfig};
-use eureka::persistence::{open_persistence, CheckpointStore, EventStore, RunPersistence};
+use eureka::persistence::{open_persistence, RunPersistence};
 use eureka::{RunManager, Session};
 use tokio::sync::broadcast;
 
@@ -43,13 +43,7 @@ pub async fn execute(args: RunArgs) -> Result<()> {
 
     // Override max rounds if specified
     let config = if let Some(max_rounds) = args.max_rounds {
-        EurekaConfig {
-            budget: Budget {
-                max_rounds,
-                ..config.budget
-            },
-            ..config
-        }
+        EurekaConfig { budget: Budget { max_rounds, ..config.budget }, ..config }
     } else {
         config
     };
@@ -73,23 +67,14 @@ pub async fn execute(args: RunArgs) -> Result<()> {
             sessions_dir.display()
         );
     }
-    let db_path = if sessions_dir.exists() {
-        Some(db_path)
-    } else {
-        None
-    };
+    let db_path = if sessions_dir.exists() { Some(db_path) } else { None };
     let persistence: Arc<dyn RunPersistence> = match db_path.clone() {
-        Some(path) => open_persistence(path)
-            .await
-            .context("Failed to open SQLite persistence")?,
+        Some(path) => open_persistence(path).await.context("Failed to open SQLite persistence")?,
         None => Arc::new(eureka::InMemoryRunPersistence::new()),
     };
 
-    let manager = RunManager::new(
-        config.clone(),
-        Arc::clone(&persistence),
-        Some(sessions_dir.clone()),
-    );
+    let manager =
+        RunManager::new(config.clone(), Arc::clone(&persistence), Some(sessions_dir.clone()));
 
     let goal = serde_json::json!({
         "goal": args.goal,
@@ -100,8 +85,8 @@ pub async fn execute(args: RunArgs) -> Result<()> {
     // Create the session — loads the manifest, validates, preps for run
     let mut session = Session::new(config, &session_id.to_string(), db_path)
         .context("Failed to create session")?;
-    session.set_checkpoint_store(Arc::clone(&persistence) as Arc<dyn CheckpointStore>);
-    session.set_event_store(Arc::clone(&persistence) as Arc<dyn EventStore>);
+    session.set_checkpoint_store(persistence.clone());
+    session.set_event_store(persistence.clone());
 
     tracing::info!(
         goal = %args.goal,

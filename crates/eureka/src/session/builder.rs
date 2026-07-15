@@ -32,18 +32,8 @@ impl super::Session {
     ) -> Result<BoxedNode, EngineError> {
         // Find agent or control spec by node ID (clone out to drop immutable borrow before
         // calling build methods which need &mut self for the LLM client cache).
-        let agent_spec = self
-            .manifest
-            .agents
-            .iter()
-            .find(|a| a.id == spec.id)
-            .cloned();
-        let ctrl_spec = self
-            .manifest
-            .control
-            .iter()
-            .find(|c| c.id == spec.id)
-            .cloned();
+        let agent_spec = self.manifest.agents.iter().find(|a| a.id == spec.id).cloned();
+        let ctrl_spec = self.manifest.control.iter().find(|c| c.id == spec.id).cloned();
         let node_config = spec.config.clone();
 
         if let Some(agent) = agent_spec {
@@ -62,6 +52,10 @@ impl super::Session {
     }
 
     /// Build an LLM agent node from an [`AgentSpec`].
+    // Orchestrates prompt loading, AgentDef construction, MCP connection/validation,
+    // RAG resolution, and LLM client selection in a single sequential flow.
+    // Splitting into smaller helpers would increase overall LOC without improving clarity.
+    #[allow(clippy::too_many_lines)]
     pub(crate) async fn build_agent_node(
         &mut self,
         agent_spec: &AgentSpec,
@@ -81,9 +75,7 @@ impl super::Session {
                 name: s.name.clone(),
                 transport: match &s.transport {
                     crate::manifest::agent::McpTransportSpec::Stdio { command } => {
-                        McpTransport::Stdio {
-                            command: command.clone(),
-                        }
+                        McpTransport::Stdio { command: command.clone() }
                     }
                     crate::manifest::agent::McpTransportSpec::Http { uri } => {
                         McpTransport::Http { uri: uri.clone() }
@@ -146,10 +138,7 @@ impl super::Session {
                         agent_spec.id
                     )));
                 }
-                if command_names
-                    .iter()
-                    .any(|n| n.eq_ignore_ascii_case(&mcp_tool.name))
-                {
+                if command_names.iter().any(|n| n.eq_ignore_ascii_case(&mcp_tool.name)) {
                     return Err(EngineError::NodeCreation(format!(
                         "Agent '{}': MCP tool '{}' conflicts with a CommandTool of the \
                          same name. Tool names must be unique across all sources.",
@@ -177,6 +166,7 @@ impl super::Session {
         // If this agent has MCP connections, build a fresh dedicated client
         // (not cached) so the MCP state is not shared with other agents.
         // Otherwise, use the cached base client with optional RAG.
+        let rag = self.rag_for(&agent_spec.id);
         let client_arc: Arc<dyn LlmClient> = if mcp_connections.is_empty() {
             let base = self.get_or_create_client(&model_id).map_err(|e| {
                 EngineError::NodeCreation(format!(
@@ -184,43 +174,17 @@ impl super::Session {
                     agent_spec.id
                 ))
             })?;
-            if let (Some(rag_index), Some(rag_cfg)) = (
-                &self.rag_index,
-                self.config.rag.as_ref().filter(|r| r.enabled),
-            ) {
-                if rag_cfg.agent_ids.is_empty() || rag_cfg.agent_ids.contains(&agent_spec.id) {
-                    build_client(
-                        &self.config,
-                        &model_id,
-                        Some((rag_index.clone(), rag_cfg.top_k)),
-                        Vec::new(),
-                    )
-                    .map_err(|e| {
-                        EngineError::NodeCreation(format!(
-                            "Failed to build LLM client for agent '{}': {e}",
-                            agent_spec.id
-                        ))
-                    })?
-                } else {
-                    base
-                }
+            if let Some(rag) = rag {
+                build_client(&self.config, &model_id, Some(rag), Vec::new()).map_err(|e| {
+                    EngineError::NodeCreation(format!(
+                        "Failed to build LLM client for agent '{}': {e}",
+                        agent_spec.id
+                    ))
+                })?
             } else {
                 base
             }
         } else {
-            // Agent has MCP connections — build a fresh client that carries them.
-            let rag = if let (Some(rag_index), Some(rag_cfg)) = (
-                &self.rag_index,
-                self.config.rag.as_ref().filter(|r| r.enabled),
-            ) {
-                if rag_cfg.agent_ids.is_empty() || rag_cfg.agent_ids.contains(&agent_spec.id) {
-                    Some((rag_index.clone(), rag_cfg.top_k))
-                } else {
-                    None
-                }
-            } else {
-                None
-            };
             build_client(&self.config, &model_id, rag, mcp_connections).map_err(|e| {
                 EngineError::NodeCreation(format!(
                     "Failed to build LLM client for model '{model_id}' (agent '{}'): {e}",
@@ -268,6 +232,19 @@ impl super::Session {
         ))
     }
 
+    /// Resolve the RAG parameters for `agent_id`, honouring the `rag.agent_ids`
+    /// filter.  Returns `None` when RAG is disabled globally or the agent is not
+    /// in the inclusion list.
+    fn rag_for(&self, agent_id: &str) -> Option<(crate::rag::RagIndexHandle, usize)> {
+        let rag_index = self.rag_index.as_ref()?;
+        let rag_cfg = self.config.rag.as_ref().filter(|r| r.enabled)?;
+        if rag_cfg.agent_ids.is_empty() || rag_cfg.agent_ids.iter().any(|id| id == agent_id) {
+            Some((rag_index.clone(), rag_cfg.top_k))
+        } else {
+            None
+        }
+    }
+
     /// Get or create an LLM client for the given model ID.
     fn get_or_create_client(
         &mut self,
@@ -278,8 +255,7 @@ impl super::Session {
         }
 
         let client = build_client(&self.config, model_id, None, Vec::new())?;
-        self.client_cache
-            .insert(model_id.to_string(), Arc::clone(&client));
+        self.client_cache.insert(model_id.to_string(), Arc::clone(&client));
         Ok(client)
     }
 }
@@ -329,11 +305,7 @@ async fn connect_one_server(
                 .await
                 .context("Failed to list tools from MCP stdio server")?;
             let sink = service.peer().clone();
-            Ok(McpConnection {
-                tools,
-                sink,
-                _service: Box::new(service),
-            })
+            Ok(McpConnection { tools, sink, _service: Box::new(service) })
         }
         McpTransport::Http { uri } => {
             let transport = rmcp::transport::StreamableHttpClientTransport::from_uri(uri.as_str());
@@ -347,11 +319,7 @@ async fn connect_one_server(
                 .await
                 .context("Failed to list tools from MCP HTTP server")?;
             let sink = service.peer().clone();
-            Ok(McpConnection {
-                tools,
-                sink,
-                _service: Box::new(service),
-            })
+            Ok(McpConnection { tools, sink, _service: Box::new(service) })
         }
     }
 }

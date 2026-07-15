@@ -28,6 +28,6 @@ expect_used = "deny"
 [workspace.lints.rust]
 unsafe_code = "deny"
 missing_docs = "warn"
-trivial_casts = "warn"
-trivial_numeric_casts = "warn"
+trivial_casts = "deny"
+trivial_numeric_casts = "deny"
 unused_qualifications = "warn"

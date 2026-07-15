@@ -57,7 +57,7 @@ impl CommandTool {
 
     /// Create a command tool with an explicit run environment.
     #[must_use]
-    pub fn with_environment(
+    pub const fn with_environment(
         def: Arc<ToolDef>,
         node_id: String,
         node_kind: String,
@@ -66,15 +66,7 @@ impl CommandTool {
         environment: RunEnvironment,
         event_tx: Option<mpsc::Sender<SchedulerEvent>>,
     ) -> Self {
-        Self {
-            def,
-            node_id,
-            node_kind,
-            round,
-            work_dir,
-            environment,
-            event_tx,
-        }
+        Self { def, node_id, node_kind, round, work_dir, environment, event_tx }
     }
 
     /// Execute the tool by running the subprocess and returning its stdout.
@@ -104,13 +96,9 @@ impl CommandTool {
             return Err(ToolError::ToolCallError("command array is empty".into()));
         };
 
-        let environment = self
-            .environment
-            .subprocess_env(&self.node_id, self.round, "{}");
-        let envs: Vec<(&str, String)> = environment
-            .iter()
-            .map(|(key, value)| (key.as_str(), value.clone()))
-            .collect();
+        let environment = self.environment.subprocess_env(&self.node_id, self.round, "{}");
+        let envs: Vec<(&str, String)> =
+            environment.iter().map(|(key, value)| (key.as_str(), value.clone())).collect();
         let result = run_subprocess(
             binary,
             rest,
@@ -191,11 +179,7 @@ mod tests {
 
     #[test]
     fn test_interpolate_string_arg() {
-        let cmd = vec![
-            "search".to_string(),
-            "--query".to_string(),
-            "{{query}}".to_string(),
-        ];
+        let cmd = vec!["search".to_string(), "--query".to_string(), "{{query}}".to_string()];
         let args = serde_json::json!({ "query": "CO2 catalysts" });
         let result = interpolate(&cmd, &args);
         assert_eq!(result, vec!["search", "--query", "CO2 catalysts"]);
@@ -203,11 +187,7 @@ mod tests {
 
     #[test]
     fn test_interpolate_integer_arg() {
-        let cmd = vec![
-            "search".to_string(),
-            "--count".to_string(),
-            "{{count}}".to_string(),
-        ];
+        let cmd = vec!["search".to_string(), "--count".to_string(), "{{count}}".to_string()];
         let args = serde_json::json!({ "count": 5 });
         let result = interpolate(&cmd, &args);
         assert_eq!(result, vec!["search", "--count", "5"]);
@@ -215,10 +195,7 @@ mod tests {
 
     #[test]
     fn test_interpolate_inline_template() {
-        let cmd = vec![
-            "fetch-url".to_string(),
-            "https://api.example.com/{{path}}".to_string(),
-        ];
+        let cmd = vec!["fetch-url".to_string(), "https://api.example.com/{{path}}".to_string()];
         let args = serde_json::json!({ "path": "results" });
         let result = interpolate(&cmd, &args);
         assert_eq!(result, vec!["fetch-url", "https://api.example.com/results"]);
@@ -299,10 +276,7 @@ mod tests {
             std::path::PathBuf::from("."),
             None,
         );
-        let result = tool
-            .execute(r#"{"key":"value"}"#.to_string())
-            .await
-            .unwrap();
+        let result = tool.execute(r#"{"key":"value"}"#.to_string()).await.unwrap();
         assert_eq!(result, r#"{"key":"value"}"#);
     }
 
@@ -337,11 +311,7 @@ mod tests {
     async fn test_execute_uses_work_dir() {
         // Regression: tool subprocesses must run with `current_dir = work_dir`
         // so relative script paths resolve against the graph directory.
-        if std::process::Command::new("python3")
-            .arg("--version")
-            .output()
-            .is_err()
-        {
+        if std::process::Command::new("python3").arg("--version").output().is_err() {
             return; // python3 not installed
         }
         let dir = tempfile::TempDir::new().unwrap();
@@ -359,21 +329,12 @@ mod tests {
             args_schema: serde_json::json!({ "type": "object" }),
             timeout_secs: 5,
         });
-        let tool = CommandTool::new(
-            def,
-            "test".into(),
-            "test".into(),
-            0,
-            dir.path().to_path_buf(),
-            None,
-        );
+        let tool =
+            CommandTool::new(def, "test".into(), "test".into(), 0, dir.path().to_path_buf(), None);
         let result = tool.execute("{}".to_string()).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         let actual_cwd = std::path::PathBuf::from(parsed["cwd"].as_str().unwrap());
         let expected = std::fs::canonicalize(dir.path()).unwrap();
-        assert_eq!(
-            std::fs::canonicalize(&actual_cwd).unwrap_or(actual_cwd),
-            expected
-        );
+        assert_eq!(std::fs::canonicalize(&actual_cwd).unwrap_or(actual_cwd), expected);
     }
 }
