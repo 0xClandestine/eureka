@@ -58,6 +58,8 @@ Maps source modules to their governing Active SPECs. When modifying any file lis
 | `crates/eureka/src/persistence/sqlite.rs` | [SPEC-0015](SPEC-0015.md) |
 | `crates/eureka/src/persistence/memory.rs` | [SPEC-0015](SPEC-0015.md) |
 | `crates/eureka-cli/src/server.rs` | [SPEC-0019](SPEC-0019.md) |
+| `crates/eureka/src/manifest/agent.rs` | [SPEC-0008](SPEC-0008.md), [SPEC-0021](SPEC-0021.md) |
+| `crates/eureka/src/agent/def.rs` | [SPEC-0010](SPEC-0010.md), [SPEC-0021](SPEC-0021.md) |
 | `AGENTS.md` | [SPEC-0001](SPEC-0001.md) |
 | `specs/` | [SPEC-0001](SPEC-0001.md) |
 
@@ -84,3 +86,4 @@ Maps source modules to their governing Active SPECs. When modifying any file lis
 | [SPEC-0017](SPEC-0017.md) | RunManager | Draft  | Core |
 | [SPEC-0018](SPEC-0018.md) | RAG Integration | Draft  | Core |
 | [SPEC-0019](SPEC-0019.md) | HTTP API and Observability | Draft  | Interface |
+| [SPEC-0021](SPEC-0021.md) | MCP Tool Integration       | Draft  | Interface |
