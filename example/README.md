@@ -20,30 +20,45 @@ The co-scientist is a closed-loop scientific hypothesis engine. A single `Goal` 
 The graph contains eight nodes: five LLM agent nodes and three subprocess control nodes.
 
 ```mermaid
-flowchart TD
-    Goal([Goal]) --> plan
+sequenceDiagram
+    actor User
+    participant plan
+    participant generation
+    participant critic
+    participant advocate
+    participant ranking
+    participant evolution
+    participant proximity
+    participant supervisor
+    participant meta_review
 
-    plan -->|PlanConfig| generation
-    generation -->|Hypotheses| critic
-    critic -->|Reviews| advocate
-    advocate -->|Reviews| ranking
+    User->>plan: Goal
+    plan->>generation: PlanConfig
+    generation->>critic: Hypotheses
 
-    ranking -->|top: Hypotheses| evolution
-    ranking -->|state: Ranking| meta_review
-    ranking -->|state: Ranking| supervisor
-    evolution -->|Hypotheses| proximity
-    proximity -->|unique: Hypotheses| supervisor
-    proximity -->|graph: ProximityGraph| ranking
+    loop Each round
+        critic->>advocate: Reviews
+        advocate->>ranking: Reviews
+        advocate-->>critic: rebuttal (next round)
 
-    advocate -.->|rebuttal ⟳| critic
-    supervisor -.->|continue ⟳| critic
-    meta_review -.->|Insights ⟳| generation
-    meta_review -.->|Insights ⟳| critic
-    meta_review -.->|Insights ⟳| advocate
-    meta_review -.->|Insights ⟳| evolution
+        ranking->>evolution: top Hypotheses
+        ranking->>meta_review: Ranking state
+        ranking->>supervisor: Ranking state
+
+        evolution->>proximity: Hypotheses
+        proximity->>ranking: ProximityGraph
+        proximity->>supervisor: unique Hypotheses
+
+        meta_review-->>generation: Insights (next round)
+        meta_review-->>critic: Insights (next round)
+        meta_review-->>advocate: Insights (next round)
+        meta_review-->>evolution: Insights (next round)
+
+        supervisor-->>critic: continue Hypotheses (next round)
+    end
 ```
 
-Solid edges carry artifacts in the current round. Dashed edges (`⟳`) are feedback — artifacts arrive in round N+1.
+Solid arrows (`->>`) carry artifacts in the current round. Dashed arrows (`-->>`) are feedback — delivered at the start of the next round.
 
 ### Artifact Kinds
 
