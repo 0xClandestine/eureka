@@ -183,6 +183,8 @@ pub fn start_server_with_manager(
         .route("/runs/{id}/resume", post(resume_run_handler))
         .route("/runs/{id}/cancel", post(cancel_run_handler))
         .route("/runs/{id}/input", post(input_run_handler))
+        .route("/runs/{id}/checkpoint", get(get_run_checkpoint_handler))
+        .route("/runs/{id}/events", get(get_run_events_handler))
         .layer(CorsLayer::permissive())
         .with_state(state);
 
@@ -347,6 +349,33 @@ async fn input_run_handler(
         .await
         .map(Json)
         .map_err(|_| axum::http::StatusCode::CONFLICT)
+}
+
+/// `GET /runs/:id/checkpoint` — load the latest durable checkpoint for a run.
+async fn get_run_checkpoint_handler(
+    State(state): State<ServerState>,
+    Path(id): Path<uuid::Uuid>,
+) -> Result<Json<RunCheckpoint>, axum::http::StatusCode> {
+    let manager = manager_or_404(&state)?;
+    manager
+        .get_checkpoint(id)
+        .await
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)?
+        .map(Json)
+        .ok_or(axum::http::StatusCode::NOT_FOUND)
+}
+
+/// `GET /runs/:id/events` — load the durable scheduler event history for a run.
+async fn get_run_events_handler(
+    State(state): State<ServerState>,
+    Path(id): Path<uuid::Uuid>,
+) -> Result<Json<Vec<eureka::persistence::RunEvent>>, axum::http::StatusCode> {
+    let manager = manager_or_404(&state)?;
+    manager
+        .get_events(id)
+        .await
+        .map(Json)
+        .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)
 }
 
 /// `GET /api/events` — SSE stream that replays every `SchedulerEvent`.

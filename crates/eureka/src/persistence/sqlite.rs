@@ -27,30 +27,46 @@ pub(super) fn unix_timestamp_ms() -> u64 {
 }
 
 /// SQLite-backed run persistence.
-#[derive(Debug, Clone)]
+#[derive(Clone)]
 pub struct SqliteRunPersistence {
     /// Path to the `SQLite` database file.
     path: Arc<PathBuf>,
-    /// Mutex serializing concurrent database access.
+    /// Shared database connection — opened once in [`SqliteRunPersistence::open`].
+    conn: Arc<std::sync::Mutex<rusqlite::Connection>>,
+    /// Mutex serializing compound read-modify-write operations.
     lock: Arc<tokio::sync::Mutex<()>>,
+}
+
+impl std::fmt::Debug for SqliteRunPersistence {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("SqliteRunPersistence")
+            .field("path", &self.path)
+            .finish_non_exhaustive()
+    }
 }
 
 impl SqliteRunPersistence {
     /// Open or create a `SQLite` database and initialize runtime tables.
     ///
+    /// Creates an `eureka_meta` table to track the schema version. On first
+    /// open the current [`super::environment::DATABASE_SCHEMA_VERSION`] is
+    /// written. On subsequent opens the stored version is validated against
+    /// the runtime version and `PersistenceError::Io` is returned on mismatch.
+    ///
     /// # Errors
-    /// Returns `PersistenceError::Io` on filesystem errors.
+    /// Returns `PersistenceError::Io` on filesystem or schema version errors.
     pub async fn open(path: impl Into<PathBuf>) -> Result<Self, PersistenceError> {
-        let persistence = Self {
-            path: Arc::new(path.into()),
-            lock: Arc::new(tokio::sync::Mutex::new(())),
-        };
-        let path = persistence.path.clone();
-        tokio::task::spawn_blocking(move || {
-            let connection = rusqlite::Connection::open(path.as_path())?;
+        let path: PathBuf = path.into();
+        let path_arc = Arc::new(path.clone());
+        let conn = tokio::task::spawn_blocking(move || {
+            let connection = rusqlite::Connection::open(&path)?;
+            connection.pragma_update(None, "foreign_keys", "ON")?;
+            connection.pragma_update(None, "busy_timeout", "5000")?;
             connection.execute_batch(
-                "PRAGMA foreign_keys = ON;
-                 PRAGMA busy_timeout = 5000;
+                "CREATE TABLE IF NOT EXISTS eureka_meta (
+                   key TEXT PRIMARY KEY,
+                   value TEXT NOT NULL
+                 );
                  CREATE TABLE IF NOT EXISTS eureka_runs (
                    id TEXT PRIMARY KEY,
                    record_json TEXT NOT NULL,
@@ -69,11 +85,38 @@ impl SqliteRunPersistence {
                    PRIMARY KEY (run_id, sequence)
                  );",
             )?;
-            Ok::<(), PersistenceError>(())
+            // Write schema version on first open; validate on subsequent opens.
+            let version_str = super::environment::DATABASE_SCHEMA_VERSION.to_string();
+            connection.execute(
+                "INSERT OR IGNORE INTO eureka_meta (key, value) VALUES ('schema_version', ?1)",
+                [&version_str],
+            )?;
+            let stored: String = connection.query_row(
+                "SELECT value FROM eureka_meta WHERE key = 'schema_version'",
+                [],
+                |row| row.get(0),
+            )?;
+            let stored_version: u32 = stored.parse().map_err(|_| {
+                rusqlite::Error::from(rusqlite::types::FromSqlError::Other(
+                    format!("invalid schema version in database: '{stored}'").into(),
+                ))
+            })?;
+            if stored_version != super::environment::DATABASE_SCHEMA_VERSION {
+                return Err(io_err(format!(
+                    "database schema version mismatch: stored {stored_version}, \
+                     runtime expects {}",
+                    super::environment::DATABASE_SCHEMA_VERSION
+                )));
+            }
+            Ok::<_, PersistenceError>(connection)
         })
         .await
         .map_err(io_err)??;
-        Ok(persistence)
+        Ok(Self {
+            path: path_arc,
+            conn: Arc::new(std::sync::Mutex::new(conn)),
+            lock: Arc::new(tokio::sync::Mutex::new(())),
+        })
     }
 
     /// Return the database path.
@@ -82,17 +125,18 @@ impl SqliteRunPersistence {
         self.path.as_path()
     }
 
-    /// Wrap an async operation in a blocking database task.
+    /// Wrap an operation in a blocking database task, reusing the shared connection.
     async fn blocking<T, F>(&self, operation: F) -> Result<T, PersistenceError>
     where
         T: Send + 'static,
-        F: FnOnce(rusqlite::Connection) -> Result<T, PersistenceError> + Send + 'static,
+        F: for<'conn> FnOnce(&'conn rusqlite::Connection) -> Result<T, PersistenceError>
+            + Send
+            + 'static,
     {
-        let path = self.path.clone();
+        let conn = Arc::clone(&self.conn);
         tokio::task::spawn_blocking(move || {
-            let connection = rusqlite::Connection::open(path.as_path())?;
-            connection.pragma_update(None, "foreign_keys", "ON")?;
-            operation(connection)
+            let guard = conn.lock().map_err(|_| io_err("connection mutex poisoned"))?;
+            operation(&*guard)
         })
         .await
         .map_err(io_err)?

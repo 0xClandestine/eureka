@@ -126,14 +126,13 @@ impl Session {
 
         // Pre-warm the default LLM client.
         let mut client_cache: HashMap<String, Arc<dyn LlmClient>> = HashMap::new();
-        if let Ok(client) = builder::build_llm_client(&config, &default_model) {
+        if let Ok(client) = builder::build_client(&config, &default_model, None, Vec::new()) {
             client_cache.insert(default_model.clone(), client);
         }
 
-        let session_id: uuid::Uuid = uuid::Uuid::parse_str(session_id).unwrap_or_else(|_| {
-            warn!("Invalid session UUID '{session_id}', generating new one");
-            uuid::Uuid::now_v7()
-        });
+        let session_id = uuid::Uuid::parse_str(session_id).map_err(|e| {
+            EngineError::Run(format!("invalid session UUID '{session_id}': {e}"))
+        })?;
 
         Ok(Self {
             config,

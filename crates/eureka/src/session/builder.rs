@@ -187,13 +187,18 @@ impl super::Session {
                 self.config.rag.as_ref().filter(|r| r.enabled),
             ) {
                 if rag_cfg.agent_ids.is_empty() || rag_cfg.agent_ids.contains(&agent_spec.id) {
-                    build_rag_client(&self.config, &model_id, rag_index.clone(), rag_cfg.top_k)
-                        .map_err(|e| {
-                            EngineError::NodeCreation(format!(
-                                "Failed to build RAG-enabled client for agent '{}': {e}",
-                                agent_spec.id
-                            ))
-                        })?
+                    build_client(
+                        &self.config,
+                        &model_id,
+                        Some((rag_index.clone(), rag_cfg.top_k)),
+                        Vec::new(),
+                    )
+                    .map_err(|e| {
+                        EngineError::NodeCreation(format!(
+                            "Failed to build LLM client for agent '{}': {e}",
+                            agent_spec.id
+                        ))
+                    })?
                 } else {
                     base
                 }
@@ -214,9 +219,9 @@ impl super::Session {
             } else {
                 None
             };
-            build_mcp_client(&self.config, &model_id, rag, mcp_connections).map_err(|e| {
+            build_client(&self.config, &model_id, rag, mcp_connections).map_err(|e| {
                 EngineError::NodeCreation(format!(
-                    "Failed to build MCP-enabled client for model '{model_id}' (agent '{}'): {e}",
+                    "Failed to build LLM client for model '{model_id}' (agent '{}'): {e}",
                     agent_spec.id
                 ))
             })?
@@ -270,7 +275,7 @@ impl super::Session {
             return Ok(Arc::clone(client));
         }
 
-        let client = build_llm_client(&self.config, model_id)?;
+        let client = build_client(&self.config, model_id, None, Vec::new())?;
         self.client_cache
             .insert(model_id.to_string(), Arc::clone(&client));
         Ok(client)
@@ -358,112 +363,22 @@ async fn connect_one_server(
 // ---------------------------------------------------------------------------
 
 /// Build a type-erased [`LlmClient`] from the provider configuration.
-pub(super) fn build_llm_client(
-    config: &EurekaConfig,
-    model_id: &str,
-) -> Result<Arc<dyn LlmClient>, anyhow::Error> {
-    let pricing = config.provider.pricing.clone();
-    macro_rules! provider {
-        ($provider:ident, $env_key:expr) => {{
-            let client = $provider::Client::from_env()
-                .context(concat!($env_key, " environment variable not set"))?;
-            Arc::new(RigClient::new(
-                client.completion_model(model_id),
-                pricing.clone(),
-            ))
-        }};
-        ($provider:ident, $env_key:expr, $msg:expr) => {{
-            let client = $provider::Client::from_env().context($msg)?;
-            Arc::new(RigClient::new(
-                client.completion_model(model_id),
-                pricing.clone(),
-            ))
-        }};
-    }
-    match config.provider.kind {
-        ProviderKind::Anthropic => Ok(provider!(anthropic, "ANTHROPIC_API_KEY")),
-        ProviderKind::OpenAI => Ok(provider!(openai, "OPENAI_API_KEY")),
-        ProviderKind::OpenRouter => Ok(provider!(openrouter, "OPENROUTER_API_KEY")),
-        ProviderKind::Gemini => Ok(provider!(gemini, "GEMINI_API_KEY")),
-        ProviderKind::Groq => Ok(provider!(groq, "GROQ_API_KEY")),
-        ProviderKind::Mistral => Ok(provider!(mistral, "MISTRAL_API_KEY")),
-        ProviderKind::Cohere => Ok(provider!(cohere, "COHERE_API_KEY")),
-        ProviderKind::DeepSeek => Ok(provider!(deepseek, "DEEPSEEK_API_KEY")),
-        ProviderKind::Perplexity => Ok(provider!(perplexity, "PERPLEXITY_API_KEY")),
-        ProviderKind::Together => Ok(provider!(together, "TOGETHER_API_KEY")),
-        ProviderKind::XAI => Ok(provider!(xai, "XAI_API_KEY")),
-        ProviderKind::Ollama => Ok(provider!(
-            ollama,
-            "OLLAMA_API_KEY",
-            "Failed to initialise Ollama client (check OLLAMA_API_BASE_URL)"
-        )),
-    }
-}
-
-/// Build a type-erased [`LlmClient`] with a RAG index attached via
-/// `dynamic_context`. Mirrors [`build_llm_client`] but calls `.with_rag()`
-/// before boxing so each RAG-enabled agent gets its own retrieval path.
-fn build_rag_client(
-    config: &EurekaConfig,
-    model_id: &str,
-    rag_index: crate::rag::RagIndexHandle,
-    top_k: usize,
-) -> Result<Arc<dyn LlmClient>, anyhow::Error> {
-    let pricing = config.provider.pricing.clone();
-    macro_rules! provider_rag {
-        ($provider:ident, $env_key:expr) => {{
-            let client = $provider::Client::from_env()
-                .context(concat!($env_key, " environment variable not set"))?;
-            let rig_client = RigClient::new(client.completion_model(model_id), pricing.clone())
-                .with_rag(rag_index, top_k);
-            let r: Arc<dyn LlmClient> = Arc::new(rig_client);
-            r
-        }};
-        ($provider:ident, $env_key:expr, $msg:expr) => {{
-            let client = $provider::Client::from_env().context($msg)?;
-            let rig_client = RigClient::new(client.completion_model(model_id), pricing.clone())
-                .with_rag(rag_index, top_k);
-            let r: Arc<dyn LlmClient> = Arc::new(rig_client);
-            r
-        }};
-    }
-    match config.provider.kind {
-        ProviderKind::Anthropic => Ok(provider_rag!(anthropic, "ANTHROPIC_API_KEY")),
-        ProviderKind::OpenAI => Ok(provider_rag!(openai, "OPENAI_API_KEY")),
-        ProviderKind::OpenRouter => Ok(provider_rag!(openrouter, "OPENROUTER_API_KEY")),
-        ProviderKind::Gemini => Ok(provider_rag!(gemini, "GEMINI_API_KEY")),
-        ProviderKind::Groq => Ok(provider_rag!(groq, "GROQ_API_KEY")),
-        ProviderKind::Mistral => Ok(provider_rag!(mistral, "MISTRAL_API_KEY")),
-        ProviderKind::Cohere => Ok(provider_rag!(cohere, "COHERE_API_KEY")),
-        ProviderKind::DeepSeek => Ok(provider_rag!(deepseek, "DEEPSEEK_API_KEY")),
-        ProviderKind::Perplexity => Ok(provider_rag!(perplexity, "PERPLEXITY_API_KEY")),
-        ProviderKind::Together => Ok(provider_rag!(together, "TOGETHER_API_KEY")),
-        ProviderKind::XAI => Ok(provider_rag!(xai, "XAI_API_KEY")),
-        ProviderKind::Ollama => Ok(provider_rag!(
-            ollama,
-            "OLLAMA_API_KEY",
-            "Failed to initialise Ollama client (check OLLAMA_API_BASE_URL)"
-        )),
-    }
-}
-
-/// Build a type-erased [`LlmClient`] with MCP connections (and optional RAG).
 ///
-/// Used for agents that declare `mcp_servers`.  The resulting client is NOT
-/// cached because MCP connections are agent-specific.
-fn build_mcp_client(
+/// `rag` and `mcp` are optional — pass `None` / `Vec::new()` for a plain
+/// client.  The resulting client is NOT cached; caching is the caller's
+/// responsibility (see [`super::Session::get_or_create_client`]).
+pub(super) fn build_client(
     config: &EurekaConfig,
     model_id: &str,
     rag: Option<(crate::rag::RagIndexHandle, usize)>,
     mcp: Vec<McpConnection>,
 ) -> Result<Arc<dyn LlmClient>, anyhow::Error> {
     let pricing = config.provider.pricing.clone();
-    macro_rules! provider_mcp {
+    macro_rules! make {
         ($provider:ident, $env_key:expr) => {{
             let client = $provider::Client::from_env()
                 .context(concat!($env_key, " environment variable not set"))?;
-            let mut rig_client =
-                RigClient::new(client.completion_model(model_id), pricing.clone());
+            let mut rig_client = RigClient::new(client.completion_model(model_id), pricing.clone());
             if let Some((idx, top_k)) = rag {
                 rig_client = rig_client.with_rag(idx, top_k);
             }
@@ -472,8 +387,7 @@ fn build_mcp_client(
         }};
         ($provider:ident, $env_key:expr, $msg:expr) => {{
             let client = $provider::Client::from_env().context($msg)?;
-            let mut rig_client =
-                RigClient::new(client.completion_model(model_id), pricing.clone());
+            let mut rig_client = RigClient::new(client.completion_model(model_id), pricing.clone());
             if let Some((idx, top_k)) = rag {
                 rig_client = rig_client.with_rag(idx, top_k);
             }
@@ -482,18 +396,18 @@ fn build_mcp_client(
         }};
     }
     match config.provider.kind {
-        ProviderKind::Anthropic => Ok(provider_mcp!(anthropic, "ANTHROPIC_API_KEY")),
-        ProviderKind::OpenAI => Ok(provider_mcp!(openai, "OPENAI_API_KEY")),
-        ProviderKind::OpenRouter => Ok(provider_mcp!(openrouter, "OPENROUTER_API_KEY")),
-        ProviderKind::Gemini => Ok(provider_mcp!(gemini, "GEMINI_API_KEY")),
-        ProviderKind::Groq => Ok(provider_mcp!(groq, "GROQ_API_KEY")),
-        ProviderKind::Mistral => Ok(provider_mcp!(mistral, "MISTRAL_API_KEY")),
-        ProviderKind::Cohere => Ok(provider_mcp!(cohere, "COHERE_API_KEY")),
-        ProviderKind::DeepSeek => Ok(provider_mcp!(deepseek, "DEEPSEEK_API_KEY")),
-        ProviderKind::Perplexity => Ok(provider_mcp!(perplexity, "PERPLEXITY_API_KEY")),
-        ProviderKind::Together => Ok(provider_mcp!(together, "TOGETHER_API_KEY")),
-        ProviderKind::XAI => Ok(provider_mcp!(xai, "XAI_API_KEY")),
-        ProviderKind::Ollama => Ok(provider_mcp!(
+        ProviderKind::Anthropic => Ok(make!(anthropic, "ANTHROPIC_API_KEY")),
+        ProviderKind::OpenAI => Ok(make!(openai, "OPENAI_API_KEY")),
+        ProviderKind::OpenRouter => Ok(make!(openrouter, "OPENROUTER_API_KEY")),
+        ProviderKind::Gemini => Ok(make!(gemini, "GEMINI_API_KEY")),
+        ProviderKind::Groq => Ok(make!(groq, "GROQ_API_KEY")),
+        ProviderKind::Mistral => Ok(make!(mistral, "MISTRAL_API_KEY")),
+        ProviderKind::Cohere => Ok(make!(cohere, "COHERE_API_KEY")),
+        ProviderKind::DeepSeek => Ok(make!(deepseek, "DEEPSEEK_API_KEY")),
+        ProviderKind::Perplexity => Ok(make!(perplexity, "PERPLEXITY_API_KEY")),
+        ProviderKind::Together => Ok(make!(together, "TOGETHER_API_KEY")),
+        ProviderKind::XAI => Ok(make!(xai, "XAI_API_KEY")),
+        ProviderKind::Ollama => Ok(make!(
             ollama,
             "OLLAMA_API_KEY",
             "Failed to initialise Ollama client (check OLLAMA_API_BASE_URL)"
