@@ -60,10 +60,6 @@ Maps source modules to their governing Active SPECs. When modifying any file lis
 | `crates/eureka-cli/src/server.rs` | [SPEC-0019](SPEC-0019.md) |
 | `AGENTS.md` | [SPEC-0001](SPEC-0001.md) |
 | `specs/` | [SPEC-0001](SPEC-0001.md) |
-| `example/coscientist.yml` | [SPEC-0020](SPEC-0020.md) |
-| `example/prompts/` | [SPEC-0020](SPEC-0020.md) |
-| `example/control/` | [SPEC-0020](SPEC-0020.md) |
-| `example/tools/` | [SPEC-0020](SPEC-0020.md) |
 
 ## SPEC registry
 
@@ -88,4 +84,3 @@ Maps source modules to their governing Active SPECs. When modifying any file lis
 | [SPEC-0017](SPEC-0017.md) | RunManager | Draft  | Core |
 | [SPEC-0018](SPEC-0018.md) | RAG Integration | Draft  | Core |
 | [SPEC-0019](SPEC-0019.md) | HTTP API and Observability | Draft  | Interface |
-| [SPEC-0020](SPEC-0020.md) | AI Co-Scientist Example Graph | Draft  | Informational |

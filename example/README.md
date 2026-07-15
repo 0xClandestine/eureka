@@ -1,16 +1,15 @@
-# SPEC-0020: AI Co-Scientist Example Graph
+# AI Co-Scientist Example Graph
 
-| Field      | Value       |
-|------------|-------------|
-| Status     | Draft       |
+| Field      | Value         |
+|------------|---------------|
+| Status     | Draft         |
 | Type       | Informational |
-| Created    | 2026-07-14  |
-| Requires   | SPEC-0008, SPEC-0009, SPEC-0010, SPEC-0011 |
-| Supersedes | None        |
+| Created    | 2026-07-14    |
+| Reference  | Google Research, AI co-scientist, Feb 2025 |
 
 ## Abstract
 
-Documents the AI co-scientist example graph shipped in `example/coscientist.yml`. The graph is a reproduction of the multi-agent scientific reasoning system described in Google Research's "AI co-scientist" paper (Feb 2025). It demonstrates Eureka's full feature set: LLM agent nodes, subprocess control nodes, typed artifact edges, feedback loops, shared tools, and persistent context memory.
+Documents the AI co-scientist example graph shipped in `coscientist.yml`. The graph is a reproduction of the multi-agent scientific reasoning system described in Google Research's "AI co-scientist" paper (Feb 2025). It demonstrates Eureka's full feature set: LLM agent nodes, subprocess control nodes, typed artifact edges, feedback loops, shared tools, and persistent context memory.
 
 ## Specification
 
@@ -69,6 +68,7 @@ Produces initial `Hypotheses` from `PlanConfig`. Employs three techniques: liter
 #### `critic`
 
 Adversarial reviewer. Processes each hypothesis through a seven-step pipeline:
+
 1. **Initial filter** — quick no-tools discard of clearly flawed hypotheses (`eliminated: true`)
 2. **Literature challenge** — arXiv search for contradicting or preempting prior work
 3. **Observation review** — checks whether the hypothesis explains known experimental observations better than the current consensus
@@ -121,33 +121,34 @@ All LLM agent nodes except `plan` have access to:
 
 | Tool | Command | Purpose |
 |------|---------|---------|
-| `search_literature` | `python3 tools/arxiv_search.py` | Search arXiv by keyword query; returns titles, abstracts, IDs |
-| `read_paper` | `python3 tools/arxiv_search.py` | Retrieve full text of an arXiv paper by ID as Markdown |
-| `context_store` | `python3 tools/context_store.py` | Read/write structured key-value memory in the session DB |
+| `search_literature` | `tools/arxiv_search.py` | Search arXiv by keyword query; returns titles, abstracts, IDs |
+| `read_paper` | `tools/arxiv_search.py` | Retrieve full text of an arXiv paper by ID as Markdown |
+| `context_store` | `tools/context_store.py` | Read/write structured key-value memory in the session DB |
 
 `context_store` is scoped to negative knowledge, coordination signals, and intermediate findings not captured in emitted artifacts. Artifact content (hypotheses, reviews, insights) is indexed automatically by the RAG layer and retrieved via semantic search.
 
 ### Feedback Loops
 
-The graph contains five feedback edges (`feedback: true`). A feedback edge delivers its artifact in round N+1, enabling cycles without deadlock.
+The graph contains six feedback edges (`feedback: true`). A feedback edge delivers its artifact in round N+1, enabling cycles without deadlock.
 
-| Edge | Round semantics | Purpose |
-|------|-----------------|---------|
-| `advocate.out → critic.rebuttal` | N+1 | Critic sharpens challenges using advocate's prior defence |
-| `meta_review.insights → generation.context` | N+1 | Generation avoids known weaknesses; targets identified gaps |
-| `meta_review.insights → critic.context` | N+1 | Critic prioritises challenge angles that historically broke defences |
-| `meta_review.insights → advocate.context` | N+1 | Advocate avoids failed defence strategies |
-| `meta_review.insights → evolution.context` | N+1 | Evolution de-emphasises strategies that underperformed |
-| `supervisor.continue → critic.in` | N+1 | Supervisor restarts debate with top hypotheses for next round |
+| Edge | Purpose |
+|------|---------|
+| `advocate.out → critic.rebuttal` | Critic sharpens challenges using advocate's prior defence |
+| `meta_review.insights → generation.context` | Generation avoids known weaknesses; targets identified gaps |
+| `meta_review.insights → critic.context` | Critic prioritises angles that historically broke defences |
+| `meta_review.insights → advocate.context` | Advocate avoids failed defence strategies |
+| `meta_review.insights → evolution.context` | Evolution de-emphasises strategies that underperformed |
+| `supervisor.continue → critic.in` | Supervisor restarts debate with top hypotheses for next round |
 
 ### Convergence and Termination
 
 The supervisor halts when any of the following is true:
+
 - `round >= max_rounds` (hard budget, default 5)
 - `round >= min_rounds` AND `elo_spread < convergence_threshold` (stable ranking, default spread < 200)
 - `total_hypotheses_generated < min_hypotheses` prevents early stopping (default 3)
 
-On halt, the supervisor emits a `Control` artifact on the `halt` port with the final stats. The `meta_review` has already emitted the terminal `Overview` on the previous round via the `ranking.state → meta_review` edge.
+On halt, the supervisor emits a `Control` artifact on the `halt` port with the final stats. The `meta_review` emits the terminal `Overview` via the `ranking.state → meta_review` edge each round.
 
 ### Expert-in-the-Loop
 
@@ -163,19 +164,24 @@ The `generation` and `evolution` prompts treat expert-injected hypotheses as hig
 
 **Step-wise simulation.** The paper notes that LLMs may have developed an internal world model enabling step-wise simulation of mechanisms. A structured trace (starting conditions → causal steps → failure point) produces more actionable failure analysis than a freeform "what could go wrong" prompt, and gives the advocate concrete steps to defend or concede.
 
-**Generation/Evolution effectiveness tracking.** The paper's Supervisor dynamically weights agents based on which methodology produces higher-scoring hypotheses. The `supervisor.py` tracks average Elo for generation-originated vs. evolution-originated hypotheses and emits a `recommended_emphasis` field. This feeds into `meta_review.insights.evolution_guidance` for the next round.
+**Generation/Evolution effectiveness tracking.** The paper's Supervisor dynamically weights agents based on which methodology produces higher-scoring hypotheses. The `supervisor.py` tracks average Elo for generation-originated vs. evolution-originated hypotheses and emits a `recommended_emphasis` field that feeds into `meta_review.insights.evolution_guidance` for the next round.
 
-## Reference Implementation
+## Files
 
-`example/coscientist.yml`
-`example/prompts/plan.md`
-`example/prompts/generation.md`
-`example/prompts/critic.md`
-`example/prompts/advocate.md`
-`example/prompts/evolution.md`
-`example/prompts/meta_review.md`
-`example/control/ranker.py`
-`example/control/proximity.py`
-`example/control/supervisor.py`
-`example/tools/arxiv_search.py`
-`example/tools/context_store.py`
+```
+coscientist.yml          graph manifest (topology, agents, control nodes, schemas)
+prompts/
+  plan.md                parse Goal → PlanConfig
+  generation.md          generate hypotheses from PlanConfig
+  critic.md              adversarial 7-step review pipeline
+  advocate.md            defence, scoring, rebuttal record
+  evolution.md           six refinement strategies
+  meta_review.md         tournament synthesis, insights, research overview
+control/
+  ranker.py              Elo tournament with proximity-weighted matchmaking
+  proximity.py           TF-IDF similarity graph and deduplication
+  supervisor.py          statistics, effectiveness tracking, convergence check
+tools/
+  arxiv_search.py        arXiv search and full-text retrieval
+  context_store.py       session-scoped key-value memory
+```
