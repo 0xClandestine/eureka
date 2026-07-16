@@ -45,7 +45,7 @@ generation_model = "deepseek/deepseek-v4-flash"
 # Global defaults for all agents. Override per-agent below under
 # [agent.overrides.<agent_id>].
 temperature = 0.7
-max_iterations = 10
+max_iterations = 50
 workers = 1
 
 # Per-agent LLM config overrides. Each agent not listed here falls back
@@ -77,3 +77,12 @@ max_rounds = 100
 # enabled = false
 # max_file_bytes = 0        # retained for configuration compatibility
 # include_artifacts = true   # include artifact payloads in completed events
+
+[rag]
+# Retrieval-Augmented Generation: index agent outputs and inject the most
+# relevant prior results as context on each activation. Requires OPENROUTER_API_KEY.
+enabled = true
+embedding_provider = "openrouter"
+embedding_model = "google/gemini-embedding-2"
+top_k = 5
+session_scoped = true
