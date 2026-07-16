@@ -504,6 +504,7 @@ impl Scheduler {
                                         round,
                                         emit_count: emits.len(),
                                         outputs: event_outputs,
+                                        usage,
                                     }).await {
                                         tracing::debug!(error = %e, "scheduler event dropped");
                                     }
