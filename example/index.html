@@ -1,0 +1,409 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Eureka — Co-Scientist Dashboard</title>
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@knadh/oat/oat.min.css" />
+  <style>
+    :root {
+      --accent:   #0a84ff;
+      --accent-2: #30d158;
+      --accent-3: #ff9f0a;
+      --accent-4: #ff453a;
+      --radius:   16px;
+      --radius-sm: 8px;
+      --font:     "SF Pro Display", "SF Pro Text", -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg:    #1c1c1e;
+        --bg2:   #2c2c2e;
+        --bg3:   #3a3a3c;
+        --border: rgba(255,255,255,0.1);
+        --text:  #f2f2f7;
+        --text2: #aeaeb2;
+        --text3: #636366;
+      }
+    }
+    @media (prefers-color-scheme: light) {
+      :root {
+        --bg:    #f2f2f7;
+        --bg2:   #ffffff;
+        --bg3:   #e5e5ea;
+        --border: rgba(0,0,0,0.1);
+        --text:  #1c1c1e;
+        --text2: #636366;
+        --text3: #aeaeb2;
+      }
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: var(--font); background: var(--bg); color: var(--text); min-height: 100vh; padding: 24px; }
+    .page { max-width: 1200px; margin: 0 auto; display: flex; flex-direction: column; gap: 20px; }
+    .row  { display: flex; gap: 20px; }
+    .row > * { flex: 1; min-width: 0; }
+    .card { background: var(--bg2); border: 1px solid var(--border); border-radius: var(--radius); padding: 20px; }
+    .card-title { font-size: 13px; font-weight: 600; letter-spacing: .04em; text-transform: uppercase; color: var(--text2); margin-bottom: 14px; }
+    /* run header */
+    .run-header { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+    .run-title  { font-size: 22px; font-weight: 700; flex: 1; }
+    .status-pill { display: inline-flex; align-items: center; gap: 6px; padding: 5px 12px; border-radius: 20px; font-size: 13px; font-weight: 600; }
+    .status-pill.running  { background: rgba(10,132,255,.15); color: var(--accent); }
+    .status-pill.finished { background: rgba(48,209,88,.15);  color: var(--accent-2); }
+    .status-pill.paused   { background: rgba(255,159,10,.15); color: var(--accent-3); }
+    .status-pill.idle     { background: var(--bg3); color: var(--text2); }
+    .status-dot { width: 7px; height: 7px; border-radius: 50%; background: currentColor; }
+    .status-pill.running .status-dot { animation: pulse 1.4s ease-in-out infinite; }
+    @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:.35} }
+    .stat-group { display: flex; gap: 24px; flex-wrap: wrap; }
+    .stat { display: flex; flex-direction: column; }
+    .stat-value { font-size: 20px; font-weight: 700; }
+    .stat-label { font-size: 12px; color: var(--text2); margin-top: 2px; }
+    /* progress */
+    .progress-track { height: 6px; background: var(--bg3); border-radius: 3px; overflow: hidden; }
+    .progress-fill  { height: 100%; border-radius: 3px; background: linear-gradient(90deg, var(--accent), var(--accent-2)); transition: width .5s ease; }
+    .progress-label { font-size: 12px; color: var(--text2); margin-top: 6px; }
+    /* node grid */
+    .node-grid { display: flex; flex-wrap: wrap; gap: 8px; }
+    .node-badge { display: flex; align-items: center; gap: 6px; padding: 5px 10px; border-radius: var(--radius-sm); font-size: 12px; font-weight: 500; background: var(--bg3); color: var(--text2); border: 1px solid transparent; transition: all .25s; }
+    .node-badge.active { background: rgba(10,132,255,.12); color: var(--accent); border-color: rgba(10,132,255,.3); }
+    .node-badge.active .node-dot { background: var(--accent); animation: pulse 1.4s ease-in-out infinite; }
+    .node-dot { width: 6px; height: 6px; border-radius: 50%; background: var(--text3); }
+    /* chart */
+    svg.chart { width: 100%; overflow: visible; }
+    .chart-legend { display: flex; gap: 16px; flex-wrap: wrap; margin-top: 8px; font-size: 12px; color: var(--text2); }
+    .legend-item { display: flex; align-items: center; gap: 5px; }
+    .legend-dot  { width: 8px; height: 8px; border-radius: 50%; }
+    /* leaderboard */
+    .hyp-list { display: flex; flex-direction: column; gap: 10px; }
+    .hyp-item { display: flex; align-items: flex-start; gap: 12px; padding: 12px; background: var(--bg3); border-radius: var(--radius-sm); }
+    .hyp-item.elim { opacity: .4; }
+    .rank-circle { min-width: 32px; height: 32px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 700; flex-shrink: 0; }
+    .rank-1 { background: rgba(255,159,10,.2); color: var(--accent-3); }
+    .rank-2 { background: rgba(174,174,178,.2); color: var(--text2); }
+    .rank-3 { background: rgba(172,104,54,.2); color: #cd7c3a; }
+    .rank-n { background: var(--bg2); color: var(--text3); }
+    .hyp-text  { font-size: 13px; line-height: 1.5; flex: 1; }
+    .hyp-score { font-size: 13px; font-weight: 700; color: var(--accent-2); flex-shrink: 0; }
+    /* output */
+    .output-scroll { max-height: 240px; overflow-y: auto; font-size: 12px; line-height: 1.6; color: var(--text2); white-space: pre-wrap; word-break: break-word; font-family: "SF Mono", ui-monospace, monospace; }
+    .output-empty  { color: var(--text3); font-style: italic; font-size: 13px; }
+    /* event log */
+    #event-log { max-height: 200px; overflow-y: auto; font-size: 12px; font-family: "SF Mono", ui-monospace, monospace; color: var(--text2); }
+    .log-line { padding: 3px 0; border-bottom: 1px solid var(--border); }
+    .log-line:last-child { border-bottom: none; }
+    .log-ts { color: var(--text3); margin-right: 8px; }
+    /* goal */
+    .goal-text  { font-size: 14px; line-height: 1.6; background: var(--bg3); border-radius: var(--radius-sm); padding: 12px; }
+    .goal-empty { color: var(--text3); font-style: italic; font-size: 13px; }
+    /* error */
+    #error-banner { display: none; background: rgba(255,69,58,.12); border: 1px solid rgba(255,69,58,.3); border-radius: var(--radius-sm); color: var(--accent-4); padding: 10px 16px; font-size: 13px; }
+  </style>
+</head>
+<body>
+<div class="page">
+  <div id="error-banner"></div>
+
+  <!-- Run header -->
+  <div class="card">
+    <div class="run-header">
+      <div class="run-title">AI Co-Scientist</div>
+      <div id="status-pill" class="status-pill idle">
+        <div class="status-dot"></div>
+        <span id="status-label">Idle</span>
+      </div>
+      <div class="stat-group">
+        <div class="stat"><span class="stat-value" id="stat-round">—</span><span class="stat-label">Rounds</span></div>
+        <div class="stat"><span class="stat-value" id="stat-elapsed">—</span><span class="stat-label">Elapsed</span></div>
+        <div class="stat"><span class="stat-value" id="stat-cost">—</span><span class="stat-label">Cost (USD)</span></div>
+        <div class="stat"><span class="stat-value" id="stat-tokens">—</span><span class="stat-label">Tokens</span></div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Metrics chart -->
+  <div class="card">
+    <div class="card-title">Metrics per Round</div>
+    <svg class="chart" id="metrics-chart" height="160"></svg>
+    <div class="chart-legend" id="chart-legend"></div>
+  </div>
+
+  <!-- Progress + Active nodes -->
+  <div class="row">
+    <div class="card">
+      <div class="card-title">Progress</div>
+      <div class="progress-track"><div class="progress-fill" id="progress-fill" style="width:0%"></div></div>
+      <div class="progress-label" id="progress-label">Round 0 of 12</div>
+    </div>
+    <div class="card">
+      <div class="card-title">Active Nodes</div>
+      <div class="node-grid" id="node-grid"><span class="output-empty">No active nodes</span></div>
+    </div>
+  </div>
+
+  <!-- Goal -->
+  <div class="card">
+    <div class="card-title">Research Goal</div>
+    <div id="goal-display" class="goal-empty">Waiting for run to start…</div>
+  </div>
+
+  <!-- Leaderboard + Generation -->
+  <div class="row">
+    <div class="card">
+      <div class="card-title">Hypothesis Leaderboard</div>
+      <div class="hyp-list" id="leaderboard"><span class="output-empty">No rankings yet</span></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Generated Hypotheses</div>
+      <div id="output-generation" class="output-scroll"><span class="output-empty">Waiting…</span></div>
+    </div>
+  </div>
+
+  <!-- Critic + Advocate -->
+  <div class="row">
+    <div class="card">
+      <div class="card-title">Critic</div>
+      <div id="output-critic" class="output-scroll"><span class="output-empty">Waiting…</span></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Advocate</div>
+      <div id="output-advocate" class="output-scroll"><span class="output-empty">Waiting…</span></div>
+    </div>
+  </div>
+
+  <!-- Evolution + Meta-review -->
+  <div class="row">
+    <div class="card">
+      <div class="card-title">Evolution</div>
+      <div id="output-evolution" class="output-scroll"><span class="output-empty">Waiting…</span></div>
+    </div>
+    <div class="card">
+      <div class="card-title">Meta-Review</div>
+      <div id="output-meta_review" class="output-scroll"><span class="output-empty">Waiting…</span></div>
+    </div>
+  </div>
+
+  <!-- Tool event log -->
+  <div class="card">
+    <div class="card-title">Tool Events</div>
+    <div id="event-log"><span class="output-empty">No tool calls yet</span></div>
+  </div>
+</div>
+
+<script>
+(() => {
+  const NODE_IDS = ['plan','generation','critic','advocate','evolution','ranking','meta_review','supervisor'];
+  const MAX_ROUNDS = 12;
+  let eventSource = null;
+
+  // ── Formatting ─────────────────────────────────────────────────────────────
+  function fmtElapsed(s) {
+    if (!s) return '0s';
+    const h = Math.floor(s/3600), m = Math.floor((s%3600)/60), sec = Math.floor(s%60);
+    if (h) return `${h}h ${m}m`;
+    if (m) return `${m}m ${sec}s`;
+    return `${sec}s`;
+  }
+  function fmtNum(n) {
+    if (n == null) return '—';
+    if (n >= 1e6) return (n/1e6).toFixed(1)+'M';
+    if (n >= 1e3) return (n/1e3).toFixed(1)+'k';
+    return String(n);
+  }
+  function fmtCost(c) {
+    if (!c) return '$0.00';
+    return c < 0.01 ? `$${c.toFixed(4)}` : `$${c.toFixed(2)}`;
+  }
+  function esc(s) {
+    return String(s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+  function ts() {
+    return new Date().toLocaleTimeString('en-US',{hour12:false});
+  }
+
+  // ── State rendering ─────────────────────────────────────────────────────────
+  function renderState(s) {
+    // Status pill
+    const pill = document.getElementById('status-pill');
+    const lbl  = document.getElementById('status-label');
+    const cls  = s.finished ? 'finished' : (s.active_nodes||[]).length ? 'running' : 'idle';
+    pill.className = 'status-pill ' + cls;
+    lbl.textContent = s.finished ? 'Finished' : (s.active_nodes||[]).length ? 'Running' : 'Paused';
+
+    // Stats
+    document.getElementById('stat-round').textContent   = s.rounds ?? '—';
+    document.getElementById('stat-elapsed').textContent = fmtElapsed(s.elapsed_secs);
+
+    // Progress
+    const pct = Math.min(100, ((s.rounds||0)/MAX_ROUNDS)*100);
+    document.getElementById('progress-fill').style.width = pct + '%';
+    document.getElementById('progress-label').textContent = `Round ${s.rounds||0} of ${MAX_ROUNDS}`;
+
+    // Goal
+    const ge = document.getElementById('goal-display');
+    if (s.goal) { ge.textContent = s.goal; ge.className = 'goal-text'; }
+
+    // Active nodes
+    const grid   = document.getElementById('node-grid');
+    const active = new Set(s.active_nodes||[]);
+    grid.innerHTML = '';
+    NODE_IDS.forEach(id => {
+      const b = document.createElement('div');
+      b.className = 'node-badge' + (active.has(id) ? ' active' : '');
+      b.innerHTML = `<div class="node-dot"></div>${id}`;
+      grid.appendChild(b);
+    });
+
+    // Cumulative stats from round_metrics
+    const rm = s.round_metrics;
+    if (rm && rm.length) {
+      const last = rm[rm.length-1];
+      document.getElementById('stat-cost').textContent   = fmtCost(last.total_cost_usd);
+      document.getElementById('stat-tokens').textContent = fmtNum(last.total_tokens);
+    }
+
+    // Node outputs
+    const out = s.node_outputs || {};
+    ['generation','critic','advocate','evolution','meta_review'].forEach(nid => {
+      const el = document.getElementById('output-'+nid);
+      if (!el) return;
+      const arr = out[nid];
+      if (!arr || !arr.length) return;
+      el.innerHTML = '';
+      arr.forEach(o => {
+        const pre = document.createElement('pre');
+        pre.style.cssText = 'font-size:12px;line-height:1.5;white-space:pre-wrap;word-break:break-word;';
+        pre.textContent = JSON.stringify(o.data, null, 2);
+        el.appendChild(pre);
+      });
+    });
+
+    // Leaderboard from ranking node
+    const rankOut = (out['ranking']||[]).find(o => o.port==='top') || (out['ranking']||[])[0];
+    const hyps = rankOut?.data?.hypotheses;
+    if (Array.isArray(hyps) && hyps.length) renderLeaderboard(hyps);
+  }
+
+  function renderLeaderboard(hyps) {
+    const el = document.getElementById('leaderboard');
+    el.innerHTML = '';
+    hyps.forEach((h, i) => {
+      const item = document.createElement('div');
+      item.className = 'hyp-item' + (h.eliminated ? ' elim' : '');
+      const rc = ['rank-1','rank-2','rank-3'][i] || 'rank-n';
+      const sc = h.score != null ? Math.round(h.score) : '';
+      item.innerHTML = `
+        <div class="rank-circle ${rc}">${i+1}</div>
+        <div class="hyp-text">${esc(h.statement||h.hypothesis||JSON.stringify(h))}</div>
+        ${sc ? `<div class="hyp-score">${sc}</div>` : ''}`;
+      el.appendChild(item);
+    });
+  }
+
+  // ── SVG metrics chart ────────────────────────────────────────────────────
+  const SERIES = [
+    { key:'total_cost_usd', label:'Cost (USD)',     color:'#0a84ff' },
+    { key:'top_score',      label:'Top Elo score',  color:'#30d158' },
+    { key:'total_tokens',   label:'Tokens (k)',     color:'#ff9f0a' },
+  ];
+
+  function renderChart(data) {
+    const svg = document.getElementById('metrics-chart');
+    if (!data || data.length < 2) {
+      svg.innerHTML = `<text x="50%" y="80" text-anchor="middle" fill="var(--text3)" font-size="13">Not enough data yet</text>`;
+      return;
+    }
+    const W = svg.getBoundingClientRect().width || 800;
+    const H = 160, PT=12, PR=16, PB=28, PL=16;
+    const CW = W-PL-PR, CH = H-PT-PB;
+
+    function norm(key) {
+      const vals = data.map(d=>d[key]).filter(v=>v!=null);
+      const mn=Math.min(...vals), mx=Math.max(...vals);
+      if (mx===mn) return data.map(()=>0.5);
+      return data.map(d=>d[key]!=null ? (d[key]-mn)/(mx-mn) : null);
+    }
+
+    const xs = data.map((_,i)=>PL+(i/(data.length-1))*CW);
+    let html = `<defs>`;
+    SERIES.forEach((s,si)=>{
+      html+=`<linearGradient id="g${si}" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="${s.color}" stop-opacity=".4"/>
+        <stop offset="100%" stop-color="${s.color}" stop-opacity=".02"/>
+      </linearGradient>`;
+    });
+    html += `</defs>`;
+
+    SERIES.forEach((s,si)=>{
+      const ns = norm(s.key);
+      const ys = ns.map(v=>v!=null ? PT+CH*(1-v) : null);
+      const valid = xs.map((x,i)=>ys[i]!=null ? `${x},${ys[i]}` : null).filter(Boolean);
+      if (valid.length < 2) return;
+      const area = `${PL},${PT+CH} ${valid.join(' ')} ${xs[xs.length-1]},${PT+CH}`;
+      html += `<polygon points="${area}" fill="url(#g${si})"/>`;
+      html += `<polyline points="${valid.join(' ')}" fill="none" stroke="${s.color}" stroke-width="2" stroke-linejoin="round" stroke-linecap="round"/>`;
+      data.forEach((d,i)=>{ if(ys[i]!=null) html+=`<circle cx="${xs[i]}" cy="${ys[i]}" r="3" fill="${s.color}"/>`; });
+    });
+    data.forEach((d,i)=>{
+      html+=`<text x="${xs[i]}" y="${H-4}" text-anchor="middle" fill="var(--text3)" font-size="10">R${d.round}</text>`;
+    });
+
+    svg.setAttribute('height', H);
+    svg.innerHTML = html;
+
+    document.getElementById('chart-legend').innerHTML = SERIES.map((s,si)=>
+      `<div class="legend-item"><div class="legend-dot" style="background:${s.color}"></div>${esc(s.label)}</div>`
+    ).join('');
+  }
+
+  // ── Fetch & refresh ─────────────────────────────────────────────────────────
+  async function refresh() {
+    try {
+      const [sr, mr] = await Promise.all([fetch('/api/state'), fetch('/api/metrics')]);
+      if (!sr.ok || !mr.ok) return;
+      renderState(await sr.json());
+      renderChart(await mr.json());
+      document.getElementById('error-banner').style.display = 'none';
+    } catch(e) {
+      const b = document.getElementById('error-banner');
+      b.style.display = 'block';
+      b.textContent = 'Cannot reach Eureka server: ' + e.message;
+    }
+  }
+
+  // ── SSE event log ───────────────────────────────────────────────────────────
+  function connectSSE() {
+    if (eventSource) return;
+    eventSource = new EventSource('/api/events');
+    eventSource.onmessage = e => {
+      try {
+        const ev = JSON.parse(e.data);
+        const key = Object.keys(ev)[0];
+        if (key === 'ToolCalled') {
+          const p = ev[key];
+          const log = document.getElementById('event-log');
+          const empty = log.querySelector('.output-empty');
+          if (empty) empty.remove();
+          const line = document.createElement('div');
+          line.className = 'log-line';
+          line.innerHTML = `<span class="log-ts">${ts()}</span><b>${esc(p.node_id||'')}</b> → ${esc(p.tool||'')}${p.args_summary ? ': '+esc(p.args_summary) : ''}`;
+          log.insertBefore(line, log.firstChild);
+          while (log.childElementCount > 100) log.removeChild(log.lastChild);
+        }
+        if (key === 'CycleCompleted' || key === 'ActivationCompleted' || key === 'RunHalted') refresh();
+      } catch(_) {}
+    };
+    eventSource.onerror = () => {
+      eventSource.close(); eventSource = null;
+      setTimeout(connectSSE, 5000);
+    };
+  }
+
+  // Boot
+  refresh();
+  connectSSE();
+  setInterval(refresh, 10000);
+})();
+</script>
+</body>
+</html>
