@@ -114,7 +114,6 @@ pub async fn execute(args: ResumeArgs) -> Result<()> {
             crate::server::track_live_state(event_tx.subscribe(), Arc::clone(&live_state));
         _server_handle = crate::server::start_server_with_manager(
             session.spec().clone(),
-            Arc::new(session.manifest().clone()),
             event_tx,
             live_state,
             args.port,
