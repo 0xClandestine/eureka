@@ -6,6 +6,7 @@
 
 use std::any::Any;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use crate::graph::node::NodeUsage;
 use crate::persistence::RunEnvironment;
@@ -199,10 +200,6 @@ impl<M: CompletionModel + Clone + Send + Sync + 'static> LlmClient for RigClient
         event_tx: Option<mpsc::Sender<SchedulerEvent>>,
         environment: &RunEnvironment,
     ) -> Result<(serde_json::Value, NodeUsage), AgentError> {
-        let result: Arc<Mutex<Option<serde_json::Value>>> = Arc::new(Mutex::new(None));
-
-        let submit = Submit { schema: output_schema.clone(), result: Arc::clone(&result) };
-
         let command_tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         let mcp_tool_names: Vec<String> =
             self.mcp.iter().flat_map(|c| c.tools.iter().map(|t| t.name.to_string())).collect();
@@ -214,75 +211,113 @@ impl<M: CompletionModel + Clone + Send + Sync + 'static> LlmClient for RigClient
         let full_preamble =
             build_preamble(preamble, &all_tool_names, max_iterations, output_schema);
 
-        let command_tools: Vec<Box<dyn rig_core::tool::ToolDyn>> = tools
-            .iter()
-            .map(|t| -> Box<dyn rig_core::tool::ToolDyn> {
-                Box::new(CommandTool::with_environment(
-                    Arc::new(t.clone()),
-                    node_id.to_string(),
-                    node_kind.to_string(),
-                    round,
-                    std::path::PathBuf::from(work_dir),
-                    environment.clone(),
-                    event_tx.clone(),
-                ))
-            })
-            .collect();
-
-        let mut base_builder =
-            AgentBuilder::new(self.model.clone()).preamble(&full_preamble).temperature(temperature);
-
-        if let Some((index, top_k)) = &self.rag {
-            base_builder = base_builder.dynamic_context(*top_k, index.clone());
-        }
-
-        // Transition to WithBuilderTools by adding the terminal submit tool first,
-        // then chain command tools and MCP tools (all in WithBuilderTools state).
-        let mut builder = base_builder.tool(submit).tools(command_tools);
-
-        // Register MCP tools for each connected server.
-        for conn in &self.mcp {
-            builder = builder.rmcp_tools(conn.tools.clone(), conn.sink.clone());
-        }
-
-        let agent = builder.build();
-
-        // Use the extended prompt path so we get a PromptResponse with
-        // aggregated token usage across all turns of the agent loop.
-        let response = agent
-            .prompt(initial_message)
-            .max_turns(max_iterations as usize)
-            .extended_details()
-            .await;
-
-        // Check submit result before propagating any error: the agent may have
-        // called submit on its final turn and Rig still returns MaxTurnsError.
-        let submitted =
-            result.lock().map_err(|e| AgentError::Provider(format!("lock poisoned: {e}")))?.take();
-
-        let (value, usage) = match (response, submitted) {
-            (Ok(resp), Some(v)) => {
-                let u = NodeUsage::from_rig_usage(
-                    resp.usage.input_tokens,
-                    resp.usage.output_tokens,
-                    resp.usage.total_tokens,
-                    self.pricing.as_ref(),
+        // Retry loop: provider transient failures (e.g. empty 200 body from OpenRouter)
+        // are retried up to MAX_ATTEMPTS times with exponential backoff.
+        const MAX_ATTEMPTS: u32 = 4;
+        let mut last_err = String::new();
+        for attempt in 0..MAX_ATTEMPTS {
+            if attempt > 0 {
+                let delay = Duration::from_secs(1 << (attempt - 1)); // 1s, 2s, 4s
+                tracing::warn!(
+                    attempt,
+                    ?delay,
+                    "retrying agent loop after transient provider error"
                 );
-                (v, u)
+                tokio::time::sleep(delay).await;
             }
-            // Submit called on the last turn; Rig raises MaxTurnsError but the
-            // result is valid.  Usage is unavailable, so use zero.
-            (Err(_), Some(v)) => (v, NodeUsage::default()),
-            (Ok(_), None) => {
-                return Err(AgentError::ExtractionFailed(
-                    "Agent exhausted iterations without calling submit".to_string(),
-                ));
-            }
-            (Err(e), None) => return Err(AgentError::Provider(e.to_string())),
-        };
 
-        Ok((value, usage))
+            // Fresh submit store each attempt — previous attempt may have left it empty.
+            let result: Arc<Mutex<Option<serde_json::Value>>> = Arc::new(Mutex::new(None));
+            let submit = Submit { schema: output_schema.clone(), result: Arc::clone(&result) };
+
+            let command_tools: Vec<Box<dyn rig_core::tool::ToolDyn>> = tools
+                .iter()
+                .map(|t| -> Box<dyn rig_core::tool::ToolDyn> {
+                    Box::new(CommandTool::with_environment(
+                        Arc::new(t.clone()),
+                        node_id.to_string(),
+                        node_kind.to_string(),
+                        round,
+                        std::path::PathBuf::from(work_dir),
+                        environment.clone(),
+                        event_tx.clone(),
+                    ))
+                })
+                .collect();
+
+            let mut base_builder = AgentBuilder::new(self.model.clone())
+                .preamble(&full_preamble)
+                .temperature(temperature);
+
+            if let Some((index, top_k)) = &self.rag {
+                base_builder = base_builder.dynamic_context(*top_k, index.clone());
+            }
+
+            let mut builder = base_builder.tool(submit).tools(command_tools);
+            for conn in &self.mcp {
+                builder = builder.rmcp_tools(conn.tools.clone(), conn.sink.clone());
+            }
+            let agent = builder.build();
+
+            // Use the extended prompt path so we get a PromptResponse with
+            // aggregated token usage across all turns of the agent loop.
+            let response = agent
+                .prompt(initial_message)
+                .max_turns(max_iterations as usize)
+                .extended_details()
+                .await;
+
+            // Check submit result before propagating any error: the agent may have
+            // called submit on its final turn and Rig still returns MaxTurnsError.
+            let submitted = result
+                .lock()
+                .map_err(|e| AgentError::Provider(format!("lock poisoned: {e}")))?
+                .take();
+
+            match (response, submitted) {
+                (Ok(resp), Some(v)) => {
+                    let u = NodeUsage::from_rig_usage(
+                        resp.usage.input_tokens,
+                        resp.usage.output_tokens,
+                        resp.usage.total_tokens,
+                        self.pricing.as_ref(),
+                    );
+                    return Ok((v, u));
+                }
+                // Submit called on the last turn; Rig raises MaxTurnsError but result is valid.
+                (Err(_), Some(v)) => return Ok((v, NodeUsage::default())),
+                (Ok(_), None) => {
+                    return Err(AgentError::ExtractionFailed(
+                        "Agent exhausted iterations without calling submit".to_string(),
+                    ));
+                }
+                (Err(e), None) => {
+                    let msg = e.to_string();
+                    if attempt + 1 < MAX_ATTEMPTS && is_retryable_provider_error(&msg) {
+                        last_err = msg;
+                        continue;
+                    }
+                    return Err(AgentError::Provider(msg));
+                }
+            }
+        }
+
+        Err(AgentError::Provider(format!(
+            "provider failed after {MAX_ATTEMPTS} attempts: {last_err}"
+        )))
     }
+}
+
+/// Returns `true` for transient provider errors that are safe to retry.
+///
+/// An empty-body 200 from OpenRouter surfaces as `ProviderResponseError: status 200 OK:`
+/// with nothing after the colon. 503 / 529 (overloaded) are also retryable.
+fn is_retryable_provider_error(msg: &str) -> bool {
+    // Empty 200 body — the most common transient OpenRouter failure.
+    msg.contains("ProviderResponseError: status 200 OK:")
+        || msg.contains("status 503")
+        || msg.contains("status 529")
+        || msg.contains("status 502")
 }
 
 /// Build the full system preamble by appending schema, submit, and tool instructions.
