@@ -46,25 +46,20 @@ generation_model = "deepseek/deepseek-v4-flash"
 # [agent.overrides.<agent_id>].
 temperature = 0.7
 max_iterations = 10
+workers = 1
 
 # Per-agent LLM config overrides. Each agent not listed here falls back
 # to the [agent] global defaults above.
 #
-# [agent.overrides.generation]
-# temperature = 0.9
-# max_iterations = 15
-#
-# [agent.overrides.reflection]
-# temperature = 0.7
-# max_iterations = 12
-#
-# [agent.overrides.evolution]
-# temperature = 0.85
-# max_iterations = 12
-#
-# [agent.overrides.meta_review]
-# temperature = 0.7
-# max_iterations = 10
+# workers > 1 fires that many independent LLM calls in parallel per
+# activation; their array outputs are merged (concatenated). Use this to
+# get diversity in generation and evolution without a single long prompt.
+
+[agent.overrides.generation]
+workers = 3
+
+[agent.overrides.evolution]
+workers = 3
 
 [scheduler]
 max_in_flight = 8

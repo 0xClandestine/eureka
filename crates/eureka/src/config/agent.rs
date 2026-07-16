@@ -15,6 +15,18 @@ pub struct AgentConfig {
     pub temperature: f64,
     /// Maximum number of loop iterations before the agent is forcibly halted.
     pub max_iterations: u32,
+    /// Number of parallel LLM calls to spawn per activation.
+    ///
+    /// When `workers > 1` the node fires `workers` independent LLM calls
+    /// concurrently with identical inputs.  Array-valued fields in their JSON
+    /// outputs are concatenated; scalar fields take the last non-null value.
+    /// This provides output diversity at the cost of `workers × token spend`.
+    #[serde(default = "default_workers")]
+    pub workers: u32,
+}
+
+fn default_workers() -> u32 {
+    1
 }
 
 impl AgentConfig {
@@ -27,6 +39,6 @@ impl AgentConfig {
 
 impl Default for AgentConfig {
     fn default() -> Self {
-        Self { temperature: 0.7, max_iterations: 10 }
+        Self { temperature: 0.7, max_iterations: 10, workers: 1 }
     }
 }

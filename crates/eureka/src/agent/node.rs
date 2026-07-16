@@ -4,12 +4,16 @@
 //! 1. Serializes the input artifact's data as the initial loop message.
 //! 2. Runs the agentic loop: the LLM reasons freely, then calls `submit(json)`.
 //! 3. Splits the returned JSON across the declared output ports.
+//!
+//! When `config.workers > 1` the node spawns `workers` parallel agentic loops
+//! with identical inputs and merges their JSON outputs: array-valued fields are
+//! concatenated, scalar fields take the last non-null value.
 
 use std::path::PathBuf;
 use std::sync::Arc;
 
 use crate::graph::artifact::Artifact;
-use crate::graph::node::{Emit, Node, NodeCtx, NodeError, PortMsg};
+use crate::graph::node::{Emit, Node, NodeCtx, NodeError, NodeUsage, PortMsg};
 use crate::graph::port::PortSpec;
 use crate::persistence::RunEnvironment;
 use async_trait::async_trait;
@@ -66,7 +70,7 @@ impl Node for LlmAgentNode {
         &self,
         ctx: &NodeCtx,
         inputs: Vec<PortMsg>,
-    ) -> Result<(Vec<Emit>, crate::graph::node::NodeUsage), NodeError> {
+    ) -> Result<(Vec<Emit>, NodeUsage), NodeError> {
         // Build the initial loop message from all available inputs. For a
         // single-input agent, this is just the artifact payload. For a
         // multi-input agent, each input is labelled with its port name so the
@@ -87,24 +91,77 @@ impl Node for LlmAgentNode {
             serde_json::to_string_pretty(&data).map_err(|e| NodeError::Internal(e.to_string()))?
         };
 
-        let (output_json, usage) = self
-            .client
-            .run_agent_loop_with_environment(
-                &self.def.preamble,
-                &self.def.output_schema,
-                &self.def.tools,
-                &initial_message,
-                self.def.config.max_iterations,
-                self.def.config.temperature,
-                &ctx.node_id,
-                &ctx.node_kind,
-                ctx.round,
-                &self.work_dir.to_string_lossy(),
-                ctx.event_tx.clone(),
-                &self.environment,
-            )
-            .await
-            .map_err(|e| NodeError::Agent(e.to_string()))?;
+        let workers = self.def.config.workers.max(1) as usize;
+
+        let (output_json, usage) = if workers == 1 {
+            self.client
+                .run_agent_loop_with_environment(
+                    &self.def.preamble,
+                    &self.def.output_schema,
+                    &self.def.tools,
+                    &initial_message,
+                    self.def.config.max_iterations,
+                    self.def.config.temperature,
+                    &ctx.node_id,
+                    &ctx.node_kind,
+                    ctx.round,
+                    &self.work_dir.to_string_lossy(),
+                    ctx.event_tx.clone(),
+                    &self.environment,
+                )
+                .await
+                .map_err(|e| NodeError::Agent(e.to_string()))?
+        } else {
+            // Scatter: spawn `workers` independent LLM calls in parallel.
+            let mut handles = Vec::with_capacity(workers);
+            for worker_idx in 0..workers {
+                let client = Arc::clone(&self.client);
+                let preamble = self.def.preamble.clone();
+                let schema = self.def.output_schema.clone();
+                let tools = self.def.tools.clone();
+                let message = initial_message.clone();
+                let max_iter = self.def.config.max_iterations;
+                let temperature = self.def.config.temperature;
+                let node_id = format!("{}[{}]", ctx.node_id, worker_idx);
+                let node_kind = ctx.node_kind.clone();
+                let round = ctx.round;
+                let work_dir = self.work_dir.to_string_lossy().into_owned();
+                let event_tx = ctx.event_tx.clone();
+                let environment = self.environment.clone();
+                handles.push(tokio::spawn(async move {
+                    client
+                        .run_agent_loop_with_environment(
+                            &preamble,
+                            &schema,
+                            &tools,
+                            &message,
+                            max_iter,
+                            temperature,
+                            &node_id,
+                            &node_kind,
+                            round,
+                            &work_dir,
+                            event_tx,
+                            &environment,
+                        )
+                        .await
+                }));
+            }
+
+            // Gather: collect results, propagate the first error.
+            let mut outputs: Vec<serde_json::Value> = Vec::with_capacity(workers);
+            let mut total_usage = NodeUsage::default();
+            for handle in handles {
+                let (json, usage) = handle
+                    .await
+                    .map_err(|e| NodeError::Internal(format!("worker task panicked: {e}")))?
+                    .map_err(|e| NodeError::Agent(e.to_string()))?;
+                outputs.push(json);
+                total_usage = total_usage + usage;
+            }
+
+            (merge_worker_outputs(outputs), total_usage)
+        };
 
         let emits = if self.def.outputs.len() == 1 {
             let port = &self.def.outputs[0];
@@ -120,6 +177,54 @@ impl Node for LlmAgentNode {
 
         Ok((emits, usage))
     }
+}
+
+/// Merge the JSON outputs of multiple parallel workers.
+///
+/// For every key present across all outputs:
+/// - If every worker produced an array for that key, concatenate the arrays.
+/// - Otherwise take the last non-null value (scalar / object fields).
+fn merge_worker_outputs(outputs: Vec<serde_json::Value>) -> serde_json::Value {
+    if outputs.is_empty() {
+        return serde_json::Value::Null;
+    }
+    if outputs.len() == 1 {
+        return outputs.into_iter().next().unwrap_or(serde_json::Value::Null);
+    }
+
+    // Collect all keys that appear in any output.
+    let mut all_keys: Vec<String> = outputs
+        .iter()
+        .filter_map(|v| v.as_object())
+        .flat_map(|m| m.keys().cloned())
+        .collect::<std::collections::HashSet<_>>()
+        .into_iter()
+        .collect();
+    all_keys.sort();
+
+    let mut merged = serde_json::Map::new();
+    for key in &all_keys {
+        let values: Vec<&serde_json::Value> = outputs.iter().filter_map(|o| o.get(key)).collect();
+
+        let all_arrays = values.iter().all(|v| v.is_array());
+        if all_arrays {
+            let concatenated: Vec<serde_json::Value> = values
+                .iter()
+                .flat_map(|v| v.as_array().map_or(&[][..], |a| a.as_slice()).iter().cloned())
+                .collect();
+            merged.insert(key.clone(), serde_json::Value::Array(concatenated));
+        } else {
+            let val = values
+                .iter()
+                .rev()
+                .find(|v| !v.is_null())
+                .copied()
+                .unwrap_or(&serde_json::Value::Null)
+                .clone();
+            merged.insert(key.clone(), val);
+        }
+    }
+    serde_json::Value::Object(merged)
 }
 
 #[cfg(test)]
@@ -341,5 +446,81 @@ mod tests {
         node.process(&ctx, vec![msg]).await.unwrap();
         let prompt = client.captured.lock().unwrap().clone().unwrap();
         assert!(prompt.starts_with("Port: context"));
+    }
+}
+
+#[cfg(test)]
+mod worker_tests {
+    use std::sync::Arc;
+    use std::path::PathBuf;
+    use async_trait::async_trait;
+    use crate::graph::artifact::Artifact;
+    use crate::graph::node::{NodeCtx, PortMsg};
+    use crate::graph::node::Node as _;
+    use super::super::def::{AgentConfig, AgentDef, PortDef};
+    use super::super::error::AgentError;
+    use super::super::client::LlmClient;
+    use super::{LlmAgentNode, merge_worker_outputs};
+
+    #[test]
+    fn test_merge_arrays_concatenated() {
+        let a = serde_json::json!({ "hypotheses": [{"id": 1}], "meta": "a" });
+        let b = serde_json::json!({ "hypotheses": [{"id": 2}, {"id": 3}], "meta": "b" });
+        let merged = merge_worker_outputs(vec![a, b]);
+        assert_eq!(merged["hypotheses"].as_array().unwrap().len(), 3);
+        assert_eq!(merged["meta"].as_str().unwrap(), "b");
+    }
+
+    #[test]
+    fn test_merge_single_passthrough() {
+        let v = serde_json::json!({ "hypotheses": [{"id": 1}] });
+        assert_eq!(merge_worker_outputs(vec![v.clone()]), v);
+    }
+
+    #[test]
+    fn test_merge_empty() {
+        assert_eq!(merge_worker_outputs(vec![]), serde_json::Value::Null);
+    }
+
+    #[tokio::test]
+    async fn test_workers_spawn_parallel_calls() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        struct CountingClient { calls: Arc<AtomicUsize> }
+
+        #[async_trait]
+        impl LlmClient for CountingClient {
+            async fn run_agent_loop(
+                &self,
+                _preamble: &str, _output_schema: &serde_json::Value,
+                _tools: &[crate::agent::def::ToolDef],
+                _initial_message: &str, _max_iterations: u32, _temperature: f64,
+                _node_id: &str, _node_kind: &str, _round: u32, _work_dir: &str,
+                _event_tx: Option<tokio::sync::mpsc::Sender<crate::scheduler::SchedulerEvent>>,
+            ) -> Result<(serde_json::Value, crate::graph::node::NodeUsage), AgentError> {
+                self.calls.fetch_add(1, Ordering::SeqCst);
+                Ok((serde_json::json!({ "items": [1] }), crate::graph::node::NodeUsage::default()))
+            }
+        }
+
+        let calls = Arc::new(AtomicUsize::new(0));
+        let def = Arc::new(AgentDef {
+            name: "gen".to_string(), description: None, preamble: "p".to_string(),
+            inputs: vec![PortDef { kind: "Goal".to_string(), port: "in".to_string(), ..Default::default() }],
+            outputs: vec![PortDef { kind: "Items".to_string(), port: "out".to_string(), ..Default::default() }],
+            config: AgentConfig { workers: 3, ..AgentConfig::default() },
+            output_schema: serde_json::json!({ "type": "object" }),
+            tools: vec![], mcp_servers: vec![],
+        });
+        let node = LlmAgentNode::new(def, Arc::new(CountingClient { calls: Arc::clone(&calls) }), PathBuf::from("."));
+        let cancel = tokio_util::sync::CancellationToken::new();
+        let ctx = NodeCtx::new("gen", "gen", 0, cancel);
+        let msg = PortMsg {
+            port: "in".into(),
+            artifact: Artifact { kind: "Goal".to_string(), data: serde_json::json!({}) },
+        };
+        let (emits, _) = node.process(&ctx, vec![msg]).await.unwrap();
+        assert_eq!(calls.load(Ordering::SeqCst), 3, "3 workers must each call the LLM once");
+        assert_eq!(emits[0].artifact.data["items"].as_array().unwrap().len(), 3);
     }
 }
