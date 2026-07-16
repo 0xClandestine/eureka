@@ -249,15 +249,21 @@ impl super::Session {
 /// Remove potentially large artifact payloads from a completed event.
 fn strip_event_artifacts(event: &SchedulerEvent) -> SchedulerEvent {
     match event {
-        SchedulerEvent::ActivationCompleted { node_id, node_kind, round, emit_count, .. } => {
-            SchedulerEvent::ActivationCompleted {
-                node_id: node_id.clone(),
-                node_kind: node_kind.clone(),
-                round: *round,
-                emit_count: *emit_count,
-                outputs: Vec::new(),
-            }
-        }
+        SchedulerEvent::ActivationCompleted {
+            node_id,
+            node_kind,
+            round,
+            emit_count,
+            usage,
+            ..
+        } => SchedulerEvent::ActivationCompleted {
+            node_id: node_id.clone(),
+            node_kind: node_kind.clone(),
+            round: *round,
+            emit_count: *emit_count,
+            outputs: Vec::new(),
+            usage: *usage,
+        },
         other => other.clone(),
     }
 }

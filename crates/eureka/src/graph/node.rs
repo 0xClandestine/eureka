@@ -101,7 +101,7 @@ pub enum NodeError {
 /// the cost/token budget backstops can fire. LLM-backed nodes populate token
 /// counts (and an optional best-effort cost when a per-model rate is
 /// configured); subprocess and mock nodes return the zero default.
-#[derive(Debug, Clone, Copy, Default, PartialEq)]
+#[derive(Debug, Clone, Copy, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct NodeUsage {
     /// Prompt/input tokens consumed by this activation.
     pub input_tokens: u64,

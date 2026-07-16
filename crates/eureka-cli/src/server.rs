@@ -51,6 +51,25 @@ pub struct ServerState {
     manager: Option<RunManager>,
 }
 
+/// Per-round cost and quality metrics for the `GET /api/metrics` time series.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct RoundMetrics {
+    /// Round number (0-based).
+    pub round: u32,
+    /// Wall-clock seconds elapsed when this round completed.
+    pub elapsed_secs: f64,
+    /// Tokens consumed during this round.
+    pub tokens: u64,
+    /// Cost (USD) incurred during this round.
+    pub cost_usd: f64,
+    /// Cumulative tokens at this round boundary.
+    pub total_tokens: u64,
+    /// Cumulative cost (USD) at this round boundary.
+    pub total_cost_usd: f64,
+    /// Highest hypothesis score from the ranker at this round (Elo rating).
+    pub top_score: Option<f64>,
+}
+
 /// Live run state snapshot served at `GET /api/state`.
 #[derive(Debug, Default, Clone, Serialize)]
 pub struct LiveState {
@@ -66,6 +85,8 @@ pub struct LiveState {
     pub finished: bool,
     /// Latest outputs per node: `node_id` → `[{ port, kind, data }]`
     pub node_outputs: std::collections::HashMap<String, Vec<serde_json::Value>>,
+    /// Per-round cost and quality metrics (populated at each `CycleCompleted`).
+    pub round_metrics: Vec<RoundMetrics>,
 }
 
 /// Spawn a background task that subscribes to the broadcast channel
@@ -76,6 +97,11 @@ pub fn track_live_state(
     mut rx: broadcast::Receiver<SchedulerEvent>,
     live: Arc<Mutex<LiveState>>,
 ) -> tokio::task::JoinHandle<()> {
+    let started_at = Instant::now();
+    let mut round_tokens: u64 = 0;
+    let mut round_cost: f64 = 0.0;
+    let mut pending_top_score: Option<f64> = None;
+
     tokio::spawn(async move {
         loop {
             match rx.recv().await {
@@ -85,16 +111,44 @@ pub fn track_live_state(
                         SchedulerEvent::ActivationStarted { node_id, .. } => {
                             s.active_nodes.insert(node_id.clone());
                         }
-                        SchedulerEvent::ActivationCompleted { node_id, outputs, .. } => {
+                        SchedulerEvent::ActivationCompleted { node_id, outputs, usage, .. } => {
                             s.active_nodes.remove(node_id.as_str());
                             if !outputs.is_empty() {
                                 s.node_outputs.insert(node_id.clone(), outputs.clone());
+                            }
+                            round_tokens += usage.total_tokens;
+                            round_cost += usage.cost_usd;
+                            if node_id == "ranking" {
+                                pending_top_score = outputs
+                                    .iter()
+                                    .find(|o| o["port"].as_str() == Some("top"))
+                                    .and_then(|o| o["data"]["hypotheses"].as_array())
+                                    .and_then(|h| h.first())
+                                    .and_then(|h| h["score"].as_f64());
                             }
                         }
                         SchedulerEvent::ActivationFailed { node_id, .. } => {
                             s.active_nodes.remove(node_id.as_str());
                         }
                         SchedulerEvent::CycleCompleted { round } => {
+                            let cumulative_tokens: u64 =
+                                s.round_metrics.iter().map(|m| m.tokens).sum::<u64>()
+                                    + round_tokens;
+                            let cumulative_cost: f64 =
+                                s.round_metrics.iter().map(|m| m.cost_usd).sum::<f64>()
+                                    + round_cost;
+                            s.round_metrics.push(RoundMetrics {
+                                round: *round,
+                                elapsed_secs: started_at.elapsed().as_secs_f64(),
+                                tokens: round_tokens,
+                                cost_usd: round_cost,
+                                total_tokens: cumulative_tokens,
+                                total_cost_usd: cumulative_cost,
+                                top_score: pending_top_score,
+                            });
+                            round_tokens = 0;
+                            round_cost = 0.0;
+                            pending_top_score = None;
                             s.rounds = *round;
                         }
                         SchedulerEvent::RunHalted { total_rounds, .. } => {
@@ -175,6 +229,7 @@ pub fn start_server_with_manager(
         .route("/api/run", get(run_handler))
         .route("/api/events/history", get(event_history_handler))
         .route("/api/events", get(events_handler))
+        .route("/api/metrics", get(metrics_handler))
         .route("/runs", post(create_run_handler).get(list_runs_handler))
         .route("/runs/{id}", get(get_run_handler))
         .route("/runs/{id}/pause", post(pause_run_handler))
@@ -360,6 +415,11 @@ async fn get_run_events_handler(
         .await
         .map(Json)
         .map_err(|_| axum::http::StatusCode::INTERNAL_SERVER_ERROR)
+}
+
+/// `GET /api/metrics` — per-round cost and quality time series.
+async fn metrics_handler(State(s): State<ServerState>) -> Json<Vec<RoundMetrics>> {
+    Json(s.live.lock().await.round_metrics.clone())
 }
 
 /// `GET /api/events` — SSE stream that replays every `SchedulerEvent`.

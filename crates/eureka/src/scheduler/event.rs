@@ -24,6 +24,9 @@ pub enum SchedulerEvent {
         /// Serialized outputs: `[{ "port": "out", "kind": "Hypotheses", "data": {...} }]`.
         #[serde(default)]
         outputs: Vec<serde_json::Value>,
+        /// Resource usage for this activation (tokens, cost).
+        #[serde(default)]
+        usage: crate::graph::node::NodeUsage,
     },
     /// A node activation failed.
     ActivationFailed {
