@@ -91,6 +91,28 @@ enum Commands {
         port: u16,
     },
 
+    /// Resume a failed or paused session (no daemon required).
+    Resume {
+        /// Session UUID to resume.
+        id: String,
+
+        /// Port for the observability UI server (0 = disabled).
+        #[arg(long, default_value_t = 7773)]
+        port: u16,
+    },
+
+    /// Pause a running session (daemon must be running).
+    Pause {
+        /// Session UUID to pause.
+        id: String,
+    },
+
+    /// Cancel a running or paused session (daemon must be running).
+    Cancel {
+        /// Session UUID to cancel.
+        id: String,
+    },
+
     /// Validate a graph specification file.
     Validate {
         /// Path to the graph spec file.
@@ -253,6 +275,20 @@ async fn main() -> anyhow::Result<()> {
                 port,
             })
             .await?;
+        }
+        Commands::Resume { id, port } => {
+            commands::resume::execute(commands::resume::ResumeArgs {
+                session_id: id,
+                config_path: cli.config.unwrap_or_else(|| "eureka.toml".to_string()),
+                port,
+            })
+            .await?;
+        }
+        Commands::Pause { id } => {
+            commands::session::execute_pause(&data_dir, &id).await?;
+        }
+        Commands::Cancel { id } => {
+            commands::session::execute_cancel(&data_dir, &id).await?;
         }
         Commands::Validate { graph } => {
             commands::validate::execute(&graph)?;

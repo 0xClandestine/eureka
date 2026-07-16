@@ -6,8 +6,9 @@ use std::sync::Arc;
 use anyhow::{Context, Result};
 use eureka::config::{Budget, EurekaConfig};
 use eureka::persistence::{open_persistence, RunPersistence};
+use eureka::scheduler::SchedulerSignal;
 use eureka::{RunManager, Session};
-use tokio::sync::broadcast;
+use tokio::sync::{broadcast, mpsc};
 
 /// Arguments for the `run` command.
 #[derive(Debug)]
@@ -93,6 +94,13 @@ pub async fn execute(args: RunArgs) -> Result<()> {
     session.set_checkpoint_store(persistence.clone());
     session.set_event_store(persistence.clone());
 
+    // Graceful shutdown: Ctrl+C / SIGTERM sends Pause so a checkpoint is saved
+    // before the process exits, making the session resumable.
+    let signal_sink: Arc<tokio::sync::Mutex<Option<mpsc::Sender<SchedulerSignal>>>> =
+        Arc::new(tokio::sync::Mutex::new(None));
+    session.set_scheduler_signal_sink(Arc::clone(&signal_sink));
+    install_shutdown_handler(signal_sink);
+
     tracing::info!(
         goal = %args.goal,
         domain = %args.domain,
@@ -149,4 +157,34 @@ pub async fn execute(args: RunArgs) -> Result<()> {
     }
 
     Ok(())
+}
+
+/// Spawn a task that listens for Ctrl+C and SIGTERM and sends `Pause` to the
+/// scheduler so it saves a checkpoint before the process exits.
+pub(crate) fn install_shutdown_handler(
+    sink: Arc<tokio::sync::Mutex<Option<mpsc::Sender<SchedulerSignal>>>>,
+) {
+    // Ctrl+C
+    let sink_ctrlc = Arc::clone(&sink);
+    tokio::spawn(async move {
+        if tokio::signal::ctrl_c().await.is_ok() {
+            tracing::info!("Ctrl+C received — saving checkpoint before exit…");
+            if let Some(tx) = sink_ctrlc.lock().await.as_ref() {
+                let _ = tx.send(SchedulerSignal::Pause).await;
+            }
+        }
+    });
+
+    // SIGTERM (Unix only)
+    #[cfg(unix)]
+    tokio::spawn(async move {
+        use tokio::signal::unix::{signal, SignalKind};
+        if let Ok(mut stream) = signal(SignalKind::terminate()) {
+            stream.recv().await;
+            tracing::info!("SIGTERM received — saving checkpoint before exit…");
+            if let Some(tx) = sink.lock().await.as_ref() {
+                let _ = tx.send(SchedulerSignal::Pause).await;
+            }
+        }
+    });
 }
