@@ -103,6 +103,62 @@ impl Node for MockProx {
     }
 }
 
+struct MockScatter;
+#[async_trait]
+impl Node for MockScatter {
+    fn ports(&self) -> PortSpec {
+        PortSpec::new(
+            vec![PortSpecEntry {
+                name: "in".into(),
+                direction: PortDirection::Input,
+                kind: "Hypotheses".into(),
+                required: true,
+            }],
+            vec![PortSpecEntry {
+                name: "item".into(),
+                direction: PortDirection::Output,
+                kind: "HypothesisItem".into(),
+                required: false,
+            }],
+        )
+    }
+    async fn process(
+        &self,
+        _: &NodeCtx,
+        _: Vec<PortMsg>,
+    ) -> Result<(Vec<Emit>, eureka::graph::node::NodeUsage), NodeError> {
+        Ok((vec![], eureka::graph::node::NodeUsage::default()))
+    }
+}
+
+struct MockGather;
+#[async_trait]
+impl Node for MockGather {
+    fn ports(&self) -> PortSpec {
+        PortSpec::new(
+            vec![PortSpecEntry {
+                name: "in".into(),
+                direction: PortDirection::Input,
+                kind: "ReviewItem".into(),
+                required: true,
+            }],
+            vec![PortSpecEntry {
+                name: "out".into(),
+                direction: PortDirection::Output,
+                kind: "Reviews".into(),
+                required: false,
+            }],
+        )
+    }
+    async fn process(
+        &self,
+        _: &NodeCtx,
+        _: Vec<PortMsg>,
+    ) -> Result<(Vec<Emit>, eureka::graph::node::NodeUsage), NodeError> {
+        Ok((vec![], eureka::graph::node::NodeUsage::default()))
+    }
+}
+
 struct MockSup;
 #[async_trait]
 impl Node for MockSup {
@@ -228,6 +284,8 @@ fn test_coscientist_validates() {
     nodes.insert("ranking".to_string(), BoxedNode::new(MockRanker));
     nodes.insert("proximity".to_string(), BoxedNode::new(MockProx));
     nodes.insert("supervisor".to_string(), BoxedNode::new(MockSup));
+    nodes.insert("scatter".to_string(), BoxedNode::new(MockScatter));
+    nodes.insert("gather".to_string(), BoxedNode::new(MockGather));
 
     let mut registry = PortRegistry::new();
     for (node_id, node) in &nodes {
@@ -262,11 +320,21 @@ fn test_coscientist_config_loads() {
     assert_eq!(rag.embedding_model, "google/gemini-embedding-2");
     assert!(rag.top_k > 0, "rag.top_k must be positive");
 
-    // Workers overrides for generation and evolution must be set.
-    let gen = config.agent_overrides.get("generation").expect("generation override must exist");
-    assert!(gen.workers.unwrap_or(0) > 1, "generation workers must be > 1 for parallel scatter");
-    let evo = config.agent_overrides.get("evolution").expect("evolution override must exist");
-    assert!(evo.workers.unwrap_or(0) > 1, "evolution workers must be > 1 for parallel scatter");
+    // Per-hypothesis parallelism is provided by scatter/gather, not workers.
+    // All agents should have workers == 1 (the default) so there is no
+    // cross-product fan-in collision at downstream single-replica nodes.
+    let gen_workers = config
+        .agent_overrides
+        .get("generation")
+        .and_then(|o| o.workers)
+        .unwrap_or(config.agent.workers);
+    assert_eq!(gen_workers, 1, "generation workers must be 1; scatter provides parallelism");
+    let evo_workers = config
+        .agent_overrides
+        .get("evolution")
+        .and_then(|o| o.workers)
+        .unwrap_or(config.agent.workers);
+    assert_eq!(evo_workers, 1, "evolution workers must be 1; scatter provides parallelism");
 }
 
 /// The generation and evolution output schemas must declare `hypotheses` as an
@@ -298,23 +366,30 @@ fn test_agent_output_schemas() {
     }
 }
 
-/// Regression guard: the generation and evolution prompts must instruct the
-/// agent to produce exactly one hypothesis per call so that parallel workers
-/// each contribute a single, distinct hypothesis.
+/// Regression guard: the generation prompt must instruct the agent to produce
+/// a batch of hypotheses (5–8) so that scatter has a meaningful array to fan
+/// out. The evolution prompt still produces an array of evolved variants.
 #[test]
-fn test_single_hypothesis_prompts() {
+fn test_batch_hypothesis_prompts() {
     let dir = graph_dir();
 
-    for (filename, label) in
-        [("prompts/generation.md", "generation"), ("prompts/evolution.md", "evolution")]
-    {
-        let content = std::fs::read_to_string(dir.join(filename))
-            .unwrap_or_else(|_| panic!("Failed to read {filename}"));
-        assert!(
-            content.contains("one"),
-            "'{label}' prompt must contain 'one' to instruct single-hypothesis output"
-        );
-    }
+    let gen = std::fs::read_to_string(dir.join("prompts/generation.md"))
+        .expect("Failed to read prompts/generation.md");
+    assert!(
+        gen.contains("5 and 8") || gen.contains("5–8") || gen.contains("5-8"),
+        "generation prompt must instruct a batch of 5–8 hypotheses for scatter fan-out"
+    );
+
+    // Evolution still produces an array; verify the output schema supports it.
+    let manifest = GraphManifest::load(&dir.join("coscientist.yml"))
+        .expect("Failed to load manifest");
+    let evo = manifest.agents.iter().find(|a| a.id == "evolution")
+        .expect("evolution agent must exist");
+    assert_eq!(
+        evo.output_schema["properties"]["hypotheses"]["type"].as_str(),
+        Some("array"),
+        "evolution output schema must declare hypotheses as an array"
+    );
 }
 
 /// All nine nodes declared in the manifest must be registered (no orphan node).

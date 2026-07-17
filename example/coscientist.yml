@@ -111,76 +111,89 @@ agents:
               citations:            { type: array, items: { type: object }, description: "Supporting literature references" }
 
   - id: critic
-    description: Adversarial reviewer — challenges hypotheses through literature
-                 attack, assumption decomposition, and experiment critique;
-                 sharpens counter-arguments each round using the advocate's rebuttal
+    description: Adversarial reviewer — challenges a single hypothesis through
+                 literature attack, assumption decomposition, and experiment
+                 critique; escalates each round using the debate_history embedded
+                 in the hypothesis object
     prompt: prompts/critic.md
     inputs:
       - port: in
-        kind: Hypotheses
-      - port: rebuttal
-        kind: Reviews
-        required: false
+        kind: HypothesisItem
       - port: context
         kind: Insights
         required: false
     outputs:
       - port: out
-        kind: Reviews
+        kind: ReviewItem
     tools: [*arxiv_search, *arxiv_read, *context_store]
     output_schema:
       type: object
-      required: [reviews]
+      required: [review, _batch_id, _batch_index, _batch_total]
       properties:
-        reviews:
-          type: array
-          description: One critique entry per hypothesis
-          items:
-            type: object
-            required: [hypothesis, kind, reasoning, score]
-            properties:
-              hypothesis:  { type: object, description: "Full hypothesis object pass-through" }
-              kind:        { type: string, enum: [initial, literature, assumption, experiment, adversarial, escalation] }
-              eliminated:  { type: boolean, description: "True if hypothesis should be discarded" }
-              reasoning:   { type: string, description: "Detailed challenge with evidence" }
-              weaknesses:  { type: array, items: { type: string } }
-              suggestions: { type: array, items: { type: string } }
-              score:       { type: number, description: "Preliminary quality score 0–10 (advocate may revise)" }
+        review:
+          type: object
+          required: [hypothesis, kind, reasoning, score]
+          description: Critique of a single hypothesis
+          properties:
+            hypothesis:  { type: object, description: "Full hypothesis object pass-through (including debate_history unchanged)" }
+            kind:        { type: string, enum: [initial, literature, assumption, experiment, adversarial] }
+            eliminated:  { type: boolean, description: "True if hypothesis should be discarded" }
+            reasoning:   { type: string, description: "Detailed challenge with evidence" }
+            weaknesses:  { type: array, items: { type: string } }
+            suggestions: { type: array, items: { type: string } }
+            score:       { type: number, description: "Preliminary quality score 0–10 (advocate may revise)" }
+        _batch_id:    { type: string,  description: "Batch routing ID — copy unchanged from input" }
+        _batch_index: { type: integer, description: "Item position in batch — copy unchanged from input" }
+        _batch_total: { type: integer, description: "Total items in batch — copy unchanged from input" }
 
   - id: advocate
-    description: Scientific defender — responds to critic's challenges with
-                 evidence, concedes valid objections, refines hypotheses, and
-                 produces the authoritative final review for ranking
+    description: Scientific defender — responds to the critic's challenge on a
+                 single hypothesis, concedes valid objections, appends this
+                 round's debate to hypothesis.debate_history, and produces the
+                 authoritative final review for ranking
     prompt: prompts/advocate.md
     inputs:
       - port: in
-        kind: Reviews
+        kind: ReviewItem
       - port: context
         kind: Insights
         required: false
     outputs:
       - port: out
-        kind: Reviews
+        kind: ReviewItem
     tools: [*arxiv_search, *arxiv_read, *context_store]
     output_schema:
       type: object
-      required: [reviews]
+      required: [review, _batch_id, _batch_index, _batch_total]
       properties:
-        reviews:
-          type: array
-          description: Final review entries after debate synthesis
-          items:
-            type: object
-            required: [hypothesis, kind, reasoning, score, rebuttal]
-            properties:
-              hypothesis:  { type: object, description: "Full hypothesis object (potentially refined)" }
-              kind:        { type: string, enum: [debate_synthesis] }
-              eliminated:  { type: boolean, description: "True if hypothesis did not survive debate" }
-              reasoning:   { type: string, description: "Final balanced assessment after debate" }
-              strengths:   { type: array, items: { type: string } }
-              weaknesses:  { type: array, items: { type: string }, description: "Conceded weaknesses" }
-              rebuttal:    { type: string, description: "Summary of responses to critic's objections" }
-              score:       { type: number, description: "Post-debate quality score 0–10" }
+        review:
+          type: object
+          required: [hypothesis, kind, reasoning, score, rebuttal]
+          description: Final review after debate, with updated hypothesis
+          properties:
+            hypothesis:
+              type: object
+              description: "Full hypothesis object with debate_history updated for this round"
+              properties:
+                debate_history:
+                  type: array
+                  description: "Append one entry: { round_critique, round_rebuttal }"
+                  items:
+                    type: object
+                    required: [round_critique, round_rebuttal]
+                    properties:
+                      round_critique: { type: string, description: "Summary of the critic's main challenge this round" }
+                      round_rebuttal: { type: string, description: "Summary of your response" }
+            kind:       { type: string, enum: [debate_synthesis] }
+            eliminated: { type: boolean, description: "True if hypothesis did not survive debate" }
+            reasoning:  { type: string, description: "Final balanced assessment" }
+            strengths:  { type: array, items: { type: string } }
+            weaknesses: { type: array, items: { type: string }, description: "Conceded weaknesses" }
+            rebuttal:   { type: string, description: "Summary of responses to critic's objections" }
+            score:      { type: number, description: "Post-debate quality score 0–10" }
+        _batch_id:    { type: string,  description: "Batch routing ID — copy unchanged from input" }
+        _batch_index: { type: integer, description: "Item position in batch — copy unchanged from input" }
+        _batch_total: { type: integer, description: "Total items in batch — copy unchanged from input" }
 
   - id: evolution
     description: Refines top hypotheses via grounding, coherence, inspiration,
@@ -332,14 +345,53 @@ control:
       min_hypotheses: 3
     timeout_secs: 10
 
+  - id: scatter
+    kind: scatter
+    description: Explodes a hypotheses array into individual HypothesisItem
+                 artifacts — one per hypothesis — so critic and advocate can
+                 process each hypothesis in parallel
+    command: [python3, control/scatter.py]
+    inputs:
+      - port: in
+        kind: Hypotheses
+    outputs:
+      - port: item
+        kind: HypothesisItem
+    timeout_secs: 5
+
+  - id: gather
+    kind: gather
+    description: Collects individual ReviewItems back into a Reviews array.
+                 Fires once per item; emits only when the full batch (tracked
+                 by _batch_total) has arrived, then forwards to ranking
+    command: [python3, control/gather.py]
+    inputs:
+      - port: in
+        kind: ReviewItem
+    outputs:
+      - port: out
+        kind: Reviews
+    timeout_secs: 30
+
 # ── Graph topology ─────────────────────────────────────────────────────
-# Forward pipeline: plan → generation → critic → advocate → ranking
-#                   → evolution → proximity → supervisor
-# Debate loop:      advocate → critic (feedback — each outer round the critic
-#                   sharpens its challenge using the advocate's prior rebuttal)
-# Feedback loops:   supervisor → critic (continue), proximity.graph → ranking,
-#                   meta_review.insights → generation, critic, advocate, evolution
-#                   ranking.state → supervisor (statistics)
+# Forward pipeline:
+#   plan → generation → scatter → critic → advocate → gather → ranking
+#                                                             → evolution → proximity → supervisor
+#
+# Per-hypothesis parallelism:
+#   scatter emits one HypothesisItem per hypothesis → N parallel critic+advocate
+#   pairs → gather collects all N ReviewItems → ranking sees the full set
+#
+# Debate history:
+#   advocate appends { round_critique, round_rebuttal } to hypothesis.debate_history
+#   each round; critic reads debate_history from the hypothesis object in the
+#   next round and escalates accordingly. No cross-round rebuttal port needed.
+#
+# Feedback loops:
+#   supervisor.continue → scatter (next round re-scatters the top-k pool)
+#   meta_review.insights → generation, critic, advocate, evolution
+#   ranking.state → meta_review, supervisor
+#   proximity.graph → ranking (matchmaking)
 edges:
   # ── Forward pipeline ──
   - from_node: plan
@@ -349,6 +401,12 @@ edges:
 
   - from_node: generation
     from_port: out
+    to_node: scatter
+    to_port: in
+
+  # scatter emits N HypothesisItem artifacts; each triggers one critic activation
+  - from_node: scatter
+    from_port: item
     to_node: critic
     to_port: in
 
@@ -357,7 +415,14 @@ edges:
     to_node: advocate
     to_port: in
 
+  # N advocate results flow independently to gather
   - from_node: advocate
+    from_port: out
+    to_node: gather
+    to_port: in
+
+  # gather emits once when all N items have arrived
+  - from_node: gather
     from_port: out
     to_node: ranking
     to_port: in
@@ -377,29 +442,28 @@ edges:
     to_node: supervisor
     to_port: in
 
-  # ── Proximity graph → Ranking matchmaking ──
+  # ── Proximity graph → ranking matchmaking ──
   - from_node: proximity
     from_port: graph
     to_node: ranking
     to_port: graph
 
-  # ── Tournament state → Meta-review ──
+  # ── Tournament state → meta-review and supervisor ──
   - from_node: ranking
     from_port: state
     to_node: meta_review
     to_port: in
 
-  # ── Tournament state → Supervisor (for statistics & convergence) ──
   - from_node: ranking
     from_port: state
     to_node: supervisor
     to_port: ranking
 
-  # ── Debate loop: advocate rebuttal → critic (sharpens next challenge) ──
-  - from_node: advocate
-    from_port: out
-    to_node: critic
-    to_port: rebuttal
+  # ── Supervisor feedback: re-scatter the continuing hypothesis pool ──
+  - from_node: supervisor
+    from_port: continue
+    to_node: scatter
+    to_port: in
     feedback: true
 
   # ── Meta-review feedback → all agents ──
@@ -425,13 +489,6 @@ edges:
     from_port: insights
     to_node: evolution
     to_port: context
-    feedback: true
-
-  # ── Supervisor feedback loop ──
-  - from_node: supervisor
-    from_port: continue
-    to_node: critic
-    to_port: in
     feedback: true
 
 metadata:
