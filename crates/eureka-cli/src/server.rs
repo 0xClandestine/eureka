@@ -7,6 +7,7 @@
 
 use std::collections::HashSet;
 use std::convert::Infallible;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 
@@ -49,6 +50,32 @@ pub struct ServerState {
     run_id: Option<uuid::Uuid>,
     /// Optional application run manager for lifecycle endpoints.
     manager: Option<RunManager>,
+    /// Shared atomic counter for live per-request token tracking.
+    /// Read by `state_handler` to return up-to-date totals.
+    live_tokens: Option<Arc<AtomicU64>>,
+    /// Shared atomic for live input token tracking.
+    live_input_tokens: Option<Arc<AtomicU64>>,
+    /// Shared atomic for live output token tracking.
+    live_output_tokens: Option<Arc<AtomicU64>>,
+    /// Shared mutex for live per-request cost tracking in USD.
+    live_cost: Option<Arc<std::sync::Mutex<f64>>>,
+}
+
+/// Budget limits snapshot, exposed in `/api/state` for the dashboard.
+#[derive(Debug, Default, Clone, Serialize)]
+pub struct BudgetSnapshot {
+    /// Maximum number of rounds (or `None` for unbounded).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_rounds: Option<u32>,
+    /// Maximum total tokens (or `None` for unbounded).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_tokens: Option<u64>,
+    /// Maximum total cost in USD (or `None` for unbounded).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_cost_usd: Option<f64>,
+    /// Maximum wall-clock seconds (or `None` for unbounded).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub max_wallclock_secs: Option<u64>,
 }
 
 /// Per-round cost and quality metrics for the `GET /api/metrics` time series.
@@ -75,6 +102,12 @@ pub struct RoundMetrics {
 pub struct LiveState {
     /// Research goal string.
     pub goal: String,
+    /// Run identifier (for lifecycle controls like pause/resume/cancel).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub run_id: Option<String>,
+    /// Budget limits for this run.
+    #[serde(default)]
+    pub budget: BudgetSnapshot,
     /// Scheduler rounds completed so far.
     pub rounds: u32,
     /// Wall-clock seconds elapsed (computed dynamically by the handler).
@@ -87,6 +120,14 @@ pub struct LiveState {
     pub node_outputs: std::collections::HashMap<String, Vec<serde_json::Value>>,
     /// Per-round cost and quality metrics (populated at each `CycleCompleted`).
     pub round_metrics: Vec<RoundMetrics>,
+    /// Cumulative tokens consumed so far (updated on every `ActivationCompleted`).
+    pub live_tokens: u64,
+    /// Cumulative input tokens (prompt).
+    pub live_input_tokens: u64,
+    /// Cumulative output tokens (completion).
+    pub live_output_tokens: u64,
+    /// Cumulative cost (USD) so far (updated on every `ActivationCompleted`).
+    pub live_cost_usd: f64,
 }
 
 /// Spawn a background task that subscribes to the broadcast channel
@@ -118,13 +159,26 @@ pub fn track_live_state(
                             }
                             round_tokens += usage.total_tokens;
                             round_cost += usage.cost_usd;
-                            if node_id == "ranking" {
-                                pending_top_score = outputs
-                                    .iter()
-                                    .find(|o| o["port"].as_str() == Some("top"))
-                                    .and_then(|o| o["data"]["hypotheses"].as_array())
-                                    .and_then(|h| h.first())
-                                    .and_then(|h| h["score"].as_f64());
+                            s.live_tokens += usage.total_tokens;
+                            s.live_input_tokens += usage.input_tokens;
+                            s.live_output_tokens += usage.output_tokens;
+                            s.live_cost_usd += usage.cost_usd;
+                            // Scan all outputs for the highest hypothesis score,
+                            // regardless of which node produced it.
+                            for o in outputs {
+                                if let Some(hyps) = o["data"]["hypotheses"].as_array() {
+                                    for h in hyps {
+                                        if let Some(score) = h["score"].as_f64() {
+                                            match pending_top_score {
+                                                None => pending_top_score = Some(score),
+                                                Some(existing) if score > existing => {
+                                                    pending_top_score = Some(score)
+                                                }
+                                                _ => {}
+                                            }
+                                        }
+                                    }
+                                }
                             }
                         }
                         SchedulerEvent::ActivationFailed { node_id, .. } => {
@@ -152,10 +206,52 @@ pub fn track_live_state(
                             s.rounds = *round;
                         }
                         SchedulerEvent::RunHalted { total_rounds, .. } => {
+                            // Flush partial-round accumulators so metrics are complete.
+                            if round_tokens > 0 || round_cost > 0.0 {
+                                let cumulative_tokens: u64 =
+                                    s.round_metrics.iter().map(|m| m.tokens).sum::<u64>()
+                                        + round_tokens;
+                                let cumulative_cost: f64 =
+                                    s.round_metrics.iter().map(|m| m.cost_usd).sum::<f64>()
+                                        + round_cost;
+                                s.round_metrics.push(RoundMetrics {
+                                    round: *total_rounds,
+                                    elapsed_secs: started_at.elapsed().as_secs_f64(),
+                                    tokens: round_tokens,
+                                    cost_usd: round_cost,
+                                    total_tokens: cumulative_tokens,
+                                    total_cost_usd: cumulative_cost,
+                                    top_score: pending_top_score,
+                                });
+                                round_tokens = 0;
+                                round_cost = 0.0;
+                                pending_top_score = None;
+                            }
                             s.rounds = *total_rounds;
                             s.finished = true;
                         }
                         SchedulerEvent::RunPaused { round } => {
+                            // Flush partial-round accumulators before pausing.
+                            if round_tokens > 0 || round_cost > 0.0 {
+                                let cumulative_tokens: u64 =
+                                    s.round_metrics.iter().map(|m| m.tokens).sum::<u64>()
+                                        + round_tokens;
+                                let cumulative_cost: f64 =
+                                    s.round_metrics.iter().map(|m| m.cost_usd).sum::<f64>()
+                                        + round_cost;
+                                s.round_metrics.push(RoundMetrics {
+                                    round: *round,
+                                    elapsed_secs: started_at.elapsed().as_secs_f64(),
+                                    tokens: round_tokens,
+                                    cost_usd: round_cost,
+                                    total_tokens: cumulative_tokens,
+                                    total_cost_usd: cumulative_cost,
+                                    top_score: pending_top_score,
+                                });
+                                round_tokens = 0;
+                                round_cost = 0.0;
+                                pending_top_score = None;
+                            }
                             s.rounds = *round;
                             s.finished = false;
                         }
@@ -197,7 +293,9 @@ pub fn start_server_with_run_store(
     run_store: Option<Arc<dyn RunPersistence>>,
     run_id: Option<uuid::Uuid>,
 ) -> tokio::task::JoinHandle<()> {
-    start_server_with_manager(spec, event_tx, live, port, run_store, run_id, None)
+    start_server_with_manager(
+        spec, event_tx, live, port, run_store, run_id, None, None, None, None, None,
+    )
 }
 
 /// Start the UI server with an optional manager and run store.
@@ -209,21 +307,31 @@ pub fn start_server_with_manager(
     run_store: Option<Arc<dyn RunPersistence>>,
     run_id: Option<uuid::Uuid>,
     manager: Option<RunManager>,
+    live_tokens: Option<Arc<AtomicU64>>,
+    live_input_tokens: Option<Arc<AtomicU64>>,
+    live_output_tokens: Option<Arc<AtomicU64>>,
+    live_cost: Option<Arc<std::sync::Mutex<f64>>>,
 ) -> tokio::task::JoinHandle<()> {
     if port == 0 {
         return tokio::spawn(async {});
     }
+    let spec = Arc::new(spec);
+    let frontend_path = spec.frontend.clone();
     let state = ServerState {
-        spec: Arc::new(spec),
+        spec,
         event_tx,
         live,
         started_at: Instant::now(),
         run_store,
         run_id,
         manager,
+        live_tokens,
+        live_input_tokens,
+        live_output_tokens,
+        live_cost,
     };
 
-    let app = Router::new()
+    let mut app = Router::new()
         .route("/api/graph", get(graph_handler))
         .route("/api/state", get(state_handler))
         .route("/api/run", get(run_handler))
@@ -240,6 +348,12 @@ pub fn start_server_with_manager(
         .route("/runs/{id}/events", get(get_run_events_handler))
         .layer(CorsLayer::permissive())
         .with_state(state);
+
+    if let Some(path) = frontend_path {
+        app = app.fallback_service(
+            tower_http::services::ServeDir::new(path).append_index_html_on_directories(true),
+        );
+    }
 
     tokio::spawn(async move {
         let addr = std::net::SocketAddr::from(([127, 0, 0, 1], port));
@@ -270,6 +384,27 @@ async fn graph_handler(State(s): State<ServerState>) -> Json<serde_json::Value> 
 async fn state_handler(State(s): State<ServerState>) -> Json<LiveState> {
     let mut snapshot = s.live.lock().await.clone();
     snapshot.elapsed_secs = s.started_at.elapsed().as_secs_f64();
+    // Override with live per-request counters so the UI reflects cost/tokens
+    // immediately after each LLM completion or embedding request. Use max of
+    // event-driven and per-request values so that zero atomics (no per-request
+    // wiring) don't overwrite event-driven accumulation.
+    if let Some(ref t) = s.live_tokens {
+        snapshot.live_tokens = snapshot.live_tokens.max(t.load(Ordering::Relaxed));
+    }
+    if let Some(ref t) = s.live_input_tokens {
+        snapshot.live_input_tokens = snapshot.live_input_tokens.max(t.load(Ordering::Relaxed));
+    }
+    if let Some(ref t) = s.live_output_tokens {
+        snapshot.live_output_tokens = snapshot.live_output_tokens.max(t.load(Ordering::Relaxed));
+    }
+    if let Some(ref c) = s.live_cost {
+        if let Ok(guard) = c.lock() {
+            let cost = *guard;
+            if cost > 0.0 {
+                snapshot.live_cost_usd = cost;
+            }
+        }
+    }
     Json(snapshot)
 }
 

@@ -38,6 +38,9 @@ pub struct GraphSpec {
     pub nodes: Vec<GraphNodeSpec>,
     /// All directed edges connecting node ports.
     pub edges: Vec<Edge>,
+    /// Optional absolute path to a directory of static files to serve as the web UI.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frontend: Option<String>,
     /// Optional metadata (version, author, reference).
     #[serde(default)]
     pub metadata: serde_json::Value,
@@ -125,6 +128,7 @@ mod tests {
                     description: None,
                 },
             ],
+            frontend: None,
             edges: vec![
                 Edge::new("source", "out", "middle", "in"),
                 Edge::new("middle", "out", "sink", "in"),

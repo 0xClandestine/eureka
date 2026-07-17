@@ -1,6 +1,10 @@
 name: AI Co-Scientist
 description: Reproduction of Google Research's AI co-scientist topology (Feb 2025)
 
+# Optional: path to a directory of static files to serve as the web UI.
+# Relative paths resolve against this YAML file's parent directory.
+frontend: .
+
 # ── LLM agents ──────────────────────────────────────────────────────────
 # Shared tool definitions referenced via YAML anchors by each agent.
 tool_defs:

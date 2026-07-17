@@ -120,6 +120,10 @@ pub async fn execute(args: ResumeArgs) -> Result<()> {
             Some(Arc::clone(&persistence)),
             Some(session_uuid),
             Some(manager.clone()),
+            None,
+            None,
+            None,
+            None,
         );
     } else {
         drop(event_tx);

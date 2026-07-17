@@ -9,7 +9,8 @@ mod runner;
 
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
-use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use std::sync::{Arc, Mutex};
 
 use crate::agent::LlmClient;
 use crate::config::{EurekaConfig, RunStats};
@@ -62,6 +63,14 @@ pub struct Session {
     pub(super) rag_index: Option<crate::rag::RagIndexHandle>,
     /// Optional RAG indexer for post-activation document embedding.
     pub(super) rag_indexer: Option<Arc<crate::rag::RagIndexer>>,
+    /// Shared live token counter for the dashboard.
+    pub(super) live_tokens: Option<Arc<AtomicU64>>,
+    /// Shared live input token counter.
+    pub(super) live_input_tokens: Option<Arc<AtomicU64>>,
+    /// Shared live output token counter.
+    pub(super) live_output_tokens: Option<Arc<AtomicU64>>,
+    /// Shared live cost counter (USD).
+    pub(super) live_cost: Option<Arc<Mutex<f64>>>,
 }
 
 impl Session {
@@ -143,6 +152,10 @@ impl Session {
             scheduler_signal_sink: None,
             rag_index: None,
             rag_indexer: None,
+            live_tokens: None,
+            live_input_tokens: None,
+            live_output_tokens: None,
+            live_cost: None,
         })
     }
 
@@ -212,6 +225,7 @@ impl Session {
             agents: vec![],
             control: vec![],
             edges: spec.edges.clone(),
+            frontend: spec.frontend.clone(),
             metadata: spec.metadata.clone(),
         };
 
@@ -232,6 +246,10 @@ impl Session {
             scheduler_signal: None,
             rag_index: None,
             rag_indexer: None,
+            live_tokens: None,
+            live_input_tokens: None,
+            live_output_tokens: None,
+            live_cost: None,
             scheduler_signal_sink: None,
         })
     }
@@ -364,6 +382,20 @@ impl Session {
         checkpoint: RunCheckpoint,
     ) -> Result<RunStats, EngineError> {
         self.run_internal(goal, store, Some(checkpoint)).await
+    }
+
+    /// Set live counters for real-time cost/token observability in the dashboard.
+    pub fn set_live_counters(
+        &mut self,
+        tokens: Arc<AtomicU64>,
+        input: Arc<AtomicU64>,
+        output: Arc<AtomicU64>,
+        cost: Arc<Mutex<f64>>,
+    ) {
+        self.live_tokens = Some(tokens);
+        self.live_input_tokens = Some(input);
+        self.live_output_tokens = Some(output);
+        self.live_cost = Some(cost);
     }
 }
 
@@ -641,6 +673,7 @@ edges: []
                 },
             ],
             edges: vec![Edge::new("source", "out", "sink", "in")],
+            frontend: None,
             metadata: serde_json::Value::Null,
         };
 
@@ -672,6 +705,7 @@ edges: []
                 },
             ],
             edges: vec![],
+            frontend: None,
             metadata: serde_json::Value::Null,
         };
 

@@ -1,7 +1,8 @@
 //! `eureka run` command — execute a research session.
 
 use std::path::Path;
-use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use std::sync::{Arc, Mutex};
 
 use anyhow::{Context, Result};
 use eureka::config::{Budget, EurekaConfig};
@@ -47,6 +48,14 @@ pub async fn execute(args: RunArgs) -> Result<()> {
         EurekaConfig { budget: Budget { max_rounds, ..config.budget }, ..config }
     } else {
         config
+    };
+
+    // Capture budget snapshot before config is moved into Session.
+    let budget_snapshot = crate::server::BudgetSnapshot {
+        max_rounds: Some(config.budget.max_rounds),
+        max_tokens: Some(config.budget.max_tokens),
+        max_cost_usd: Some(config.budget.max_cost_usd),
+        max_wallclock_secs: Some(config.budget.max_wallclock as u64),
     };
 
     // Generate session ID early so it can be shared with the DB and plugins.
@@ -116,8 +125,23 @@ pub async fn execute(args: RunArgs) -> Result<()> {
     let _server_handle;
     let _tracker_handle;
     if args.port > 0 {
+        // Shared per-request counters for real-time cost/token observability.
+        // Both LLM completions and embedding requests increment these immediately.
+        let live_token_counter = Arc::new(AtomicU64::new(0));
+        let live_input_counter = Arc::new(AtomicU64::new(0));
+        let live_output_counter = Arc::new(AtomicU64::new(0));
+        let live_cost_counter = Arc::new(Mutex::new(0.0_f64));
+        session.set_live_counters(
+            Arc::clone(&live_token_counter),
+            Arc::clone(&live_input_counter),
+            Arc::clone(&live_output_counter),
+            Arc::clone(&live_cost_counter),
+        );
+
         let live_state = Arc::new(tokio::sync::Mutex::new(crate::server::LiveState {
             goal: args.goal.clone(),
+            run_id: Some(session_id.to_string()),
+            budget: budget_snapshot,
             ..Default::default()
         }));
         _tracker_handle =
@@ -130,6 +154,10 @@ pub async fn execute(args: RunArgs) -> Result<()> {
             Some(Arc::clone(&persistence)),
             Some(session_id),
             Some(manager.clone()),
+            Some(live_token_counter),
+            Some(live_input_counter),
+            Some(live_output_counter),
+            Some(live_cost_counter),
         );
     } else {
         drop(event_tx);

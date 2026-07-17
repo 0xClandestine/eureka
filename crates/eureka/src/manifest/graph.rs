@@ -29,6 +29,10 @@ pub struct GraphManifest {
     #[serde(default)]
     pub edges: Vec<Edge>,
 
+    /// Optional path to a static web UI directory.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub frontend: Option<String>,
+
     /// Optional metadata.
     #[serde(default)]
     pub metadata: serde_json::Value,
@@ -60,6 +64,14 @@ impl GraphManifest {
         }
         for ctrl in &mut manifest.control {
             ctrl.resolve_paths(base);
+        }
+        if let Some(ref frontend) = manifest.frontend {
+            let p = Path::new(frontend);
+            manifest.frontend = Some(
+                if p.is_relative() { base.join(p) } else { p.to_path_buf() }
+                    .to_string_lossy()
+                    .to_string(),
+            );
         }
 
         Ok(manifest)
@@ -94,6 +106,7 @@ impl GraphManifest {
             description: self.description.clone(),
             nodes,
             edges: self.edges.clone(),
+            frontend: self.frontend.clone(),
             metadata: self.metadata.clone(),
         }
     }
@@ -181,6 +194,7 @@ edges:
             }],
             control: vec![],
             edges: vec![],
+            frontend: None,
             metadata: serde_json::json!({}),
         };
 
@@ -252,6 +266,7 @@ agents:
                 to_port: "in".into(),
                 feedback: false,
             }],
+            frontend: None,
             metadata: serde_json::json!({}),
         };
     }
