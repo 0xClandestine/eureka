@@ -1,7 +1,8 @@
 //! The `Node` trait — the fundamental processing unit in the graph.
 
 use std::ops::{Add, AddAssign};
-use std::sync::Arc;
+use std::sync::atomic::AtomicU64;
+use std::sync::{Arc, Mutex};
 
 use async_trait::async_trait;
 
@@ -54,6 +55,19 @@ pub struct NodeCtx {
     pub cancel: tokio_util::sync::CancellationToken,
     /// Optional sender for emitting observability events (e.g. tool calls).
     pub event_tx: Option<mpsc::Sender<SchedulerEvent>>,
+    /// Shared atomic counter for live token tracking (per-request, not
+    /// per-activation). When `Some`, nodes SHOULD increment this after every
+    /// LLM API call so that `/api/state` reflects up-to-date usage.
+    pub live_tokens: Option<Arc<AtomicU64>>,
+    /// Shared atomic counter for live input token tracking (per-request).
+    /// Paired with `live_output_tokens` and `live_tokens`.
+    pub live_input_tokens: Option<Arc<AtomicU64>>,
+    /// Shared atomic counter for live output token tracking (per-request).
+    /// Paired with `live_input_tokens` and `live_tokens`.
+    pub live_output_tokens: Option<Arc<AtomicU64>>,
+    /// Shared mutex for live cost tracking in USD. Paired with `live_tokens`;
+    /// nodes SHOULD add the cost of each API call to this accumulator.
+    pub live_cost: Option<Arc<Mutex<f64>>>,
 }
 
 impl NodeCtx {
@@ -65,7 +79,17 @@ impl NodeCtx {
         round: u32,
         cancel: tokio_util::sync::CancellationToken,
     ) -> Self {
-        Self { node_id: node_id.into(), node_kind: node_kind.into(), round, cancel, event_tx: None }
+        Self {
+            node_id: node_id.into(),
+            node_kind: node_kind.into(),
+            round,
+            cancel,
+            event_tx: None,
+            live_tokens: None,
+            live_input_tokens: None,
+            live_output_tokens: None,
+            live_cost: None,
+        }
     }
 
     /// Check if the run has been cancelled.

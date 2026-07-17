@@ -7,7 +7,8 @@
 use std::collections::HashSet;
 use std::future::Future;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::{Arc, Mutex};
 
 use rig_core::Embed;
 use rig_sqlite::{Column, ColumnValue, SqliteVectorStoreTable};
@@ -83,6 +84,14 @@ pub struct RagIndexer {
     index_kinds: HashSet<String>,
     /// Session ID embedded in document metadata for session-scoped retrieval.
     session_id: String,
+    /// Shared atomic counter for live embedding token tracking. Incremented
+    /// per-request so `/api/state` reflects up-to-date usage.
+    live_tokens: Option<Arc<AtomicU64>>,
+    /// Shared mutex for live embedding cost tracking in USD.
+    live_cost: Option<Arc<Mutex<f64>>>,
+    /// Cost per million tokens for the embedding model. Used to compute the
+    /// `live_cost` increment from estimated token counts.
+    embedding_cost_per_million_tokens: Option<f64>,
 }
 
 impl RagIndexer {
@@ -96,7 +105,29 @@ impl RagIndexer {
         index_kinds: HashSet<String>,
         session_id: String,
     ) -> Self {
-        Self { embed_and_insert, index_kinds, session_id }
+        Self {
+            embed_and_insert,
+            index_kinds,
+            session_id,
+            live_tokens: None,
+            live_cost: None,
+            embedding_cost_per_million_tokens: None,
+        }
+    }
+
+    /// Attach live per-request token and cost counters for real-time
+    /// observability. Call once before the indexer is used by the scheduler.
+    #[must_use]
+    pub fn with_live_counters(
+        mut self,
+        tokens: Arc<AtomicU64>,
+        cost: Arc<Mutex<f64>>,
+        cost_per_million: Option<f64>,
+    ) -> Self {
+        self.live_tokens = Some(tokens);
+        self.live_cost = Some(cost);
+        self.embedding_cost_per_million_tokens = cost_per_million;
+        self
     }
 
     /// Chunk `artifact`, build [`RagDocument`]s, and insert them into the
@@ -137,6 +168,19 @@ impl RagIndexer {
                 }),
             })
             .collect();
+
+        // Estimate embedding tokens and accumulate into live counters before
+        // the async embed call so the UI updates without waiting.
+        let estimated_tokens: u64 = docs.iter().map(|d| ((d.text.len() as u64) + 3) / 4).sum();
+        if let Some(ref t) = self.live_tokens {
+            t.fetch_add(estimated_tokens, Ordering::Relaxed);
+        }
+        if let (Some(ref c), Some(rate)) = (&self.live_cost, self.embedding_cost_per_million_tokens)
+        {
+            if let Ok(mut guard) = c.lock() {
+                *guard += estimated_tokens as f64 * rate / 1_000_000.0;
+            }
+        }
 
         (self.embed_and_insert)(docs).await
     }

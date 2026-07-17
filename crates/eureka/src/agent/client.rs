@@ -5,6 +5,7 @@
 //! the `submit` tool with its structured JSON output.
 
 use std::any::Any;
+use std::sync::atomic::AtomicU64;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -12,8 +13,8 @@ use crate::graph::node::NodeUsage;
 use crate::persistence::RunEnvironment;
 use crate::scheduler::SchedulerEvent;
 use async_trait::async_trait;
-use rig_core::agent::AgentBuilder;
-use rig_core::completion::{CompletionModel, Prompt};
+use rig_core::agent::{AgentBuilder, AgentHook, Flow, HookContext, StepEvent};
+use rig_core::completion::{CompletionModel, Prompt, Usage};
 use rig_core::tool::Tool;
 use tokio::sync::mpsc;
 
@@ -56,6 +57,7 @@ pub trait LlmClient: Send + Sync {
     /// Custom clients retain the legacy behavior by default; the built-in
     /// `RigClient` overrides this method so command tools receive the same
     /// database identity as control-node subprocesses.
+    #[allow(clippy::too_many_arguments)]
     async fn run_agent_loop_with_environment(
         &self,
         preamble: &str,
@@ -70,6 +72,10 @@ pub trait LlmClient: Send + Sync {
         work_dir: &str,
         event_tx: Option<mpsc::Sender<SchedulerEvent>>,
         _environment: &RunEnvironment,
+        _live_tokens: Option<Arc<AtomicU64>>,
+        _live_input_tokens: Option<Arc<AtomicU64>>,
+        _live_output_tokens: Option<Arc<AtomicU64>>,
+        _live_cost: Option<Arc<Mutex<f64>>>,
     ) -> Result<(serde_json::Value, NodeUsage), AgentError> {
         self.run_agent_loop(
             preamble,
@@ -107,6 +113,79 @@ pub(crate) struct McpConnection {
     /// Keeps the underlying `RunningService` (and its transport) alive.
     /// Type-erased because stdio and HTTP produce different generic types.
     pub _service: Box<dyn Any + Send + Sync>,
+}
+
+// ---------------------------------------------------------------------------
+// UsageHook — per-turn usage accumulator
+// ---------------------------------------------------------------------------
+
+/// A rig `AgentHook` that accumulates token usage after every model turn.
+///
+/// This is used so that we can recover accurate usage even when the agent
+/// loop ends with `MaxTurnsError` (which doesn't carry usage in its error
+/// variant). The hook fires on `ModelTurnFinished` after each turn and
+/// accumulates into a shared `Arc<Mutex<Usage>>` that the caller reads back
+/// after the loop returns, regardless of whether it succeeded or errored.
+struct UsageHook {
+    acc: Arc<Mutex<Usage>>,
+}
+
+impl<M: CompletionModel + Send + Sync + 'static> AgentHook<M> for UsageHook {
+    fn on_event(
+        &self,
+        _ctx: &HookContext,
+        event: StepEvent<'_, M>,
+    ) -> impl std::future::Future<Output = Flow> + Send {
+        if let StepEvent::ModelTurnFinished { usage, .. } = event {
+            if let Ok(mut guard) = self.acc.lock() {
+                *guard += usage;
+            }
+        }
+        std::future::ready(Flow::cont())
+    }
+}
+
+/// A rig `AgentHook` that increments live counters after every model turn.
+///
+/// Paired with `UsageHook`; this one pushes token/cost totals into the
+/// shared atomics so the `/api/state` UI updates in real time, per-turn,
+/// without waiting for the agent loop to finish.
+struct LiveCounterHook {
+    live_tokens: Option<Arc<AtomicU64>>,
+    live_input_tokens: Option<Arc<AtomicU64>>,
+    live_output_tokens: Option<Arc<AtomicU64>>,
+    live_cost: Option<Arc<Mutex<f64>>>,
+    pricing: Option<crate::config::Pricing>,
+}
+
+impl<M: CompletionModel + Send + Sync + 'static> AgentHook<M> for LiveCounterHook {
+    fn on_event(
+        &self,
+        _ctx: &HookContext,
+        event: StepEvent<'_, M>,
+    ) -> impl std::future::Future<Output = Flow> + Send {
+        if let StepEvent::ModelTurnFinished { usage, .. } = event {
+            if let Some(ref t) = self.live_tokens {
+                t.fetch_add(usage.total_tokens, std::sync::atomic::Ordering::Relaxed);
+            }
+            if let Some(ref t) = self.live_input_tokens {
+                t.fetch_add(usage.input_tokens, std::sync::atomic::Ordering::Relaxed);
+            }
+            if let Some(ref t) = self.live_output_tokens {
+                t.fetch_add(usage.output_tokens, std::sync::atomic::Ordering::Relaxed);
+            }
+            if let Some(ref c) = self.live_cost {
+                let cost = self
+                    .pricing
+                    .as_ref()
+                    .map_or(0.0, |p| p.cost(usage.input_tokens, usage.output_tokens));
+                if let Ok(mut guard) = c.lock() {
+                    *guard += cost;
+                }
+            }
+        }
+        std::future::ready(Flow::cont())
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -181,6 +260,10 @@ impl<M: CompletionModel + Clone + Send + Sync + 'static> LlmClient for RigClient
             work_dir,
             event_tx,
             &RunEnvironment::new(node_id, None),
+            None,
+            None,
+            None,
+            None,
         )
         .await
     }
@@ -199,6 +282,10 @@ impl<M: CompletionModel + Clone + Send + Sync + 'static> LlmClient for RigClient
         work_dir: &str,
         event_tx: Option<mpsc::Sender<SchedulerEvent>>,
         environment: &RunEnvironment,
+        live_tokens: Option<Arc<AtomicU64>>,
+        live_input_tokens: Option<Arc<AtomicU64>>,
+        live_output_tokens: Option<Arc<AtomicU64>>,
+        live_cost: Option<Arc<Mutex<f64>>>,
     ) -> Result<(serde_json::Value, NodeUsage), AgentError> {
         let command_tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         let mcp_tool_names: Vec<String> =
@@ -226,9 +313,10 @@ impl<M: CompletionModel + Clone + Send + Sync + 'static> LlmClient for RigClient
                 tokio::time::sleep(delay).await;
             }
 
-            // Fresh submit store each attempt — previous attempt may have left it empty.
+            // Fresh submit store and usage accumulator each attempt.
             let result: Arc<Mutex<Option<serde_json::Value>>> = Arc::new(Mutex::new(None));
             let submit = Submit { schema: output_schema.clone(), result: Arc::clone(&result) };
+            let usage_acc: Arc<Mutex<Usage>> = Arc::new(Mutex::new(Usage::new()));
 
             let command_tools: Vec<Box<dyn rig_core::tool::ToolDyn>> = tools
                 .iter()
@@ -261,9 +349,20 @@ impl<M: CompletionModel + Clone + Send + Sync + 'static> LlmClient for RigClient
 
             // Use the extended prompt path so we get a PromptResponse with
             // aggregated token usage across all turns of the agent loop.
+            // The UsageHook additionally captures per-turn usage so we can
+            // recover it even when MaxTurnsError is returned (which doesn't
+            // carry usage in its error variant).
             let response = agent
                 .prompt(initial_message)
                 .max_turns(max_iterations as usize)
+                .add_hook(UsageHook { acc: Arc::clone(&usage_acc) })
+                .add_hook(LiveCounterHook {
+                    live_tokens: live_tokens.clone(),
+                    live_input_tokens: live_input_tokens.clone(),
+                    live_output_tokens: live_output_tokens.clone(),
+                    live_cost: live_cost.clone(),
+                    pricing: self.pricing.clone(),
+                })
                 .extended_details()
                 .await;
 
@@ -273,19 +372,34 @@ impl<M: CompletionModel + Clone + Send + Sync + 'static> LlmClient for RigClient
                 .lock()
                 .map_err(|e| AgentError::Provider(format!("lock poisoned: {e}")))?
                 .take();
+            // Read accumulated per-turn usage (valid even when MaxTurnsError fires).
+            let hook_usage = usage_acc.lock().map(|g| *g).unwrap_or_else(|_| Usage::new());
 
             match (response, submitted) {
                 (Ok(resp), Some(v)) => {
+                    // Prefer the response's aggregated usage; fall back to the
+                    // hook accumulator if the provider returned zeroes.
+                    let agg = resp.usage;
+                    let effective = if agg.total_tokens > 0 { agg } else { hook_usage };
                     let u = NodeUsage::from_rig_usage(
-                        resp.usage.input_tokens,
-                        resp.usage.output_tokens,
-                        resp.usage.total_tokens,
+                        effective.input_tokens,
+                        effective.output_tokens,
+                        effective.total_tokens,
                         self.pricing.as_ref(),
                     );
                     return Ok((v, u));
                 }
                 // Submit called on the last turn; Rig raises MaxTurnsError but result is valid.
-                (Err(_), Some(v)) => return Ok((v, NodeUsage::default())),
+                // Use the hook-accumulated usage since the error carries none.
+                (Err(_), Some(v)) => {
+                    let u = NodeUsage::from_rig_usage(
+                        hook_usage.input_tokens,
+                        hook_usage.output_tokens,
+                        hook_usage.total_tokens,
+                        self.pricing.as_ref(),
+                    );
+                    return Ok((v, u));
+                }
                 (Ok(_), None) => {
                     return Err(AgentError::ExtractionFailed(
                         "Agent exhausted iterations without calling submit".to_string(),

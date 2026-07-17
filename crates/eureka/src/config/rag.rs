@@ -74,4 +74,11 @@ pub struct RagConfig {
     /// Embedding output dimensions (required for Ollama; ignored otherwise).
     #[serde(default)]
     pub embedding_ndims: Option<usize>,
+    /// Cost per million tokens for the embedding model (USD).
+    ///
+    /// When set, embedding token usage is estimated (chars/4) and accumulated
+    /// into the per-request live cost counter. Omit for providers that do not
+    /// charge for embeddings (e.g. local Ollama).
+    #[serde(default)]
+    pub embedding_cost_per_million_tokens: Option<f64>,
 }

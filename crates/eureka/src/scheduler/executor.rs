@@ -1,4 +1,5 @@
 use std::collections::HashMap;
+use std::sync::atomic::AtomicU64;
 use std::sync::Arc;
 
 use tokio::sync::{mpsc, Semaphore};
@@ -113,6 +114,14 @@ pub struct Scheduler {
     checkpoint_identity: Option<CheckpointIdentity>,
     /// Optional RAG indexer — spawns embedding tasks after each activation.
     rag_indexer: Option<Arc<RagIndexer>>,
+    /// Shared live per-request token counter (injected into NodeCtx).
+    live_tokens: Option<Arc<AtomicU64>>,
+    /// Shared live per-request input token counter.
+    live_input_tokens: Option<Arc<AtomicU64>>,
+    /// Shared live per-request output token counter.
+    live_output_tokens: Option<Arc<AtomicU64>>,
+    /// Shared live per-request cost counter (USD).
+    live_cost: Option<Arc<std::sync::Mutex<f64>>>,
 }
 
 impl Scheduler {
@@ -141,6 +150,10 @@ impl Scheduler {
             checkpoint_store: None,
             checkpoint_identity: None,
             rag_indexer: None,
+            live_tokens: None,
+            live_input_tokens: None,
+            live_output_tokens: None,
+            live_cost: None,
         }
     }
 
@@ -149,6 +162,26 @@ impl Scheduler {
     #[must_use]
     pub fn with_rag_indexer(mut self, indexer: Arc<RagIndexer>) -> Self {
         self.rag_indexer = Some(indexer);
+        self
+    }
+
+    /// Attach shared live per-request counters for real-time cost/token observability.
+    ///
+    /// When set, every `NodeCtx` dispatched to an activation carries clones of
+    /// these counters so agents can increment them immediately after each LLM
+    /// API call.
+    #[must_use]
+    pub fn with_live_counters(
+        mut self,
+        live_tokens: Arc<AtomicU64>,
+        live_input_tokens: Arc<AtomicU64>,
+        live_output_tokens: Arc<AtomicU64>,
+        live_cost: Arc<std::sync::Mutex<f64>>,
+    ) -> Self {
+        self.live_tokens = Some(live_tokens);
+        self.live_input_tokens = Some(live_input_tokens);
+        self.live_output_tokens = Some(live_output_tokens);
+        self.live_cost = Some(live_cost);
         self
     }
 
@@ -375,6 +408,10 @@ impl Scheduler {
                 self.cancel.clone(),
             );
             ctx.event_tx = Some(self.event_tx.clone());
+            ctx.live_tokens = self.live_tokens.clone();
+            ctx.live_input_tokens = self.live_input_tokens.clone();
+            ctx.live_output_tokens = self.live_output_tokens.clone();
+            ctx.live_cost = self.live_cost.clone();
             spawn_activation(
                 Activation {
                     id,
@@ -824,6 +861,10 @@ impl Scheduler {
             self.cancel.clone(),
         );
         ctx.event_tx = Some(self.event_tx.clone());
+        ctx.live_tokens = self.live_tokens.clone();
+        ctx.live_input_tokens = self.live_input_tokens.clone();
+        ctx.live_output_tokens = self.live_output_tokens.clone();
+        ctx.live_cost = self.live_cost.clone();
 
         let id = *next_activation_id;
         *next_activation_id = next_activation_id.saturating_add(1);
@@ -953,6 +994,7 @@ mod tests {
                 description: None,
             }],
             edges: vec![],
+            frontend: None,
             metadata: serde_json::Value::Null,
         };
 
@@ -985,6 +1027,7 @@ mod tests {
             description: None,
             nodes: vec![],
             edges: vec![],
+            frontend: None,
             metadata: serde_json::Value::Null,
         };
         let scheduler = Scheduler::new(spec, HashMap::new(), Budget::default(), 4);
@@ -1029,6 +1072,7 @@ mod tests {
                 description: None,
             }],
             edges: vec![],
+            frontend: None,
             metadata: serde_json::Value::Null,
         };
         let mut nodes = HashMap::new();
@@ -1084,6 +1128,7 @@ mod tests {
                 description: None,
             }],
             edges: vec![],
+            frontend: None,
             metadata: serde_json::Value::Null,
         };
         let mut nodes = HashMap::new();
@@ -1139,6 +1184,7 @@ mod tests {
                 description: None,
             }],
             edges: vec![],
+            frontend: None,
             metadata: serde_json::Value::Null,
         };
         let mut nodes = HashMap::new();
@@ -1174,6 +1220,7 @@ mod tests {
             description: None,
             nodes: vec![],
             edges: vec![],
+            frontend: None,
             metadata: serde_json::Value::Null,
         };
         let mut scheduler = Scheduler::new(spec, HashMap::new(), Budget::default(), 4);
@@ -1248,6 +1295,7 @@ mod tests {
             description: None,
             nodes: node_specs,
             edges,
+            frontend: None,
             metadata: serde_json::Value::Null,
         };
         let mut scheduler = Scheduler::new(spec, nodes, Budget::default(), 4);
@@ -1387,6 +1435,7 @@ mod tests {
                 Edge::new("goal_src", "out", "gen", "in"),
                 Edge::new("ctx_src", "out", "gen", "context"),
             ],
+            frontend: None,
             metadata: serde_json::Value::Null,
         };
         let mut scheduler = Scheduler::new(spec, nodes, Budget::default(), 4);
@@ -1494,6 +1543,7 @@ mod tests {
                 },
             ],
             edges: vec![Edge::new("src", "out", "sink", "in")],
+            frontend: None,
             metadata: serde_json::Value::Null,
         };
         let mut scheduler = Scheduler::new(spec, nodes, Budget::default(), 4);
@@ -1602,6 +1652,7 @@ mod tests {
                 },
             ],
             edges: vec![Edge::new("a", "out", "sink", "in"), Edge::new("b", "out", "sink", "in")],
+            frontend: None,
             metadata: serde_json::Value::Null,
         };
         let mut scheduler = Scheduler::new(spec, nodes, Budget::default(), 4);
@@ -1764,6 +1815,7 @@ mod tests {
                 Edge::new("echo_a", "out", "sup", "in").feedback(),
                 Edge::new("echo_b", "out", "sup", "in").feedback(),
             ],
+            frontend: None,
             metadata: serde_json::Value::Null,
         };
 
