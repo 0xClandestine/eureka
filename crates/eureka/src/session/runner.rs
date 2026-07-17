@@ -352,6 +352,7 @@ fn strip_event_artifacts(event: &SchedulerEvent) -> SchedulerEvent {
             node_kind: node_kind.clone(),
             round: *round,
             emit_count: *emit_count,
+            inputs: Vec::new(),
             outputs: Vec::new(),
             usage: *usage,
         },

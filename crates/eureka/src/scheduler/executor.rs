@@ -49,6 +49,8 @@ struct ActivationResult {
     node_kind: String,
     /// The round this activation belonged to.
     round: u32,
+    /// The inputs that were fed to this activation (for event emission).
+    inputs: Vec<PortMsg>,
     /// The outcome: emitted artifacts plus a usage report, or an error.
     result: Result<(Vec<Emit>, NodeUsage), NodeError>,
 }
@@ -533,6 +535,17 @@ impl Scheduler {
                             let node_id = result.node_id.clone();
                             let node_kind = result.node_kind.clone();
                             let round = result.round;
+                            let event_inputs: Vec<serde_json::Value> = result
+                                .inputs
+                                .iter()
+                                .map(|i| {
+                                    serde_json::json!({
+                                        "port": i.port,
+                                        "kind": i.artifact.kind,
+                                        "data": i.artifact.data,
+                                    })
+                                })
+                                .collect();
                             in_flight.remove(&result.id);
 
                             // Decrement this activation's round pending count.
@@ -565,6 +578,7 @@ impl Scheduler {
                                         node_kind: node_kind.clone(),
                                         round,
                                         emit_count: emits.len(),
+                                        inputs: event_inputs,
                                         outputs: event_outputs,
                                         usage,
                                     }).await {
@@ -977,6 +991,7 @@ fn spawn_activation(
                     node_id,
                     node_kind,
                     round,
+                    inputs,
                     result,
                 });
                 return;

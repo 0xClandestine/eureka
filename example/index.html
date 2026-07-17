@@ -365,10 +365,13 @@
       color:var(--text-secondary); transition:all .15s; }
     .event-filter:hover { border-color:var(--border-strong); }
     .event-filter.active { background:var(--accent);color:#fff;border-color:var(--accent); }
-    .event-log { max-height:360px; overflow-y:auto; font-size:11px; font-family:var(--mono); }
+    .event-log { max-height:420px; overflow-y:auto; font-size:11px; font-family:var(--mono); }
     .event-log .empty { color:var(--text-tertiary);font-style:italic;font-size:12px;padding:8px 0; }
-    .event-line { padding:4px 0;border-bottom:1px solid var(--border); line-height:1.5; display:flex;gap:8px;align-items:baseline; }
-    .event-line:last-child { border-bottom:none; }
+    .event-wrapper { border-bottom:1px solid var(--border); }
+    .event-wrapper:last-child { border-bottom:none; }
+    .event-line { padding:4px 0; line-height:1.5; display:flex;gap:8px;align-items:baseline; }
+    .event-expandable { cursor:pointer; }
+    .event-expandable:hover .event-body,.event-expandable:hover strong { opacity:.85; }
     .event-ts { color:var(--text-tertiary);font-size:10px; white-space:nowrap;min-width:70px; }
     .event-type-badge { font-size:9px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;
       padding:1px 5px;border-radius:5px; white-space:nowrap;min-width:70px;text-align:center; }
@@ -377,9 +380,24 @@
     .event-type-badge.cycle { background:var(--green-bg);color:var(--green); }
     .event-type-badge.lifecycle { background:var(--amber-bg);color:var(--amber); }
     .event-type-badge.error { background:var(--red-bg);color:var(--red); }
+    .event-type-badge.retry { background:var(--amber-bg);color:var(--amber); }
     .event-body { color:var(--text-secondary); flex:1;min-width:0; word-break:break-word; }
     .event-body strong { color:var(--text); }
     .event-body .error-detail { color:var(--red); }
+    .event-chevron { color:var(--text-tertiary);flex-shrink:0;width:14px;text-align:center;font-style:normal; }
+    .ev-round { color:var(--text-tertiary);font-size:9px;font-weight:700;background:var(--bg-inset);padding:0 4px;border-radius:3px;margin-right:2px; }
+    .ev-sep { color:var(--border-strong); }
+    .ev-dim { color:var(--text-tertiary); }
+    .ev-cycle { font-weight:700;color:var(--accent); }
+    .event-detail { padding:6px 12px 10px 12px; background:var(--bg-inset); border-top:1px solid var(--border); }
+    .event-detail-section { margin-bottom:8px; }
+    .event-detail-section:last-child { margin-bottom:0; }
+    .event-detail-label { font-size:9px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--text-tertiary);margin-bottom:4px; }
+    .event-detail-row { display:flex;gap:8px;align-items:baseline;padding:2px 0; }
+    .event-detail-port { color:var(--accent);font-weight:600;min-width:36px;flex-shrink:0; }
+    .event-detail-kind { color:var(--text-secondary);min-width:90px;flex-shrink:0; }
+    .ev-data { color:var(--text);flex:1;word-break:break-all; }
+    .batch-pos { color:var(--text-tertiary);font-weight:600;margin-right:3px; }
 
     /* ═══════════════════════════════════════════════════════════════════
        Overview
@@ -519,6 +537,7 @@
           <button class="event-filter" data-filter="cycle">Cycles</button>
           <button class="event-filter" data-filter="lifecycle">Lifecycle</button>
           <button class="event-filter" data-filter="error">Errors</button>
+          <button class="event-filter" data-filter="retry">Retries</button>
         </div>
         <button class="btn" id="btn-clear-events" style="margin-left:auto;">Clear</button>
       </div>
@@ -1171,6 +1190,41 @@ const isControl = node.kind?.startsWith('control.') || node.kind?.includes('cont
   /* ═══════════════════════════════════════════════════════════════════
      Event Rendering
      ═══════════════════════════════════════════════════════════════════ */
+
+  /** Extract a human-readable one-line preview from an artifact payload. */
+  function artifactPreview(port, kind, data) {
+    if (!data || typeof data !== 'object') return esc(String(data||'').slice(0,100));
+    const batchPos = (data._batch_index != null && data._batch_total != null)
+      ? `<span class="batch-pos">[${data._batch_index+1}/${data._batch_total}]</span>`
+      : '';
+    const raw =
+      data.statement ||
+      data.hypothesis?.statement ||
+      data.goal?.goal || (typeof data.goal === 'string' ? data.goal : null) ||
+      (data.review
+        ? `score:${data.review.score != null ? Number(data.review.score).toFixed(2) : '?'} · ${data.review.critique||''}`
+        : null) ||
+      (Array.isArray(data.hypotheses) ? `${data.hypotheses.length} hypotheses` : null) ||
+      (Array.isArray(data.reviews) ? `${data.reviews.length} reviews` : null) ||
+      Object.keys(data).filter(k => !k.startsWith('_')).slice(0,4).join(', ');
+    const str = typeof raw === 'string' ? raw : JSON.stringify(raw||'');
+    const truncated = str.length > 120 ? str.slice(0,120)+'…' : str;
+    return `${batchPos}<span class="ev-data">${esc(truncated)}</span>`;
+  }
+
+  /** Build the expandable detail pane HTML for inputs and outputs. */
+  function buildDetailPanel(ins, outs) {
+    const row = item => `<div class="event-detail-row">
+      <span class="event-detail-port">${esc(item.port)}</span>
+      <span class="event-detail-kind">${esc(item.kind||'')}</span>
+      ${artifactPreview(item.port, item.kind, item.data)}
+    </div>`;
+    let html = '';
+    if (ins.length) html += `<div class="event-detail-section"><div class="event-detail-label">Inputs</div>${ins.map(row).join('')}</div>`;
+    if (outs.length) html += `<div class="event-detail-section"><div class="event-detail-label">Outputs</div>${outs.map(row).join('')}</div>`;
+    return html;
+  }
+
   function renderEvents() {
     const log = document.getElementById('event-log');
     const filtered = S.eventFilter==='all' ? S.events : S.events.filter(e=>e._category===S.eventFilter);
@@ -1180,35 +1234,43 @@ const isControl = node.kind?.startsWith('control.') || node.kind?.includes('cont
     }
     const wasAtBottom = log.scrollHeight - log.scrollTop - log.clientHeight < 40;
     log.innerHTML = filtered.map(e => {
-      // e._ts, e._category, e._html
-      return `<div class="event-line"><span class="event-ts">${esc(e._ts)}</span><span class="event-type-badge ${e._category}">${e._category}</span><span class="event-body">${e._html}</span></div>`;
+      const hasDetail = !!e._detail;
+      const chevron = hasDetail ? `<span class="event-chevron">▸</span>` : '';
+      const line = `<div class="event-line${hasDetail?' event-expandable':''}"><span class="event-ts">${esc(e._ts)}</span><span class="event-type-badge ${e._category}">${e._category}</span><span class="event-body">${e._html}</span>${chevron}</div>`;
+      const detail = hasDetail ? `<div class="event-detail" style="display:none">${e._detail}</div>` : '';
+      return `<div class="event-wrapper">${line}${detail}</div>`;
     }).join('');
     if (wasAtBottom) log.scrollTop = log.scrollHeight;
   }
 
   function addEvent(e) {
-    let cat, body;
-    const R = e.round!=null ? `[R:${e.round}]` : '';
+    let cat, body, detail = null;
+    const R = e.round != null ? `<span class="ev-round">R${e.round}</span> ` : '';
+    const nid = e.nodeId || '';
     if (e.type==='toolCalled') {
-      cat='tool'; body=`${R} <strong>${esc(e.nodeId||'')}</strong> ⋙ <em>${esc(e.tool||'')}</em>${e.argsSummary?': '+esc(e.argsSummary):''}`;
+      cat='tool'; body=`${R}<strong>${esc(nid)}</strong> ⋙ <em>${esc(e.tool||'')}</em>${e.argsSummary ? ': '+esc(e.argsSummary) : ''}`;
     } else if (e.type==='activationStarted') {
-      cat='activation'; body=`${R} <strong>${esc(e.nodeId||'')}</strong> · started`;
+      cat='activation'; body=`${R}<strong>${esc(nid)}</strong> <span class="ev-dim">started</span>`;
     } else if (e.type==='activationCompleted') {
       const tok = e.usage?.totalTokens||0;
       const ec = e.emitCount||0;
       if (!ec && !tok) return; // skip zero-impact completions
       const kinds = {};
       (e.outputs||[]).forEach(o => { const k = o.kind||'data'; kinds[k]=(kinds[k]||0)+1; });
-      const summary = Object.entries(kinds).map(([k,n]) => `${esc(k)} ×${n}`).join(', ');
+      const summary = Object.entries(kinds).map(([k,n]) => `${esc(k)}×${n}`).join(' ');
       const parts = [];
       if (summary) parts.push(summary);
-      if (tok) parts.push(`${fn(tok)} tokens`);
-      parts.push(`${fc(e.usage?.costUsd||0)}`);
-      cat='activation'; body=`${R} <strong>${esc(e.nodeId||'')}</strong> → ${parts.join(' &nbsp;|&nbsp; ')}`;
+      if (tok) parts.push(`${fn(tok)} tok`);
+      if (e.usage?.costUsd) parts.push(fc(e.usage.costUsd));
+      cat='activation'; body=`${R}<strong>${esc(nid)}</strong> → ${parts.join(' <span class="ev-sep">·</span> ')}`;
+      const ins = e.inputs||[], outs = e.outputs||[];
+      if (ins.length || outs.length) detail = buildDetailPanel(ins, outs);
+    } else if (e.type==='activationRetried') {
+      cat='retry'; body=`${R}<strong>${esc(nid)}</strong> retry #${e.attempt||'?'}: <span class="error-detail">${esc(e.error||'')}</span>`;
     } else if (e.type==='activationFailed') {
-      cat='error'; body=`${R} <strong>${esc(e.nodeId||'')}</strong> failed: <span class="error-detail">${esc(e.error||'')}</span>`;
+      cat='error'; body=`${R}<strong>${esc(nid)}</strong> failed: <span class="error-detail">${esc(e.error||'')}</span>`;
     } else if (e.type==='cycleCompleted') {
-      cat='cycle'; body=`<span style="font-weight:700;color:var(--accent)">══ Cycle ${e.round||'?'} complete ══</span>`;
+      cat='cycle'; body=`<span class="ev-cycle">══ Cycle ${e.round||'?'} complete ══</span>`;
     } else if (e.type==='runHalted') {
       cat='lifecycle'; body=`Run halted · ${esc(e.reason||'')} · ${e.totalRounds||0} rounds`;
     } else if (e.type==='runPaused') {
@@ -1218,7 +1280,7 @@ const isControl = node.kind?.startsWith('control.') || node.kind?.includes('cont
     } else {
       cat='lifecycle'; body=esc(JSON.stringify(e));
     }
-    S.events.unshift({_ts:ts(), _category:cat, _html:body});
+    S.events.unshift({_ts:ts(), _category:cat, _html:body, _detail:detail});
     if (S.events.length>500) S.events.length=500;
     if (S.activeTab==='metrics') renderEvents();
   }
@@ -1503,6 +1565,17 @@ const isControl = node.kind?.startsWith('control.') || node.kind?.includes('cont
   document.getElementById('btn-clear-events').addEventListener('click', () => {
     S.events.length = 0;
     renderEvents();
+  });
+  document.getElementById('event-log').addEventListener('click', e => {
+    const line = e.target.closest('.event-expandable');
+    if (!line) return;
+    const wrapper = line.parentElement;
+    const detail = wrapper && wrapper.querySelector('.event-detail');
+    if (!detail) return;
+    const isOpen = detail.style.display !== 'none';
+    detail.style.display = isOpen ? 'none' : 'block';
+    const chev = line.querySelector('.event-chevron');
+    if (chev) chev.textContent = isOpen ? '▸' : '▾';
   });
 
   /* ═══════════════════════════════════════════════════════════════════

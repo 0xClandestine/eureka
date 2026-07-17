@@ -21,6 +21,9 @@ pub enum SchedulerEvent {
         round: u32,
         /// The number of messages emitted by this activation.
         emit_count: usize,
+        /// Serialized inputs: `[{ "port": "in", "kind": "Goal", "data": {...} }]`.
+        #[serde(default)]
+        inputs: Vec<serde_json::Value>,
         /// Serialized outputs: `[{ "port": "out", "kind": "Hypotheses", "data": {...} }]`.
         #[serde(default)]
         outputs: Vec<serde_json::Value>,
