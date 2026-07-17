@@ -485,6 +485,7 @@ mod tests {
                 },
             ],
             edges: vec![Edge::new("gen", "out", "ref", "in"), Edge::new("ref", "out", "gov", "in")],
+            frontend: None,
             metadata: serde_json::Value::Null,
         };
 
@@ -516,6 +517,7 @@ mod tests {
                 },
             ],
             edges: vec![Edge::new("gen", "out", "ref", "in")],
+            frontend: None,
             metadata: serde_json::Value::Null,
         };
 
@@ -539,6 +541,7 @@ mod tests {
                 description: None,
             }],
             edges: vec![],
+            frontend: None,
             metadata: serde_json::Value::Null,
         };
 
@@ -555,6 +558,7 @@ mod tests {
             description: None,
             nodes: vec![],
             edges: vec![Edge::new("ghost", "out", "phantom", "in")],
+            frontend: None,
             metadata: serde_json::Value::Null,
         };
 

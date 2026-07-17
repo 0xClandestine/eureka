@@ -8,3 +8,4 @@
 .env
 *.log
 schemas/
+example/.eureka/sessions/

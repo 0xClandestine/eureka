@@ -11,6 +11,7 @@ use std::sync::Arc;
 use async_trait::async_trait;
 use eureka::agent::error::AgentError;
 use eureka::agent::{AgentDef, LlmAgentNode, LlmClient, PortDef, ToolDef};
+use eureka::config::{EmbeddingProvider, EurekaConfig};
 use eureka::graph::node::{BoxedNode, Emit, Node, NodeCtx, NodeError, PortMsg};
 use eureka::graph::port::{PortDirection, PortSpec, PortSpecEntry};
 use eureka::graph::validate::{validate_graph, PortRegistry};
@@ -245,4 +246,94 @@ fn test_coscientist_validates() {
         }
     }
     assert!(result.valid, "Validation failed");
+}
+
+/// Verify the shipped `eureka.toml` parses cleanly and the RAG section is
+/// correctly configured for OpenRouter + Gemini embeddings.
+#[test]
+fn test_coscientist_config_loads() {
+    let config_path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../eureka.toml");
+    let config = EurekaConfig::load(Some(&config_path)).expect("Failed to load eureka.toml");
+
+    // RAG must be enabled with the OpenRouter Gemini embedding model.
+    let rag = config.rag.expect("rag section must be present");
+    assert!(rag.enabled, "rag.enabled must be true");
+    assert_eq!(rag.embedding_provider, EmbeddingProvider::OpenRouter);
+    assert_eq!(rag.embedding_model, "google/gemini-embedding-2");
+    assert!(rag.top_k > 0, "rag.top_k must be positive");
+
+    // Workers overrides for generation and evolution must be set.
+    let gen = config.agent_overrides.get("generation").expect("generation override must exist");
+    assert!(gen.workers.unwrap_or(0) > 1, "generation workers must be > 1 for parallel scatter");
+    let evo = config.agent_overrides.get("evolution").expect("evolution override must exist");
+    assert!(evo.workers.unwrap_or(0) > 1, "evolution workers must be > 1 for parallel scatter");
+}
+
+/// The generation and evolution output schemas must declare `hypotheses` as an
+/// array so the workers scatter-gather merge (which concatenates arrays) works
+/// correctly and each worker contributes exactly one item.
+#[test]
+fn test_agent_output_schemas() {
+    let dir = graph_dir();
+    let manifest =
+        GraphManifest::load(&dir.join("coscientist.yml")).expect("Failed to load manifest");
+
+    for id in ["generation", "evolution"] {
+        let agent = manifest.agents.iter().find(|a| a.id == id).unwrap_or_else(|| {
+            panic!("agent '{id}' not found in manifest");
+        });
+        let schema = &agent.output_schema;
+        let hyp_type = schema["properties"]["hypotheses"]["type"]
+            .as_str()
+            .unwrap_or_else(|| panic!("'{id}' output_schema.hypotheses must have a type"));
+        assert_eq!(
+            hyp_type, "array",
+            "'{id}' output_schema.hypotheses must be an array so parallel workers can be merged"
+        );
+        let item_props = &schema["properties"]["hypotheses"]["items"]["properties"];
+        assert!(
+            item_props["statement"].is_object(),
+            "'{id}' hypothesis items must have a 'statement' field"
+        );
+    }
+}
+
+/// Regression guard: the generation and evolution prompts must instruct the
+/// agent to produce exactly one hypothesis per call so that parallel workers
+/// each contribute a single, distinct hypothesis.
+#[test]
+fn test_single_hypothesis_prompts() {
+    let dir = graph_dir();
+
+    for (filename, label) in
+        [("prompts/generation.md", "generation"), ("prompts/evolution.md", "evolution")]
+    {
+        let content = std::fs::read_to_string(dir.join(filename))
+            .unwrap_or_else(|_| panic!("Failed to read {filename}"));
+        assert!(
+            content.contains("one"),
+            "'{label}' prompt must contain 'one' to instruct single-hypothesis output"
+        );
+    }
+}
+
+/// All nine nodes declared in the manifest must be registered (no orphan node).
+#[test]
+fn test_all_manifest_nodes_present() {
+    let dir = graph_dir();
+    let manifest =
+        GraphManifest::load(&dir.join("coscientist.yml")).expect("Failed to load manifest");
+    let spec = manifest.to_graph_spec();
+
+    let agent_ids: std::collections::HashSet<_> = manifest.agents.iter().map(|a| &a.id).collect();
+    let control_ids: std::collections::HashSet<_> =
+        manifest.control.iter().map(|c| &c.id).collect();
+
+    for node in &spec.nodes {
+        assert!(
+            agent_ids.contains(&node.id) || control_ids.contains(&node.id),
+            "node '{}' in spec is not declared in agents or control_nodes",
+            node.id
+        );
+    }
 }
