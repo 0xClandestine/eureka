@@ -23,9 +23,9 @@ generation_model = "deepseek/deepseek-v4-flash"
 # budget.max_cost_usd backstop can fire. Most providers charge different
 # rates for prompt vs completion tokens; set both. When omitted, cost is not
 # tracked and only the token budget is enforced.
-# [provider.pricing]
-# input_per_million  = 0.27   # e.g. $0.27 / 1M input tokens
-# output_per_million = 1.10   # e.g. $1.10 / 1M output tokens
+[provider.pricing]
+input_per_million  = 0.061
+output_per_million = 0.248
 
 # Other providers — swap kind + model + set the matching env var:
 #
@@ -43,7 +43,7 @@ generation_model = "deepseek/deepseek-v4-flash"
 
 [agent]
 # Global defaults for all agents. Override per-agent below under
-# [agent.overrides.<agent_id>].
+# [agent_overrides.<agent_id>].
 temperature = 0.7
 max_iterations = 50
 workers = 1
@@ -51,15 +51,15 @@ workers = 1
 # Per-agent LLM config overrides. Each agent not listed here falls back
 # to the [agent] global defaults above.
 #
-# workers > 1 fires that many independent LLM calls in parallel per
-# activation; their array outputs are merged (concatenated). Use this to
-# get diversity in generation and evolution without a single long prompt.
+# workers > 1 creates that many independent replica instances of the
+# agent, all running concurrently within `max_in_flight`. Edges fan out
+# in cross-product (each upstream replica feeds each downstream replica).
 
-[agent.overrides.generation]
-workers = 3
+[agent_overrides.generation]
+workers = 5
 
-[agent.overrides.evolution]
-workers = 3
+[agent_overrides.evolution]
+workers = 5
 
 [scheduler]
 max_in_flight = 8

@@ -17,7 +17,7 @@ pub mod rag;
 pub mod scheduler;
 pub mod tracing;
 
-pub use agent::AgentConfig;
+pub use agent::{AgentConfig, AgentConfigOverride};
 pub use budget::{parse_duration, Budget, RunStats};
 pub use provider::{Pricing, ProviderConfig, ProviderKind};
 pub use rag::{EmbeddingProvider, RagConfig};
@@ -61,15 +61,9 @@ max_rounds = 12
 temperature = 0.7
 max_iterations = 10
 
-# Per-agent overrides (optional). Set different temperature/max_iterations
+# Per-agent overrides (optional). Set different temperature/max_iterations/workers
 # for specific agents by their ID. Falls back to [agent] globals when absent.
-# [agent.overrides.generation]
-# temperature = 0.9
-# max_iterations = 15
-#
-# [agent.overrides.reflection]
-# temperature = 0.7
-# max_iterations = 12
+# workers > 1 creates independent replica instances (cross-product edge fan-out).
 
 [tracing]
 enabled = false
@@ -98,10 +92,10 @@ pub struct EurekaConfig {
     pub agent: AgentConfig,
     /// Per-agent LLM configuration overrides keyed by agent ID.
     ///
-    /// Set in `eureka.toml` under `[agent.overrides.<agent_id>]`.
+    /// Set in `eureka.toml` under `[agent_overrides.<agent_id>]`.
     /// Falls back to `agent` (the global default) when an agent has no match.
     #[serde(default)]
-    pub agent_overrides: HashMap<String, AgentConfig>,
+    pub agent_overrides: HashMap<String, AgentConfigOverride>,
     /// Tracing configuration for durable `SQLite` event history.
     pub tracing: TracingConfig,
     /// Optional RAG configuration. Absent or `enabled = false` disables RAG.
