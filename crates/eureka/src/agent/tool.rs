@@ -83,6 +83,7 @@ impl CommandTool {
                     round: self.round,
                     tool: self.def.name.clone(),
                     args_summary: summary,
+                    args: args_val.clone(),
                 })
                 .is_err()
             {
@@ -110,13 +111,32 @@ impl CommandTool {
         .await
         .map_err(|e| ToolError::ToolCallError(e.to_string().into()))?;
 
-        if result.success {
-            Ok(result.stdout)
+        let output = if result.success {
+            result.stdout.clone()
         } else {
             let snippet: String = result.stderr.chars().take(500).collect();
             let code = result.exit_code.unwrap_or(-1);
-            Ok(format!("Error (exit {code}): {snippet}"))
+            format!("Error (exit {code}): {snippet}")
+        };
+
+        if let Some(tx) = &self.event_tx {
+            let preview: String = output.chars().take(500).collect();
+            if tx
+                .try_send(SchedulerEvent::ToolCompleted {
+                    node_id: self.node_id.clone(),
+                    node_kind: self.node_kind.clone(),
+                    round: self.round,
+                    tool: self.def.name.clone(),
+                    result_preview: preview,
+                    success: result.success,
+                })
+                .is_err()
+            {
+                tracing::debug!("ToolCompleted event dropped: channel full or closed");
+            }
         }
+
+        Ok(output)
     }
 }
 

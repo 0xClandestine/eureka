@@ -72,6 +72,24 @@ pub enum SchedulerEvent {
         tool: String,
         /// A human-readable one-line summary of the arguments.
         args_summary: String,
+        /// Full argument object passed to the tool.
+        #[serde(default)]
+        args: serde_json::Value,
+    },
+    /// A tool call completed with a result.
+    ToolCompleted {
+        /// The ID of the node that invoked the tool.
+        node_id: String,
+        /// The kind of the node.
+        node_kind: String,
+        /// The scheduler round.
+        round: u32,
+        /// The name of the tool that completed.
+        tool: String,
+        /// First 500 characters of the tool output.
+        result_preview: String,
+        /// Whether the subprocess exited successfully.
+        success: bool,
     },
     /// The run was halted by a budget or graph control decision.
     RunHalted {

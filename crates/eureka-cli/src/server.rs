@@ -128,6 +128,12 @@ pub struct LiveState {
     pub live_output_tokens: u64,
     /// Cumulative cost (USD) so far (updated on every `ActivationCompleted`).
     pub live_cost_usd: f64,
+    /// Ring buffer of the most recent scheduler events (up to 300).
+    ///
+    /// Exposed in `/api/state` so that browsers connecting mid-run can replay
+    /// history without requiring `tracing.enabled`. Newest event is last.
+    #[serde(default)]
+    pub recent_events: Vec<serde_json::Value>,
 }
 
 /// Spawn a background task that subscribes to the broadcast channel
@@ -149,6 +155,13 @@ pub fn track_live_state(
             match rx.recv().await {
                 Ok(event) => {
                     let mut s = live.lock().await;
+                    // Append to the ring buffer so late-connecting browsers can replay.
+                    if let Ok(v) = serde_json::to_value(&event) {
+                        s.recent_events.push(v);
+                        if s.recent_events.len() > 300 {
+                            s.recent_events.drain(..1);
+                        }
+                    }
                     match &event {
                         SchedulerEvent::ActivationStarted { node_id, .. } => {
                             s.active_nodes.insert(node_id.clone());
@@ -258,6 +271,7 @@ pub fn track_live_state(
                             s.finished = false;
                         }
                         SchedulerEvent::ToolCalled { .. } => {}
+                        SchedulerEvent::ToolCompleted { .. } => {}
                     }
                 }
                 Err(broadcast::error::RecvError::Lagged(n)) => {

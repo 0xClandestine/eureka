@@ -234,6 +234,9 @@ impl super::Session {
                     SchedulerEvent::ToolCalled { node_id, tool, args_summary, .. } => {
                         info!(%node_id, %tool, %args_summary, "Tool called");
                     }
+                    SchedulerEvent::ToolCompleted { node_id, tool, success, .. } => {
+                        info!(%node_id, %tool, success, "Tool completed");
+                    }
                     SchedulerEvent::RunHalted { reason, total_rounds } => {
                         info!(%reason, total_rounds, "Run halted");
                     }

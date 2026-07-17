@@ -1248,7 +1248,25 @@ const isControl = node.kind?.startsWith('control.') || node.kind?.includes('cont
     const R = e.round != null ? `<span class="ev-round">R${e.round}</span> ` : '';
     const nid = e.nodeId || '';
     if (e.type==='toolCalled') {
-      cat='tool'; body=`${R}<strong>${esc(nid)}</strong> ⋙ <em>${esc(e.tool||'')}</em>${e.argsSummary ? ': '+esc(e.argsSummary) : ''}`;
+      cat='tool'; body=`${R}<strong>${esc(nid)}</strong> ⋙ <em>${esc(e.tool||'')}</em>${e.argsSummary ? ': <span style="color:var(--text)">'+esc(e.argsSummary)+'</span>' : ''}`;
+      if (e.args && typeof e.args === 'object' && Object.keys(e.args).length) {
+        const rows = Object.entries(e.args).map(([k,v]) => {
+          const val = typeof v === 'string' ? v : JSON.stringify(v);
+          const trunc = val.length > 200 ? val.slice(0,200)+'…' : val;
+          return `<div class="event-detail-row"><span class="event-detail-port">${esc(k)}</span><span class="ev-data">${esc(trunc)}</span></div>`;
+        }).join('');
+        detail = `<div class="event-detail-section"><div class="event-detail-label">Args</div>${rows}</div>`;
+      }
+    } else if (e.type==='toolCompleted') {
+      cat='tool';
+      const ok = e.success !== false;
+      const icon = ok ? '✓' : '✗';
+      const color = ok ? 'var(--green)' : 'var(--red)';
+      body=`${R}<strong>${esc(nid)}</strong> ⋙ <em>${esc(e.tool||'')}</em> <span style="color:${color}">${icon}</span>`;
+      if (e.resultPreview) {
+        const trunc = e.resultPreview.length > 500 ? e.resultPreview.slice(0,500)+'…' : e.resultPreview;
+        detail = `<div class="event-detail-section"><div class="event-detail-label">Result</div><div class="event-detail-row"><span class="ev-data" style="white-space:pre-wrap">${esc(trunc)}</span></div></div>`;
+      }
     } else if (e.type==='activationStarted') {
       cat='activation'; body=`${R}<strong>${esc(nid)}</strong> <span class="ev-dim">started</span>`;
     } else if (e.type==='activationCompleted') {
@@ -1425,6 +1443,15 @@ const isControl = node.kind?.startsWith('control.') || node.kind?.includes('cont
       if (changed || !last || (pt.elapsed-(last.elapsed||0))>=5) {
         S.timeSeries.push(pt);
         if (S.timeSeries.length>300) S.timeSeries.shift();
+      }
+      // Replay event history on first load so mid-run page loads show past events.
+      if (!S._historyLoaded && state.recent_events?.length) {
+        S._historyLoaded = true;
+        const savedTab = S.activeTab;
+        S.activeTab = '_loading'; // suppress per-event renderEvents() calls
+        for (const ev of state.recent_events) addEvent(ev);
+        S.activeTab = savedTab;
+        if (savedTab === 'metrics') renderEvents();
       }
       renderState(state);
       if (S.activeTab==='metrics') {
