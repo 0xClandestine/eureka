@@ -22,13 +22,17 @@ tool_defs:
     timeout_secs: 30
   - &arxiv_read
     name: read_paper
-    description: Retrieve the full text of an arXiv paper as clean Markdown
+    description: Retrieve a paper from arXiv by ID. Without `sections`, returns a token‑efficient overview (title + TOC with previews). With `sections`, returns full text of only the requested sections (by index or heading name).
     command: [python3, tools/arxiv_search.py]
     args_schema:
       type: object
       required: [arxiv_id]
       properties:
         arxiv_id: { type: string, description: "ArXiv paper ID e.g. 2404.01234" }
+        sections:
+          type: array
+          items: { type: string }
+          description: "Optional: section indices (0-based) or heading names to retrieve in full. If omitted, returns an overview TOC."
     timeout_secs: 60
   - &context_store
     name: context_store
