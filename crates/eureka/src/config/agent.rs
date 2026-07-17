@@ -25,14 +25,16 @@ pub struct AgentConfig {
     pub workers: u32,
 }
 
-fn default_workers() -> u32 {
+/// Default worker count for agents without an explicit override.
+const fn default_workers() -> u32 {
     1
 }
 
-/// Partial per-agent override. Only the fields explicitly set in
-/// `[agent_overrides.<id>]` differ from the global `[agent]` defaults.
-/// Unset fields (deserialize as `None`) fall back to the global value at
-/// resolve time.
+/// Partial per-agent override.
+///
+/// Only the fields explicitly set in `[agent_overrides.<id>]` differ from the
+/// global `[agent]` defaults. Unset fields (deserialize as `None`) fall back
+/// to the global value at resolve time.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AgentConfigOverride {
     /// Override sampling temperature. Falls back to `agent.temperature`.
@@ -54,14 +56,14 @@ impl AgentConfig {
         overrides: &HashMap<String, AgentConfigOverride>,
         agent_id: &str,
     ) -> Self {
-        match overrides.get(agent_id) {
-            None => global.clone(),
-            Some(ov) => Self {
+        overrides.get(agent_id).map_or_else(
+            || global.clone(),
+            |ov| Self {
                 temperature: ov.temperature.unwrap_or(global.temperature),
                 max_iterations: ov.max_iterations.unwrap_or(global.max_iterations),
                 workers: ov.workers.unwrap_or(global.workers),
             },
-        }
+        )
     }
 }
 

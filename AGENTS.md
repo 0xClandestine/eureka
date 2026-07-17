@@ -149,7 +149,6 @@ crates/
       error.rs                # EngineError enum
       graph/                  # pure topology: data structures only, no I/O
         artifact.rs           # Artifact { kind, data }
-        control.rs            # ControlFlow, ControlDecision types
         edge.rs               # Edge { from, to, port, feedback }
         mod.rs               # re-exports
         node.rs               # Node trait, BoxedNode, Emit, NodeCtx, Usage

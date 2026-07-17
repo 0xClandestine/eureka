@@ -34,12 +34,13 @@ use super::RagIndexHandle;
 ///
 /// Returns `EngineError::Store` if the database cannot be opened or the
 /// vector store cannot be initialised.
+#[allow(clippy::too_many_lines)]
 pub async fn build_rag_components(
     cfg: &RagConfig,
     db_path: &Path,
     session_id: &str,
-    live_tokens: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
-    live_cost: Option<std::sync::Arc<std::sync::Mutex<f64>>>,
+    live_tokens: Option<Arc<std::sync::atomic::AtomicU64>>,
+    live_cost: Option<Arc<std::sync::Mutex<f64>>>,
 ) -> Result<(RagIndexHandle, Arc<RagIndexer>), EngineError> {
     let cost_per_million = cfg.embedding_cost_per_million_tokens;
     match cfg.embedding_provider {
@@ -192,8 +193,8 @@ async fn build_with_model<E>(
     cfg: &RagConfig,
     db_path: &Path,
     session_id: &str,
-    live_tokens: Option<std::sync::Arc<std::sync::atomic::AtomicU64>>,
-    live_cost: Option<std::sync::Arc<std::sync::Mutex<f64>>>,
+    live_tokens: Option<Arc<std::sync::atomic::AtomicU64>>,
+    live_cost: Option<Arc<std::sync::Mutex<f64>>>,
     embedding_cost_per_million_tokens: Option<f64>,
 ) -> Result<(RagIndexHandle, Arc<RagIndexer>), EngineError>
 where

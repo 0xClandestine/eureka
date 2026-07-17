@@ -127,6 +127,7 @@ pub(crate) struct McpConnection {
 /// accumulates into a shared `Arc<Mutex<Usage>>` that the caller reads back
 /// after the loop returns, regardless of whether it succeeded or errored.
 struct UsageHook {
+    /// Shared accumulator updated after each model turn.
     acc: Arc<Mutex<Usage>>,
 }
 
@@ -151,10 +152,15 @@ impl<M: CompletionModel + Send + Sync + 'static> AgentHook<M> for UsageHook {
 /// shared atomics so the `/api/state` UI updates in real time, per-turn,
 /// without waiting for the agent loop to finish.
 struct LiveCounterHook {
+    /// Shared total token counter (input + output + cache).
     live_tokens: Option<Arc<AtomicU64>>,
+    /// Shared input-only token counter.
     live_input_tokens: Option<Arc<AtomicU64>>,
+    /// Shared output-only token counter.
     live_output_tokens: Option<Arc<AtomicU64>>,
+    /// Shared cost accumulator (USD, behind a Mutex for f64 updates).
     live_cost: Option<Arc<Mutex<f64>>>,
+    /// Per-input/per-output pricing used to compute cost.
     pricing: Option<crate::config::Pricing>,
 }
 
@@ -231,6 +237,7 @@ impl<M: CompletionModel + Clone + Send + Sync + 'static> RigClient<M> {
     }
 }
 
+#[allow(clippy::too_many_lines)]
 #[async_trait]
 impl<M: CompletionModel + Clone + Send + Sync + 'static> LlmClient for RigClient<M> {
     async fn run_agent_loop(
@@ -287,6 +294,9 @@ impl<M: CompletionModel + Clone + Send + Sync + 'static> LlmClient for RigClient
         live_output_tokens: Option<Arc<AtomicU64>>,
         live_cost: Option<Arc<Mutex<f64>>>,
     ) -> Result<(serde_json::Value, NodeUsage), AgentError> {
+        const MAX_ATTEMPTS: u32 = 4;
+        const SECOND_CHANCE_TURNS: u32 = 3;
+
         let command_tool_names: Vec<&str> = tools.iter().map(|t| t.name.as_str()).collect();
         let mcp_tool_names: Vec<String> =
             self.mcp.iter().flat_map(|c| c.tools.iter().map(|t| t.name.to_string())).collect();
@@ -298,27 +308,55 @@ impl<M: CompletionModel + Clone + Send + Sync + 'static> LlmClient for RigClient
         let full_preamble =
             build_preamble(preamble, &all_tool_names, max_iterations, output_schema);
 
-        // Retry loop: provider transient failures (e.g. empty 200 body from OpenRouter)
-        // are retried up to MAX_ATTEMPTS times with exponential backoff.
-        const MAX_ATTEMPTS: u32 = 4;
+        // Build a forceful second-chance preamble used when the agent
+        // exhausts its turn budget without calling submit.  The normal
+        // tools are stripped so the agent has no excuse to defer submit.
+        let second_chance_preamble = format!(
+            "{full_preamble}\n\n\
+             *** YOUR TURN BUDGET WAS EXHAUSTED ***\n\
+             You did NOT call submit in time. This is your ONLY remaining chance.\n\
+             You MUST call submit NOW. Do NOT call any other tools.\n\
+             Just output your result via submit immediately."
+        );
+
         let mut last_err = String::new();
         for attempt in 0..MAX_ATTEMPTS {
             if attempt > 0 {
-                let delay = Duration::from_secs(1 << (attempt - 1)); // 1s, 2s, 4s
-                tracing::warn!(
-                    attempt,
-                    ?delay,
-                    "retrying agent loop after transient provider error"
-                );
-                tokio::time::sleep(delay).await;
+                // Skip backoff delay for second-chance attempts — those
+                // are not provider errors and don't need a cooldown.
+                let is_second_chance = last_err == "__second_chance__";
+                if !is_second_chance {
+                    let delay = Duration::from_secs(1 << (attempt - 1)); // 1s, 2s, 4s
+                    tracing::warn!(
+                        attempt,
+                        ?delay,
+                        "retrying agent loop after transient provider error"
+                    );
+                    tokio::time::sleep(delay).await;
+                }
             }
+
+            // On a second-chance attempt, drastically reduce turns and strip
+            // command tools so the agent has no reason to defer submit.
+            let (effective_preamble, effective_turns, effective_msg, effective_tools) =
+                if attempt > 0 && matches!(last_err.as_str(), s if s == "__second_chance__") {
+                    let empty: &[ToolDef] = &[];
+                    (
+                        second_chance_preamble.as_str(),
+                        SECOND_CHANCE_TURNS,
+                        "Call submit with your result.",
+                        empty, // no tools — submit only
+                    )
+                } else {
+                    (full_preamble.as_str(), max_iterations, initial_message, tools)
+                };
 
             // Fresh submit store and usage accumulator each attempt.
             let result: Arc<Mutex<Option<serde_json::Value>>> = Arc::new(Mutex::new(None));
             let submit = Submit { schema: output_schema.clone(), result: Arc::clone(&result) };
             let usage_acc: Arc<Mutex<Usage>> = Arc::new(Mutex::new(Usage::new()));
 
-            let command_tools: Vec<Box<dyn rig_core::tool::ToolDyn>> = tools
+            let command_tools: Vec<Box<dyn rig_core::tool::ToolDyn>> = effective_tools
                 .iter()
                 .map(|t| -> Box<dyn rig_core::tool::ToolDyn> {
                     Box::new(CommandTool::with_environment(
@@ -334,7 +372,7 @@ impl<M: CompletionModel + Clone + Send + Sync + 'static> LlmClient for RigClient
                 .collect();
 
             let mut base_builder = AgentBuilder::new(self.model.clone())
-                .preamble(&full_preamble)
+                .preamble(effective_preamble)
                 .temperature(temperature);
 
             if let Some((index, top_k)) = &self.rag {
@@ -353,8 +391,8 @@ impl<M: CompletionModel + Clone + Send + Sync + 'static> LlmClient for RigClient
             // recover it even when MaxTurnsError is returned (which doesn't
             // carry usage in its error variant).
             let response = agent
-                .prompt(initial_message)
-                .max_turns(max_iterations as usize)
+                .prompt(effective_msg)
+                .max_turns(effective_turns as usize)
                 .add_hook(UsageHook { acc: Arc::clone(&usage_acc) })
                 .add_hook(LiveCounterHook {
                     live_tokens: live_tokens.clone(),
@@ -373,7 +411,7 @@ impl<M: CompletionModel + Clone + Send + Sync + 'static> LlmClient for RigClient
                 .map_err(|e| AgentError::Provider(format!("lock poisoned: {e}")))?
                 .take();
             // Read accumulated per-turn usage (valid even when MaxTurnsError fires).
-            let hook_usage = usage_acc.lock().map(|g| *g).unwrap_or_else(|_| Usage::new());
+            let hook_usage = usage_acc.lock().map_or_else(|_| Usage::new(), |g| *g);
 
             match (response, submitted) {
                 (Ok(resp), Some(v)) => {
@@ -401,9 +439,24 @@ impl<M: CompletionModel + Clone + Send + Sync + 'static> LlmClient for RigClient
                     return Ok((v, u));
                 }
                 (Ok(_), None) => {
-                    return Err(AgentError::ExtractionFailed(
-                        "Agent exhausted iterations without calling submit".to_string(),
-                    ));
+                    // Agent exhausted iterations without calling submit.
+                    // If this is the first exhaustion, give a second chance
+                    // with a forceful prompt and minimal turns.
+                    if last_err != "__second_chance__" {
+                        tracing::warn!(
+                            node_id,
+                            node_kind,
+                            round,
+                            attempt,
+                            "agent exhausted iterations without submit — starting second-chance attempt"
+                        );
+                        last_err = "__second_chance__".to_string();
+                        continue;
+                    }
+                    return Err(AgentError::ExtractionFailed(format!(
+                        "agent exhausted iteration budget without calling submit \
+                         (attempted {max_iterations} turns + {SECOND_CHANCE_TURNS} second-chance turns)"
+                    )));
                 }
                 (Err(e), None) => {
                     let msg = e.to_string();
@@ -424,7 +477,7 @@ impl<M: CompletionModel + Clone + Send + Sync + 'static> LlmClient for RigClient
 
 /// Returns `true` for transient provider errors that are safe to retry.
 ///
-/// An empty-body 200 from OpenRouter surfaces as `ProviderResponseError: status 200 OK:`
+/// An empty-body 200 from `OpenRouter` surfaces as `ProviderResponseError: status 200 OK:`
 /// with nothing after the colon. 503 / 529 (overloaded) are also retryable.
 fn is_retryable_provider_error(msg: &str) -> bool {
     // Empty 200 body — the most common transient OpenRouter failure.
@@ -456,21 +509,26 @@ fn build_preamble(
     if tool_names.is_empty() {
         format!(
             "{preamble}{schema_section}\n\n\
-             You have at most {max_iterations} turns. When you have completed your \
-             analysis, call the `submit` tool with your structured output. \
-             Do not write JSON directly — always use submit. \
-             IMPORTANT: You must call `submit` before your turns run out."
+             ## Turn Budget (CRITICAL)\n\
+             You have at most {max_iterations} turns. After turn {max_iterations}, your \
+             session terminates and any un-submitted output is LOST.\n\
+             Plan accordingly: stop analysis at turn {less} and call `submit`.\n\
+             Never write JSON in your response — always call the `submit` tool.",
+            less = max_iterations.saturating_sub(2),
         )
     } else {
         let names = tool_names.join(", ");
         format!(
             "{preamble}{schema_section}\n\n\
-             You have at most {max_iterations} turns (each tool call or response \
-             counts as one turn). Available tools: {names}. Use them to \
-             gather information, but budget your turns — leave at least one turn \
-             to call `submit`. When you are ready to deliver your final result, \
-             call the `submit` tool. Do not write JSON directly — always use submit. \
-             IMPORTANT: You must call `submit` before your turns run out."
+             ## Turn Budget (CRITICAL)\n\
+             You have at most {max_iterations} turns. Each LLM response and each tool \
+             call consumes one turn. After turn {max_iterations} your session terminates \
+             and any un-submitted output is LOST.\n\
+             Available tools: {names}\n\
+             Plan accordingly: budget at most a few tool calls, stop by turn \
+             {less}, and call `submit` with your structured result. \
+             Never write JSON in your response — always call `submit`.",
+            less = max_iterations.saturating_sub(2),
         )
     }
 }
@@ -507,8 +565,8 @@ impl Tool for Submit {
     type Error = SubmitError;
 
     fn description(&self) -> String {
-        "Submit your final structured output. Call this exactly once \
-                          when your answer is complete."
+        "Submit your final structured output. Call this exactly ONCE when your answer is complete. \
+         You MUST call submit before your turn budget runs out — un-submitted work is DISCARDED."
             .to_string()
     }
 

@@ -50,14 +50,22 @@ Maps source modules to their governing Active SPECs. When modifying any file lis
 | `crates/eureka/src/rag/handle.rs` | [SPEC-0018](SPEC-0018.md) |
 | `crates/eureka/src/rag/indexer.rs` | [SPEC-0018](SPEC-0018.md) |
 | `crates/eureka/src/rag/init.rs` | [SPEC-0018](SPEC-0018.md) |
-| `crates/eureka/src/persistence/mod.rs` | [SPEC-0015](SPEC-0015.md) |
-| `crates/eureka/src/persistence/store.rs` | [SPEC-0015](SPEC-0015.md) |
-| `crates/eureka/src/persistence/record.rs` | [SPEC-0015](SPEC-0015.md) |
-| `crates/eureka/src/persistence/checkpoint.rs` | [SPEC-0015](SPEC-0015.md) |
-| `crates/eureka/src/persistence/environment.rs` | [SPEC-0011](SPEC-0011.md), [SPEC-0015](SPEC-0015.md) |
-| `crates/eureka/src/persistence/sqlite.rs` | [SPEC-0015](SPEC-0015.md) |
-| `crates/eureka/src/persistence/memory.rs` | [SPEC-0015](SPEC-0015.md) |
+| `crates/eureka/src/persistence/mod.rs` | [SPEC-0015](SPEC-0015.md), [SPEC-0016](SPEC-0016.md) |
+| `crates/eureka/src/persistence/store.rs` | [SPEC-0015](SPEC-0015.md), [SPEC-0016](SPEC-0016.md) |
+| `crates/eureka/src/persistence/record.rs` | [SPEC-0015](SPEC-0015.md), [SPEC-0016](SPEC-0016.md) |
+| `crates/eureka/src/persistence/checkpoint.rs` | [SPEC-0015](SPEC-0015.md), [SPEC-0016](SPEC-0016.md) |
+| `crates/eureka/src/persistence/environment.rs` | [SPEC-0011](SPEC-0011.md), [SPEC-0015](SPEC-0015.md), [SPEC-0016](SPEC-0016.md) |
+| `crates/eureka/src/persistence/sqlite.rs` | [SPEC-0015](SPEC-0015.md), [SPEC-0016](SPEC-0016.md) |
+| `crates/eureka/src/persistence/memory.rs` | [SPEC-0015](SPEC-0015.md), [SPEC-0016](SPEC-0016.md) |
 | `crates/eureka-cli/src/server.rs` | [SPEC-0019](SPEC-0019.md) |
+| `crates/eureka-cli/src/main.rs` | [SPEC-0008](SPEC-0008.md), [SPEC-0012](SPEC-0012.md), [SPEC-0017](SPEC-0017.md) |
+| `crates/eureka-cli/src/commands/mod.rs` | [SPEC-0008](SPEC-0008.md), [SPEC-0012](SPEC-0012.md), [SPEC-0017](SPEC-0017.md) |
+| `crates/eureka-cli/src/commands/run.rs` | [SPEC-0012](SPEC-0012.md), [SPEC-0013](SPEC-0013.md) |
+| `crates/eureka-cli/src/commands/resume.rs` | [SPEC-0012](SPEC-0012.md) |
+| `crates/eureka-cli/src/commands/session.rs` | [SPEC-0012](SPEC-0012.md) |
+| `crates/eureka-cli/src/commands/daemon.rs` | [SPEC-0017](SPEC-0017.md) |
+| `crates/eureka-cli/src/commands/list.rs` | [SPEC-0008](SPEC-0008.md) |
+| `crates/eureka-cli/src/commands/validate.rs` | [SPEC-0008](SPEC-0008.md) |
 | `crates/eureka/src/manifest/agent.rs` | [SPEC-0008](SPEC-0008.md), [SPEC-0021](SPEC-0021.md) |
 | `crates/eureka/src/agent/def.rs` | [SPEC-0010](SPEC-0010.md), [SPEC-0021](SPEC-0021.md) |
 | `AGENTS.md` | [SPEC-0001](SPEC-0001.md) |
@@ -86,4 +94,5 @@ Maps source modules to their governing Active SPECs. When modifying any file lis
 | [SPEC-0017](SPEC-0017.md) | RunManager | Draft  | Core |
 | [SPEC-0018](SPEC-0018.md) | RAG Integration | Draft  | Core |
 | [SPEC-0019](SPEC-0019.md) | HTTP API and Observability | Draft  | Interface |
+| [SPEC-0020](SPEC-0020.md) | — reserved — | — | — |
 | [SPEC-0021](SPEC-0021.md) | MCP Tool Integration       | Draft  | Interface |

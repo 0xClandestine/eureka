@@ -134,6 +134,7 @@ pub struct LiveState {
 /// and keeps `live` up-to-date from incoming scheduler events.
 ///
 /// The returned handle must be kept alive for the duration of the run.
+#[allow(clippy::too_many_lines)]
 pub fn track_live_state(
     mut rx: broadcast::Receiver<SchedulerEvent>,
     live: Arc<Mutex<LiveState>>,
@@ -172,7 +173,7 @@ pub fn track_live_state(
                                             match pending_top_score {
                                                 None => pending_top_score = Some(score),
                                                 Some(existing) if score > existing => {
-                                                    pending_top_score = Some(score)
+                                                    pending_top_score = Some(score);
                                                 }
                                                 _ => {}
                                             }
@@ -299,6 +300,7 @@ pub fn start_server_with_run_store(
 }
 
 /// Start the UI server with an optional manager and run store.
+#[allow(clippy::too_many_arguments)]
 pub fn start_server_with_manager(
     spec: GraphSpec,
     event_tx: broadcast::Sender<SchedulerEvent>,

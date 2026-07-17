@@ -139,6 +139,7 @@ impl RagIndexer {
     /// # Errors
     ///
     /// Returns `EngineError::Store` if embedding or insertion fails.
+    #[allow(clippy::cast_precision_loss)]
     pub async fn index_artifact(
         &self,
         node_id: &str,
@@ -171,7 +172,7 @@ impl RagIndexer {
 
         // Estimate embedding tokens and accumulate into live counters before
         // the async embed call so the UI updates without waiting.
-        let estimated_tokens: u64 = docs.iter().map(|d| ((d.text.len() as u64) + 3) / 4).sum();
+        let estimated_tokens: u64 = docs.iter().map(|d| (d.text.len() as u64).div_ceil(4)).sum();
         if let Some(ref t) = self.live_tokens {
             t.fetch_add(estimated_tokens, Ordering::Relaxed);
         }

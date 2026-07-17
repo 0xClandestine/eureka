@@ -103,7 +103,12 @@ impl super::Session {
             );
             let w = agent_cfg.workers.max(1) as usize;
             worker_counts.insert(node_spec.id.clone(), w);
-            let base_node = base_nodes.get(&node_spec.id).cloned().expect("node should exist");
+            let base_node = base_nodes.get(&node_spec.id).cloned().ok_or_else(|| {
+                EngineError::Graph(crate::graph::spec::GraphError::ParseError(format!(
+                    "node '{}' not found in base_nodes map",
+                    node_spec.id
+                )))
+            })?;
             if w == 1 {
                 expanded_nodes.insert(node_spec.id.clone(), base_node);
                 expanded_node_specs.push(node_spec.clone());

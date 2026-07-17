@@ -114,7 +114,7 @@ pub struct Scheduler {
     checkpoint_identity: Option<CheckpointIdentity>,
     /// Optional RAG indexer — spawns embedding tasks after each activation.
     rag_indexer: Option<Arc<RagIndexer>>,
-    /// Shared live per-request token counter (injected into NodeCtx).
+    /// Shared live per-request token counter (injected into `NodeCtx`).
     live_tokens: Option<Arc<AtomicU64>>,
     /// Shared live per-request input token counter.
     live_input_tokens: Option<Arc<AtomicU64>>,
@@ -408,10 +408,10 @@ impl Scheduler {
                 self.cancel.clone(),
             );
             ctx.event_tx = Some(self.event_tx.clone());
-            ctx.live_tokens = self.live_tokens.clone();
-            ctx.live_input_tokens = self.live_input_tokens.clone();
-            ctx.live_output_tokens = self.live_output_tokens.clone();
-            ctx.live_cost = self.live_cost.clone();
+            ctx.live_tokens.clone_from(&self.live_tokens);
+            ctx.live_input_tokens.clone_from(&self.live_input_tokens);
+            ctx.live_output_tokens.clone_from(&self.live_output_tokens);
+            ctx.live_cost.clone_from(&self.live_cost);
             spawn_activation(
                 Activation {
                     id,
@@ -861,10 +861,10 @@ impl Scheduler {
             self.cancel.clone(),
         );
         ctx.event_tx = Some(self.event_tx.clone());
-        ctx.live_tokens = self.live_tokens.clone();
-        ctx.live_input_tokens = self.live_input_tokens.clone();
-        ctx.live_output_tokens = self.live_output_tokens.clone();
-        ctx.live_cost = self.live_cost.clone();
+        ctx.live_tokens.clone_from(&self.live_tokens);
+        ctx.live_input_tokens.clone_from(&self.live_input_tokens);
+        ctx.live_output_tokens.clone_from(&self.live_output_tokens);
+        ctx.live_cost.clone_from(&self.live_cost);
 
         let id = *next_activation_id;
         *next_activation_id = next_activation_id.saturating_add(1);
