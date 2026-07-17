@@ -202,11 +202,17 @@ def _build_emits(
     if not top_k_items:
         top_k_items = sorted_items[:top_k]
 
-    top_list = [item for _, (_, item, _, _, _, _) in top_k_items]
-    elo_map = {iid: elo for iid, (elo, _, _, _, _, _) in top_k_items}
-    match_counts = {iid: m for iid, (_, _, m, _, _, _) in top_k_items}
-    wld = {iid: {"wins": w, "losses": l, "draws": d}
-           for iid, (_, _, _, w, l, d) in top_k_items}
+    top_list = []
+    elo_map = {}
+    match_counts = {}
+    wld = {}
+    for iid, (elo, item, matches, wins, losses, draws) in top_k_items:
+        enriched = dict(item)
+        enriched["score"] = round(elo, 2)
+        top_list.append(enriched)
+        elo_map[iid] = elo
+        match_counts[iid] = matches
+        wld[iid] = {"wins": wins, "losses": losses, "draws": draws}
 
     top_emit = {
         "port": "top", "artifact": {"kind": "Hypotheses", "data": {output_field: top_list}},
