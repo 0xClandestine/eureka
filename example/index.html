@@ -224,24 +224,29 @@
     /* ═══════════════════════════════════════════════════════════════════
        Graph Flow
        ═══════════════════════════════════════════════════════════════════ */
-    .graph-flow { display:flex; align-items:flex-start; gap:0; overflow-x:auto; padding:6px 2px 12px; }
-    .gf-node { display:flex; flex-direction:column; align-items:center; min-width:60px; cursor:pointer; position:relative; }
-    .gf-node:hover .gf-dot { transform:scale(1.1); }
-    .gf-dot { width:28px; height:28px; border-radius:50%; border:2px solid var(--border-strong);
-      background:var(--bg-elevated); display:flex; align-items:center; justify-content:center;
-      font-size:12px; flex-shrink:0; transition:all .2s ease; }
-    .gf-dot.done { background:var(--green); border-color:var(--green); color:#fff; }
-    .gf-dot.active { background:var(--accent); border-color:var(--accent); color:#fff; animation:stepPulse 1.2s ease-in-out infinite; }
-    .gf-dot.failed { background:var(--red); border-color:var(--red); color:#fff; }
-    .gf-dot.selected { box-shadow:0 0 0 4px var(--accent-bg); }
-    @keyframes stepPulse{0%,100%{box-shadow:0 0 0 0 rgba(10,132,255,.4)}50%{box-shadow:0 0 0 7px rgba(10,132,255,0)}}
-    .gf-label { font-size:9px; font-weight:600; text-align:center; color:var(--text-secondary); margin-top:5px; max-width:72px; word-break:break-word; }
+    .graph-flow { overflow:auto; padding:12px 4px 8px; max-height:360px; }
+    .gf-canvas { position:relative; display:block; }
+    .gf-node { display:flex; flex-direction:column; align-items:center; justify-content:center;
+      cursor:pointer; border-radius:8px; border:1.5px solid var(--border);
+      background:var(--bg-elevated); transition:border-color .15s ease, background .15s ease;
+      padding:6px 4px 4px; box-sizing:border-box; }
+    .gf-node:hover { border-color:var(--border-strong); background:var(--bg-hover); }
+    .gf-node.active { border-color:var(--accent); background:var(--accent-bg); }
+    .gf-node.done { border-color:color-mix(in srgb,var(--green) 55%,var(--border)); }
+    .gf-node.failed { border-color:var(--red); background:color-mix(in srgb,var(--red) 10%,var(--bg-elevated)); }
+    .gf-node.selected { box-shadow:0 0 0 2px var(--accent); }
+    @keyframes stepPulse{0%,100%{box-shadow:0 0 0 0 rgba(10,132,255,.35)}50%{box-shadow:0 0 0 6px rgba(10,132,255,0)}}
+    .gf-dot { width:22px; height:22px; border-radius:6px; background:var(--bg-inset);
+      display:flex; align-items:center; justify-content:center;
+      font-size:11px; flex-shrink:0; margin-bottom:3px; transition:all .15s ease; }
+    .gf-dot.active { background:var(--accent); color:#fff; animation:stepPulse 1.2s ease-in-out infinite; }
+    .gf-dot.done { background:var(--green); color:#fff; }
+    .gf-dot.failed { background:var(--red); color:#fff; }
+    .gf-label { font-size:8.5px; font-weight:600; text-align:center; color:var(--text-secondary);
+      max-width:76px; word-break:break-word; line-height:1.2; }
     .gf-node.done .gf-label { color:var(--green); }
     .gf-node.active .gf-label { color:var(--accent); }
-    .gf-kind { font-size:7px; color:var(--text-tertiary); text-transform:uppercase; letter-spacing:.05em; margin-top:2px; }
-    .gf-connector { width:16px; min-width:16px; height:2px; background:var(--border-strong); margin-top:14px; border-radius:1px; transition:background .35s ease; }
-    .gf-connector.done { background:var(--green); }
-    .gf-connector.active { background:linear-gradient(90deg,var(--green),var(--accent)); }
+    .gf-kind { font-size:6.5px; color:var(--text-tertiary); text-transform:uppercase; letter-spacing:.06em; margin-top:2px; }
 
     /* Node detail panel */
     .graph-detail { margin-top:12px; padding:16px; background:var(--bg-inset); border-radius:var(--radius-sm);
@@ -769,6 +774,42 @@
   /* ═══════════════════════════════════════════════════════════════════
      Graph Flow + Detail Renderer
      ═══════════════════════════════════════════════════════════════════ */
+  function computeGraphLayout(spec) {
+    const nodes = spec.nodes || [];
+    const edges = spec.edges || [];
+    const fwd = edges.filter(e => !e.feedback);
+    const ids = nodes.map(n => n.id);
+    const succs = Object.fromEntries(ids.map(id => [id, []]));
+    const inDeg = Object.fromEntries(ids.map(id => [id, 0]));
+    fwd.forEach(e => {
+      if (succs[e.from_node] !== undefined && inDeg[e.to_node] !== undefined) {
+        succs[e.from_node].push(e.to_node);
+        inDeg[e.to_node]++;
+      }
+    });
+    // Kahn's topological sort → longest-path column assignment
+    const col = Object.fromEntries(ids.map(id => [id, 0]));
+    const deg = {...inDeg};
+    const q = ids.filter(id => deg[id] === 0);
+    while (q.length) {
+      const id = q.shift();
+      for (const nxt of succs[id]) {
+        col[nxt] = Math.max(col[nxt], col[id] + 1);
+        if (--deg[nxt] === 0) q.push(nxt);
+      }
+    }
+    // Group by column, assign rows
+    const byCol = {};
+    ids.forEach(id => { const c = col[id]; (byCol[c] = byCol[c] || []).push(id); });
+    const row = {};
+    Object.values(byCol).forEach(grp => grp.forEach((id, i) => { row[id] = i; }));
+    return {
+      col, row,
+      maxCol: Math.max(0, ...Object.values(col)),
+      maxRow: Math.max(0, ...Object.values(row)),
+    };
+  }
+
   function renderGraph() {
     const flow = document.getElementById('graph-flow');
     const detail = document.getElementById('graph-detail');
@@ -778,43 +819,80 @@
       return;
     }
     const nodes = spec.nodes;
-    const outputs = S.lastState?.node_outputs||{};
-    const activeNodes = S.lastState?.active_nodes||[];
+    const edges = spec.edges || [];
+    const activeNodes = S.lastState?.active_nodes || [];
+    const L = computeGraphLayout(spec);
 
-    // Draw horizontal linear node flow
-    let html = '';
-    nodes.forEach((node, i) => {
-      const status = activeNodes.includes(node.id) ? 'active'
-        : (S.roundProgress[node.id]==='failed' ? 'failed'
-        : (outputs[node.id]?.length ? 'done' : (S.roundProgress[node.id]||'pending')));
-      const hasFailed = S.roundProgress[node.id]==='failed';
-      const isSelected = S.selectedNode === node.id;
-      const isControl = node.kind?.startsWith('control.') || node.kind?.includes('control');
-      const emoji = nodeEmoji(node.id);
-      const kindLabel = isControl ? 'control' : 'agent';
+    // Layout constants
+    const NW = 82, NH = 54, CW = 136, RH = 80, PX = 16, PY = 16, FB_H = 56;
+    const ncx = id => PX + L.col[id] * CW + NW / 2;
+    const ncy = id => PY + L.row[id] * RH + NH / 2;
+    const W = PX * 2 + (L.maxCol + 1) * CW;
+    const H = PY * 2 + (L.maxRow + 1) * RH + FB_H;
 
-      html += `<div class="gf-node ${status}${hasFailed?' failed':''}" data-id="${esc(node.id)}" tabindex="0" role="button" aria-label="Node ${esc(node.id)}">`;
-      html += `<div class="gf-dot ${status}${isSelected?' selected':''}">${status==='done'?'✓':status==='failed'?'✗':emoji}</div>`;
-      html += `<div class="gf-label">${esc(node.id)}</div>`;
-      html += `<div class="gf-kind">${kindLabel}</div>`;
-      html += `</div>`;
-      if (i < nodes.length-1) {
-        html += `<div class="gf-connector${status==='done'?' done':''}${status==='active'?' active':''}"></div>`;
-      }
+    function nodeStatus(id) {
+      if (activeNodes.includes(id)) return 'active';
+      return S.roundProgress[id] || 'pending';
+    }
+
+    const fwdEdges = edges.filter(e => !e.feedback && L.col[e.from_node] !== undefined && L.col[e.to_node] !== undefined);
+    const fbEdges  = edges.filter(e =>  e.feedback && L.col[e.from_node] !== undefined && L.col[e.to_node] !== undefined);
+
+    // SVG edge layer
+    let svg = `<svg style="position:absolute;top:0;left:0;width:${W}px;height:${H}px;overflow:visible;pointer-events:none;" viewBox="0 0 ${W} ${H}"><defs>`;
+    [['a','var(--border-strong)','1'],['adone','var(--green)','1'],['aactive','var(--accent)','1'],['afb','var(--text-tertiary)','.4']].forEach(([id,fill,op]) => {
+      svg += `<marker id="${id}" markerWidth="7" markerHeight="7" refX="6" refY="3.5" orient="auto"><path d="M0,0 L7,3.5 L0,7 Z" fill="${fill}" opacity="${op}"/></marker>`;
     });
-    flow.innerHTML = html;
+    svg += `</defs>`;
 
-    // Click handler for each node
+    fwdEdges.forEach(e => {
+      const x1 = ncx(e.from_node) + NW/2, y1 = ncy(e.from_node);
+      const x2 = ncx(e.to_node)  - NW/2, y2 = ncy(e.to_node);
+      const dx = Math.abs(x2 - x1) * 0.42;
+      const st = nodeStatus(e.from_node);
+      const stroke = st==='done' ? 'var(--green)' : st==='active' ? 'var(--accent)' : 'var(--border-strong)';
+      const mk = st==='done' ? '#adone' : st==='active' ? '#aactive' : '#a';
+      svg += `<path d="M${x1},${y1} C${x1+dx},${y1} ${x2-dx},${y2} ${x2},${y2}" fill="none" stroke="${stroke}" stroke-width="1.5" marker-end="url(${mk})" opacity="${st==='pending'?'.4':'1'}"/>`;
+    });
+
+    fbEdges.forEach((e, i) => {
+      const x1 = ncx(e.from_node), y1 = ncy(e.from_node) + NH/2;
+      const x2 = ncx(e.to_node),   y2 = ncy(e.to_node)   + NH/2;
+      const arcY = PY + (L.maxRow + 1) * RH + 14 + i * 12;
+      svg += `<path d="M${x1},${y1} Q${(x1+x2)/2},${arcY} ${x2},${y2}" fill="none" stroke="var(--text-tertiary)" stroke-width="1.2" stroke-dasharray="4,3" marker-end="url(#afb)" opacity="0.4"/>`;
+    });
+    svg += `</svg>`;
+
+    // Node divs
+    let nhtml = '';
+    nodes.forEach(n => {
+      const st = nodeStatus(n.id);
+      const isSel = S.selectedNode === n.id;
+      const isCtl = n.kind?.includes('control') || n.kind?.includes('governor');
+      const emoji = nodeEmoji(n.id);
+      const x = PX + L.col[n.id] * CW;
+      const y = PY + L.row[n.id] * RH;
+      nhtml += `<div class="gf-node ${st}${isSel?' selected':''}" data-id="${esc(n.id)}"
+        style="position:absolute;left:${x}px;top:${y}px;width:${NW}px;height:${NH}px;"
+        tabindex="0" role="button" aria-label="${esc(n.id)}">`;
+      nhtml += `<div class="gf-dot ${st}">${st==='done'?'✓':st==='failed'?'✗':emoji}</div>`;
+      nhtml += `<div class="gf-label">${esc(n.id)}</div>`;
+      nhtml += `<div class="gf-kind">${isCtl?'control':'agent'}</div>`;
+      nhtml += `</div>`;
+    });
+
+    flow.innerHTML = `<div class="gf-canvas" style="position:relative;width:${W}px;height:${H}px;">${svg}${nhtml}</div>`;
+
     flow.querySelectorAll('.gf-node').forEach(el => {
       el.addEventListener('click', () => {
         const nodeId = el.dataset.id;
         S.selectedNode = S.selectedNode === nodeId ? null : nodeId;
-        renderGraphDetail(nodeId);
+        if (S.selectedNode) renderGraphDetail(nodeId);
+        else detail.style.display = 'none';
         renderGraph();
       });
     });
 
-    // Show detail for selected node
     if (S.selectedNode) renderGraphDetail(S.selectedNode);
     else detail.style.display = 'none';
   }
@@ -858,6 +936,7 @@ const isControl = node.kind?.startsWith('control.') || node.kind?.includes('cont
       plan:'📋', generation:'💡', critic:'🔍', advocate:'🛡️',
       evolution:'🔄', meta_review:'📊', ranking:'🏆', proximity:'📏',
       supervisor:'👁️', search:'🔎', arxiv:'📚',
+      scatter:'⤨', gather:'⤩', governor:'🎯', router:'↗',
     };
     const lower = id.toLowerCase();
     for (const [k,v] of Object.entries(map)) if (lower.includes(k)) return v;
