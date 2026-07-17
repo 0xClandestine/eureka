@@ -182,6 +182,7 @@ pub fn track_live_state(
                                 }
                             }
                         }
+                        SchedulerEvent::ActivationRetried { .. } => {}
                         SchedulerEvent::ActivationFailed { node_id, .. } => {
                             s.active_nodes.remove(node_id.as_str());
                         }

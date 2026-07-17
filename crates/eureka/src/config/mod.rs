@@ -50,6 +50,8 @@ generation_model = "deepseek/deepseek-v4-flash"
 
 [scheduler]
 max_in_flight = 8
+max_retries = 3
+retry_backoff_ms = 1000
 
 [budget]
 max_cost_usd = 25.0

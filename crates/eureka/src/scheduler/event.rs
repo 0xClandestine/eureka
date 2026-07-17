@@ -28,6 +28,19 @@ pub enum SchedulerEvent {
         #[serde(default)]
         usage: crate::graph::node::NodeUsage,
     },
+    /// A node activation was retried after a transient failure.
+    ActivationRetried {
+        /// The ID of the node being retried.
+        node_id: String,
+        /// The kind (type) of the node being retried.
+        node_kind: String,
+        /// The scheduler round of the activation.
+        round: u32,
+        /// The attempt number (1 = first retry, 2 = second retry, …).
+        attempt: u32,
+        /// The error that triggered the retry.
+        error: String,
+    },
     /// A node activation failed.
     ActivationFailed {
         /// The ID of the node whose activation failed.

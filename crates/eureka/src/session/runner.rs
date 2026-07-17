@@ -161,8 +161,8 @@ impl super::Session {
         // Create the scheduler
         let max_in_flight = self.config.scheduler.max_in_flight;
         let budget = self.config.budget.clone();
-        let mut scheduler =
-            Scheduler::new(expanded_spec.clone(), expanded_nodes, budget, max_in_flight);
+        let mut scheduler = Scheduler::new(expanded_spec.clone(), expanded_nodes, budget, max_in_flight)
+            .with_retry(self.config.scheduler.max_retries, self.config.scheduler.retry_backoff_ms);
         let live_tokens = self.live_tokens.clone();
         let live_input_tokens = self.live_input_tokens.clone();
         let live_output_tokens = self.live_output_tokens.clone();
@@ -221,6 +221,9 @@ impl super::Session {
                         ..
                     } => {
                         info!(%node_id, %node_kind, round, emit_count, "Node activation completed");
+                    }
+                    SchedulerEvent::ActivationRetried { node_id, node_kind, round, attempt, error } => {
+                        warn!(%node_id, %node_kind, round, attempt, %error, "Node activation retrying");
                     }
                     SchedulerEvent::ActivationFailed { node_id, node_kind, round, error } => {
                         error!(%node_id, %node_kind, round, %error, "Node activation failed");

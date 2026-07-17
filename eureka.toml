@@ -58,6 +58,10 @@ workers = 1
 # Up to 8 hypotheses per batch × 2 (critic + advocate in flight simultaneously)
 # = 16 peak concurrent LLM calls. Set higher if your rate limits allow it.
 max_in_flight = 16
+# Retry transient LLM failures up to 3 times before aborting the activation.
+# Backoff doubles each attempt (1 s → 2 s → 4 s), capped at 30 s.
+max_retries = 3
+retry_backoff_ms = 1000
 
 [budget]
 # Safety backstop values. Round count is primarily controlled by the

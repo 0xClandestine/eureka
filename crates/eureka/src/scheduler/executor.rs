@@ -66,6 +66,10 @@ struct TaskHandles {
     in_flight_sem: Arc<Semaphore>,
     /// Cancellation token for graceful shutdown.
     cancel: CancellationToken,
+    /// Maximum number of retry attempts after the initial failure (0 = no retries).
+    max_retries: u32,
+    /// Base delay in milliseconds between retries; doubles each attempt, capped at 30 000 ms.
+    retry_backoff_ms: u64,
 }
 
 /// Identity metadata required to validate checkpoints.
@@ -114,6 +118,10 @@ pub struct Scheduler {
     checkpoint_identity: Option<CheckpointIdentity>,
     /// Optional RAG indexer — spawns embedding tasks after each activation.
     rag_indexer: Option<Arc<RagIndexer>>,
+    /// Maximum number of retry attempts per activation (0 = no retries).
+    max_retries: u32,
+    /// Base retry backoff in milliseconds.
+    retry_backoff_ms: u64,
     /// Shared live per-request token counter (injected into `NodeCtx`).
     live_tokens: Option<Arc<AtomicU64>>,
     /// Shared live per-request input token counter.
@@ -150,6 +158,8 @@ impl Scheduler {
             checkpoint_store: None,
             checkpoint_identity: None,
             rag_indexer: None,
+            max_retries: 0,
+            retry_backoff_ms: 1000,
             live_tokens: None,
             live_input_tokens: None,
             live_output_tokens: None,
@@ -162,6 +172,19 @@ impl Scheduler {
     #[must_use]
     pub fn with_rag_indexer(mut self, indexer: Arc<RagIndexer>) -> Self {
         self.rag_indexer = Some(indexer);
+        self
+    }
+
+    /// Configure per-activation retry behaviour.
+    ///
+    /// `max_retries` is the number of re-attempts after the initial failure
+    /// (0 disables retries). `retry_backoff_ms` is the base delay; each
+    /// successive attempt waits `retry_backoff_ms * 2^(attempt-1)`, capped at
+    /// 30 000 ms.
+    #[must_use]
+    pub fn with_retry(mut self, max_retries: u32, retry_backoff_ms: u64) -> Self {
+        self.max_retries = max_retries;
+        self.retry_backoff_ms = retry_backoff_ms;
         self
     }
 
@@ -293,6 +316,8 @@ impl Scheduler {
             event_tx: self.event_tx.clone(),
             in_flight_sem: Arc::clone(&self.in_flight_sem),
             cancel: self.cancel.clone(),
+            max_retries: self.max_retries,
+            retry_backoff_ms: self.retry_backoff_ms,
         };
 
         // Per-node input buffer keyed by (node_id, round). The scheduler joins
@@ -886,10 +911,11 @@ impl Scheduler {
 }
 
 /// Spawn a single activation as a worker task. The task emits an
-/// `ActivationStarted` event, acquires an in-flight permit (cancelling
-/// promptly if the run is cancelled), runs the node, and sends the result
-/// back to the main loop via `handles.results_tx`. Aborting the `JoinSet`
-/// (on cancel or drop) cancels in-flight `process` calls.
+/// `ActivationStarted` event, acquires an in-flight permit (releasing it
+/// between retry attempts), runs the node, and sends the result back to the
+/// main loop via `handles.results_tx`. Transient failures are retried up to
+/// `handles.max_retries` times with exponential backoff. `NodeError::Cancelled`
+/// is never retried.
 fn spawn_activation(
     activation: Activation,
     node: BoxedNode,
@@ -906,6 +932,8 @@ fn spawn_activation(
     let cancel = handles.cancel.clone();
     let ctx = activation.ctx;
     let inputs = activation.inputs;
+    let max_retries = handles.max_retries;
+    let retry_backoff_ms = handles.retry_backoff_ms;
 
     tasks.spawn(async move {
         if let Err(e) = event_tx
@@ -919,27 +947,69 @@ fn spawn_activation(
             tracing::debug!(error = %e, "scheduler event dropped");
         }
 
-        // Acquire a permit, bailing out promptly if cancelled while
-        // waiting for a free slot.
-        let permit = tokio::select! {
-            biased;
-            () = cancel.cancelled() => return,
-            p = sem.acquire_owned() => match p {
-                Ok(p) => p,
-                Err(_) => return,
+        let mut attempt = 0u32;
+        loop {
+            // Acquire a permit, bailing out promptly if cancelled while
+            // waiting for a free slot. The permit is released before any
+            // backoff sleep so other activations can proceed.
+            let permit = tokio::select! {
+                biased;
+                () = cancel.cancelled() => return,
+                p = Arc::clone(&sem).acquire_owned() => match p {
+                    Ok(p) => p,
+                    Err(_) => return,
+                }
+            };
+
+            let result = node.process(&ctx, inputs.clone()).await;
+            drop(permit);
+
+            // Check whether this result should be forwarded immediately
+            // (success, cancellation, or retries exhausted) before consuming
+            // it. Use `as_ref` to inspect without moving.
+            let should_forward = result.is_ok()
+                || matches!(&result, Err(NodeError::Cancelled))
+                || attempt >= max_retries;
+
+            if should_forward {
+                let _ = results_tx.send(ActivationResult {
+                    id: activation_id,
+                    node_id,
+                    node_kind,
+                    round,
+                    result,
+                });
+                return;
             }
-        };
 
-        let result = node.process(&ctx, inputs).await;
-        drop(permit);
-
-        let _ = results_tx.send(ActivationResult {
-            id: activation_id,
-            node_id,
-            node_kind,
-            round,
-            result,
-        });
+            // Transient failure within retry budget: emit event then back off.
+            let error_text = result.as_ref().unwrap_err().to_string();
+            attempt += 1;
+            warn!(%node_id, attempt, error = %error_text, "Activation failed, retrying");
+            if let Err(e) = event_tx
+                .send(SchedulerEvent::ActivationRetried {
+                    node_id: node_id.clone(),
+                    node_kind: node_kind.clone(),
+                    round,
+                    attempt,
+                    error: error_text,
+                })
+                .await
+            {
+                tracing::debug!(error = %e, "scheduler event dropped");
+            }
+            // Exponential backoff: base * 2^(attempt-1), capped at 30 s.
+            // Release the permit before sleeping so the semaphore slot is
+            // available to other activations during the wait.
+            let backoff_ms = retry_backoff_ms
+                .saturating_mul(1u64 << (attempt - 1).min(5))
+                .min(30_000);
+            tokio::select! {
+                biased;
+                () = cancel.cancelled() => return,
+                () = tokio::time::sleep(std::time::Duration::from_millis(backoff_ms)) => {}
+            }
+        }
     });
 }
 
