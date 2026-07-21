@@ -27,3 +27,85 @@ pub enum EngineError {
     #[error("Store error: {0}")]
     Store(String),
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn graph_error_displays_with_prefix() {
+        let err =
+            EngineError::Graph(crate::graph::spec::GraphError::ParseError("bad graph".into()));
+        assert_eq!(err.to_string(), "Graph error: bad graph");
+    }
+
+    #[test]
+    fn config_error_displays_with_prefix() {
+        let err = EngineError::Config(crate::config::ConfigError::ParseError("bad toml".into()));
+        assert_eq!(err.to_string(), "Config error: Parse error: bad toml");
+    }
+
+    #[test]
+    fn scheduler_error_displays() {
+        let err = EngineError::Scheduler("timeout".into());
+        assert_eq!(err.to_string(), "Scheduler error: timeout");
+    }
+
+    #[test]
+    fn node_creation_error_displays() {
+        let err = EngineError::NodeCreation("missing model".into());
+        assert_eq!(err.to_string(), "Node creation error: missing model");
+    }
+
+    #[test]
+    fn unknown_node_kind_displays() {
+        let err = EngineError::UnknownNodeKind("foo".into());
+        assert_eq!(err.to_string(), "Unknown node kind: foo");
+    }
+
+    #[test]
+    fn run_error_displays() {
+        let err = EngineError::Run("session died".into());
+        assert_eq!(err.to_string(), "Run error: session died");
+    }
+
+    #[test]
+    fn store_error_displays() {
+        let err = EngineError::Store("disk full".into());
+        assert_eq!(err.to_string(), "Store error: disk full");
+    }
+
+    #[test]
+    fn from_graph_error_via_question_mark() {
+        let ge = crate::graph::spec::GraphError::ParseError("oops".into());
+        let engine_err: EngineError = ge.into();
+        assert!(matches!(engine_err, EngineError::Graph(_)));
+    }
+
+    #[test]
+    fn from_config_error_via_question_mark() {
+        let ce = crate::config::ConfigError::FileError("missing".into());
+        let engine_err: EngineError = ce.into();
+        assert!(matches!(engine_err, EngineError::Config(_)));
+    }
+
+    #[test]
+    fn debug_format_does_not_panic() {
+        let err = EngineError::Run("test".into());
+        let _ = format!("{err:?}");
+    }
+
+    #[test]
+    fn all_variants_produce_non_empty_display() {
+        let variants: &[EngineError] = &[
+            EngineError::Scheduler("a".into()),
+            EngineError::NodeCreation("a".into()),
+            EngineError::UnknownNodeKind("a".into()),
+            EngineError::Run("a".into()),
+            EngineError::Store("a".into()),
+        ];
+        for v in variants {
+            assert!(!v.to_string().is_empty(), "variant {v:?} had empty display");
+        }
+    }
+}

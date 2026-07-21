@@ -80,3 +80,56 @@ impl RunEnvironment {
         env
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn env_map(env: Vec<(String, String)>) -> std::collections::HashMap<String, String> {
+        env.into_iter().collect()
+    }
+
+    #[test]
+    fn subprocess_env_contains_required_keys() {
+        let run_env = RunEnvironment::new("sess-123", None);
+        let map = env_map(run_env.subprocess_env("plan", 2, "{}"));
+        assert_eq!(map["EUREKA_SESSION_ID"], "sess-123");
+        assert_eq!(map["EUREKA_NODE_ID"], "plan");
+        assert_eq!(map["EUREKA_ROUND"], "2");
+        assert_eq!(map["EUREKA_CONFIG"], "{}");
+        assert_eq!(map["EUREKA_DB_NAMESPACE"], "plan");
+        assert!(map.contains_key("EUREKA_DB_SCHEMA_VERSION"));
+    }
+
+    #[test]
+    fn subprocess_env_omits_db_path_when_none() {
+        let run_env = RunEnvironment::new("sess-123", None);
+        let map = env_map(run_env.subprocess_env("plan", 0, "{}"));
+        assert!(!map.contains_key("EUREKA_DB_PATH"));
+    }
+
+    #[test]
+    fn subprocess_env_includes_db_path_when_set() {
+        let path = PathBuf::from("/tmp/run.sqlite");
+        let run_env = RunEnvironment::new("sess-456", Some(path.clone()));
+        let map = env_map(run_env.subprocess_env("ranking", 1, "{}"));
+        assert_eq!(map["EUREKA_DB_PATH"], path.display().to_string());
+    }
+
+    #[test]
+    fn subprocess_env_round_increments_correctly() {
+        let run_env = RunEnvironment::new("sess-789", None);
+        let r0 = env_map(run_env.subprocess_env("node", 0, "{}"));
+        let r3 = env_map(run_env.subprocess_env("node", 3, "{}"));
+        assert_eq!(r0["EUREKA_ROUND"], "0");
+        assert_eq!(r3["EUREKA_ROUND"], "3");
+    }
+
+    #[test]
+    fn subprocess_env_config_json_is_passed_verbatim() {
+        let run_env = RunEnvironment::new("s", None);
+        let cfg = r#"{"max_rounds":5}"#;
+        let map = env_map(run_env.subprocess_env("governor", 0, cfg));
+        assert_eq!(map["EUREKA_CONFIG"], cfg);
+    }
+}

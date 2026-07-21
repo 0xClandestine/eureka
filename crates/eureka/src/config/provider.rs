@@ -87,10 +87,10 @@ impl Pricing {
     #[allow(clippy::cast_precision_loss)]
     #[must_use]
     pub fn cost(&self, input_tokens: u64, output_tokens: u64) -> f64 {
-        (output_tokens as f64 / 1_000_000.0).mul_add(
-            self.output_per_million,
-            (input_tokens as f64 / 1_000_000.0) * self.input_per_million,
-        )
+        let input_rate = self.input_per_million.max(0.0);
+        let output_rate = self.output_per_million.max(0.0);
+        (output_tokens as f64 / 1_000_000.0)
+            .mul_add(output_rate, (input_tokens as f64 / 1_000_000.0) * input_rate)
     }
 
     /// Whether any non-zero rate is configured.
@@ -117,4 +117,123 @@ pub struct ProviderConfig {
     /// `None`, cost is not tracked and only the token budget is enforced.
     #[serde(default)]
     pub pricing: Option<Pricing>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn all_provider_kinds_display_and_round_trip() {
+        let kinds = [
+            ProviderKind::Anthropic,
+            ProviderKind::OpenAI,
+            ProviderKind::OpenRouter,
+            ProviderKind::Gemini,
+            ProviderKind::Groq,
+            ProviderKind::Mistral,
+            ProviderKind::Cohere,
+            ProviderKind::DeepSeek,
+            ProviderKind::Perplexity,
+            ProviderKind::Together,
+            ProviderKind::XAI,
+            ProviderKind::Ollama,
+        ];
+        for kind in kinds {
+            let display = kind.to_string();
+            assert!(!display.is_empty(), "display empty for {kind:?}");
+            let json = serde_json::to_value(&kind).unwrap();
+            let back: ProviderKind = serde_json::from_value(json).unwrap();
+            assert_eq!(back, kind, "round-trip failed for {kind:?}");
+        }
+    }
+
+    #[test]
+    fn pricing_cost_zero_tokens_is_zero() {
+        let pricing = Pricing { input_per_million: 1.0, output_per_million: 2.0 };
+        assert_eq!(pricing.cost(0, 0), 0.0);
+    }
+
+    #[test]
+    fn pricing_cost_input_only() {
+        let pricing = Pricing { input_per_million: 1.0, output_per_million: 0.0 };
+        assert!((pricing.cost(1_000_000, 0) - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn pricing_cost_output_only() {
+        let pricing = Pricing { input_per_million: 0.0, output_per_million: 1.0 };
+        assert!((pricing.cost(0, 1_000_000) - 1.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn pricing_is_configured_with_non_zero_input() {
+        let p = Pricing { input_per_million: 0.01, output_per_million: 0.0 };
+        assert!(p.is_configured());
+    }
+
+    #[test]
+    fn pricing_is_configured_with_non_zero_output() {
+        let p = Pricing { input_per_million: 0.0, output_per_million: 0.01 };
+        assert!(p.is_configured());
+    }
+
+    #[test]
+    fn pricing_not_configured_with_all_zeros() {
+        assert!(!Pricing::default().is_configured());
+    }
+
+    #[test]
+    fn pricing_cost_fractional_tokens() {
+        let pricing = Pricing { input_per_million: 500.0, output_per_million: 500.0 };
+        let cost = pricing.cost(500, 500);
+        assert!(cost > 0.0);
+        assert!(cost < 1.0);
+    }
+
+    #[test]
+    fn provider_config_agent_models_default_to_empty() {
+        let json = serde_json::json!({ "kind": "openai" });
+        let config: ProviderConfig = serde_json::from_value(json).unwrap();
+        assert!(config.agent_models.is_empty());
+        assert!(config.generation_model.is_none());
+        assert!(config.pricing.is_none());
+    }
+
+    #[test]
+    fn provider_config_with_agent_models_deserializes() {
+        let json = serde_json::json!({
+            "kind": "openai",
+            "generation_model": "gpt-4o",
+            "agent_models": { "reflection": "gpt-4o-mini" }
+        });
+        let config: ProviderConfig = serde_json::from_value(json).unwrap();
+        assert_eq!(config.agent_models.get("reflection"), Some(&"gpt-4o-mini".to_string()));
+    }
+
+    #[test]
+    fn pricing_negative_input_rate_is_not_configured() {
+        let p = Pricing { input_per_million: -1.0, output_per_million: 0.0 };
+        assert!(!p.is_configured());
+    }
+
+    #[test]
+    fn pricing_negative_output_rate_is_not_configured() {
+        let p = Pricing { input_per_million: 0.0, output_per_million: -0.5 };
+        assert!(!p.is_configured());
+    }
+
+    #[test]
+    fn pricing_negative_rates_are_clamped_to_zero() {
+        let p = Pricing { input_per_million: -1.0, output_per_million: -2.0 };
+        let cost = p.cost(1_000_000, 1_000_000);
+        assert!((cost - 0.0).abs() < 1e-9);
+    }
+
+    #[test]
+    fn pricing_cost_with_max_u64_tokens_does_not_overflow() {
+        let p = Pricing { input_per_million: 1.0, output_per_million: 1.0 };
+        let cost = p.cost(u64::MAX, u64::MAX);
+        assert!(cost.is_finite());
+    }
 }

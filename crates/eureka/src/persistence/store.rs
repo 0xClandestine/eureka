@@ -150,3 +150,198 @@ pub trait RunStore: Send + Sync {
     /// List all run records.
     async fn list(&self) -> std::io::Result<Vec<RunRecord>>;
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn revision_default_is_zero() {
+        assert_eq!(Revision::default(), Revision(0));
+    }
+
+    #[test]
+    fn revision_ordering() {
+        assert!(Revision(0) < Revision(1));
+        assert!(Revision(1) > Revision(0));
+        assert_eq!(Revision(3), Revision(3));
+        assert!(Revision(-1) < Revision(0));
+        assert!(Revision(i64::MAX) > Revision(i64::MIN));
+    }
+
+    #[test]
+    fn revision_serde_is_transparent() {
+        let json = serde_json::to_value(&Revision(42)).unwrap();
+        assert_eq!(json, serde_json::json!(42));
+        let back: Revision = serde_json::from_value(json).unwrap();
+        assert_eq!(back, Revision(42));
+    }
+
+    #[test]
+    fn revision_default_serde_as_zero() {
+        let json = serde_json::to_string(&Revision::default()).unwrap();
+        assert_eq!(json, "0");
+    }
+
+    #[test]
+    fn persistence_error_not_found_displays_run_id() {
+        let id = uuid::Uuid::now_v7();
+        let err = PersistenceError::NotFound(id);
+        let msg = err.to_string();
+        assert!(msg.contains(&id.to_string()), "message should contain run id: {msg}");
+    }
+
+    #[test]
+    fn persistence_error_already_exists_displays_run_id() {
+        let id = uuid::Uuid::now_v7();
+        let err = PersistenceError::AlreadyExists(id);
+        let msg = err.to_string();
+        assert!(msg.contains(&id.to_string()), "message should contain run id: {msg}");
+    }
+
+    #[test]
+    fn persistence_error_revision_conflict_displays_all_fields() {
+        let id = uuid::Uuid::now_v7();
+        let err = PersistenceError::RevisionConflict {
+            run_id: id,
+            expected: Revision(2),
+            actual: Revision(1),
+        };
+        let msg = err.to_string();
+        assert!(msg.contains(&id.to_string()), "message should contain run id: {msg}");
+        assert!(msg.contains("expected"), "message should mention expected: {msg}");
+        assert!(msg.contains("2"), "message should show expected revision: {msg}");
+    }
+
+    #[test]
+    fn persistence_error_input_conflict_displays_node_and_port() {
+        let err = PersistenceError::InputConflict { node_id: "gen".into(), port: "goal".into() };
+        let msg = err.to_string();
+        assert!(msg.contains("gen"), "message should contain node_id: {msg}");
+        assert!(msg.contains("goal"), "message should contain port: {msg}");
+    }
+
+    #[test]
+    fn persistence_error_io_displays() {
+        let err = PersistenceError::Io(std::io::Error::other("disk on fire"));
+        let msg = err.to_string();
+        assert!(msg.contains("disk on fire"), "message should wrap io error: {msg}");
+    }
+
+    #[test]
+    fn persistence_error_serialization_displays() {
+        let err = PersistenceError::Serialization("trailing comma".into());
+        let msg = err.to_string();
+        assert!(msg.contains("trailing comma"), "message should wrap: {msg}");
+    }
+
+    #[test]
+    fn from_io_error_for_persistence_error() {
+        let io = std::io::Error::new(std::io::ErrorKind::NotFound, "gone");
+        let pe: PersistenceError = io.into();
+        assert!(matches!(pe, PersistenceError::Io(_)));
+        assert!(pe.to_string().contains("gone"));
+    }
+
+    #[test]
+    fn from_serde_json_error_for_persistence_error() {
+        let json_err = serde_json::from_str::<serde_json::Value>("{invalid}").unwrap_err();
+        let pe: PersistenceError = json_err.into();
+        assert!(matches!(pe, PersistenceError::Serialization(_)));
+    }
+
+    #[test]
+    fn run_event_serde_round_trip() {
+        let id = uuid::Uuid::now_v7();
+        let event = serde_json::json!({"type": "activationStarted", "nodeId": "gen", "nodeKind": "gen", "round": 1});
+        let re = RunEvent {
+            run_id: id,
+            sequence: 5,
+            timestamp_ms: 1_750_000_000_000,
+            event: event.clone(),
+        };
+        let json = serde_json::to_string(&re).unwrap();
+        let restored: RunEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.run_id, id);
+        assert_eq!(restored.sequence, 5);
+        assert_eq!(restored.timestamp_ms, 1_750_000_000_000);
+        assert_eq!(restored.event, event);
+    }
+
+    #[test]
+    fn run_event_deserializes_snake_case_fields() {
+        let json = serde_json::json!({
+            "run_id": "00000000-0000-0000-0000-000000000000",
+            "sequence": 0,
+            "timestamp_ms": 0,
+            "event": {}
+        });
+        let re: RunEvent = serde_json::from_value(json).unwrap();
+        assert_eq!(re.sequence, 0);
+        assert_eq!(re.timestamp_ms, 0);
+    }
+
+    #[test]
+    fn persistence_error_debug_does_not_panic() {
+        let id = uuid::Uuid::now_v7();
+        let err = PersistenceError::RevisionConflict {
+            run_id: id,
+            expected: Revision(1),
+            actual: Revision(0),
+        };
+        let _ = format!("{err:?}");
+    }
+
+    #[test]
+    fn from_rusqlite_error_wraps_into_io_variant() {
+        let sq_err = rusqlite::Error::QueryReturnedNoRows;
+        let pe: PersistenceError = sq_err.into();
+        assert!(matches!(pe, PersistenceError::Io(_)));
+        assert!(!pe.to_string().is_empty());
+    }
+
+    #[test]
+    fn revision_max_value_serde_round_trip() {
+        let json = serde_json::to_value(&Revision(i64::MAX)).unwrap();
+        let back: Revision = serde_json::from_value(json).unwrap();
+        assert_eq!(back, Revision(i64::MAX));
+    }
+
+    #[test]
+    fn revision_negative_value_serde() {
+        let json = serde_json::to_string(&Revision(-5)).unwrap();
+        assert_eq!(json, "-5");
+        let back: Revision = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, Revision(-5));
+    }
+
+    #[test]
+    fn run_event_zero_sequence_and_timestamp() {
+        let id = uuid::Uuid::now_v7();
+        let re = RunEvent {
+            run_id: id,
+            sequence: 0,
+            timestamp_ms: 0,
+            event: serde_json::json!({"type": "runHalted", "reason": "budget", "totalRounds": 0}),
+        };
+        let json = serde_json::to_string(&re).unwrap();
+        let restored: RunEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.sequence, 0);
+        assert_eq!(restored.timestamp_ms, 0);
+    }
+
+    #[test]
+    fn run_event_max_sequence_value() {
+        let id = uuid::Uuid::now_v7();
+        let re = RunEvent {
+            run_id: id,
+            sequence: u64::MAX,
+            timestamp_ms: u64::MAX,
+            event: serde_json::json!({}),
+        };
+        let json = serde_json::to_string(&re).unwrap();
+        let restored: RunEvent = serde_json::from_str(&json).unwrap();
+        assert_eq!(restored.sequence, u64::MAX);
+        assert_eq!(restored.timestamp_ms, u64::MAX);
+    }
+}

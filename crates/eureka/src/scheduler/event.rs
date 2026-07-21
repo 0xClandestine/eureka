@@ -105,6 +105,92 @@ pub enum SchedulerEvent {
     },
 }
 
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Verify the type tag uses camelCase (from `rename_all` on the enum),
+    /// while fields within struct variants keep their original snake_case names.
+    #[test]
+    fn tool_called_type_tag_is_camel_case_fields_are_snake_case() {
+        let ev = SchedulerEvent::ToolCalled {
+            node_id: "plan".into(),
+            node_kind: "plan".into(),
+            round: 0,
+            tool: "search_literature".into(),
+            args_summary: "R1CS SHA-256".into(),
+            args: serde_json::json!({"query": "R1CS SHA-256"}),
+        };
+        let v = serde_json::to_value(&ev).unwrap();
+        // Variant name is renamed to camelCase
+        assert_eq!(v["type"], "toolCalled");
+        // Fields within struct variants keep snake_case
+        assert_eq!(v["node_id"], "plan");
+        assert_eq!(v["tool"], "search_literature");
+        assert_eq!(v["args_summary"], "R1CS SHA-256");
+    }
+
+    #[test]
+    fn tool_completed_has_result_preview_and_success() {
+        let ev = SchedulerEvent::ToolCompleted {
+            node_id: "plan".into(),
+            node_kind: "plan".into(),
+            round: 0,
+            tool: "search_literature".into(),
+            result_preview: r#"{"papers":[{"title":"Test"}]}"#.into(),
+            success: true,
+        };
+        let v = serde_json::to_value(&ev).unwrap();
+        assert_eq!(v["type"], "toolCompleted");
+        assert_eq!(v["result_preview"], r#"{"papers":[{"title":"Test"}]}"#);
+        assert_eq!(v["success"], true);
+    }
+
+    #[test]
+    fn activation_started_type_tag_is_camel_case() {
+        let ev = SchedulerEvent::ActivationStarted {
+            node_id: "generation".into(),
+            node_kind: "generation".into(),
+            round: 1,
+        };
+        let v = serde_json::to_value(&ev).unwrap();
+        assert_eq!(v["type"], "activationStarted");
+        assert_eq!(v["node_id"], "generation");
+        assert_eq!(v["round"], 1);
+    }
+
+    #[test]
+    fn activation_completed_usage_is_snake_case() {
+        let ev = SchedulerEvent::ActivationCompleted {
+            node_id: "reflection".into(),
+            node_kind: "reflection".into(),
+            round: 2,
+            emit_count: 1,
+            inputs: vec![],
+            outputs: vec![],
+            usage: crate::graph::node::NodeUsage {
+                total_tokens: 1000,
+                input_tokens: 600,
+                output_tokens: 400,
+                cost_usd: 0.001,
+            },
+        };
+        let v = serde_json::to_value(&ev).unwrap();
+        assert_eq!(v["type"], "activationCompleted");
+        assert_eq!(v["usage"]["total_tokens"], 1000);
+        assert_eq!(v["usage"]["cost_usd"], 0.001);
+        assert_eq!(v["emit_count"], 1);
+    }
+
+    #[test]
+    fn run_halted_type_tag_is_camel_case() {
+        let ev = SchedulerEvent::RunHalted { reason: "max_rounds".into(), total_rounds: 5 };
+        let v = serde_json::to_value(&ev).unwrap();
+        assert_eq!(v["type"], "runHalted");
+        assert_eq!(v["total_rounds"], 5);
+    }
+}
+
 /// Signals sent to the scheduler from the outside.
 #[derive(Debug)]
 pub enum SchedulerSignal {

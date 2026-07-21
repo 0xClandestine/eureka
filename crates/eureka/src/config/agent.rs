@@ -72,3 +72,72 @@ impl Default for AgentConfig {
         Self { temperature: 0.7, max_iterations: 10, workers: 1 }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn global() -> AgentConfig {
+        AgentConfig { temperature: 0.7, max_iterations: 10, workers: 1 }
+    }
+
+    #[test]
+    fn resolve_no_override_returns_global() {
+        let overrides = HashMap::new();
+        let resolved = AgentConfig::resolve_for(&global(), &overrides, "plan");
+        assert_eq!(resolved.temperature, 0.7);
+        assert_eq!(resolved.max_iterations, 10);
+        assert_eq!(resolved.workers, 1);
+    }
+
+    #[test]
+    fn resolve_partial_override_preserves_unset_fields() {
+        let mut overrides = HashMap::new();
+        overrides.insert(
+            "plan".into(),
+            AgentConfigOverride { max_iterations: Some(8), temperature: None, workers: None },
+        );
+        let resolved = AgentConfig::resolve_for(&global(), &overrides, "plan");
+        assert_eq!(resolved.max_iterations, 8);
+        assert_eq!(resolved.temperature, 0.7); // preserved from global
+        assert_eq!(resolved.workers, 1); // preserved from global
+    }
+
+    #[test]
+    fn resolve_full_override_replaces_all_fields() {
+        let mut overrides = HashMap::new();
+        overrides.insert(
+            "generation".into(),
+            AgentConfigOverride {
+                max_iterations: Some(20),
+                temperature: Some(0.9),
+                workers: Some(3),
+            },
+        );
+        let resolved = AgentConfig::resolve_for(&global(), &overrides, "generation");
+        assert_eq!(resolved.max_iterations, 20);
+        assert_eq!(resolved.temperature, 0.9);
+        assert_eq!(resolved.workers, 3);
+    }
+
+    #[test]
+    fn resolve_override_for_different_agent_returns_global() {
+        let mut overrides = HashMap::new();
+        overrides.insert(
+            "plan".into(),
+            AgentConfigOverride { max_iterations: Some(8), temperature: None, workers: None },
+        );
+        // "generation" has no override — should get global
+        let resolved = AgentConfig::resolve_for(&global(), &overrides, "generation");
+        assert_eq!(resolved.max_iterations, 10);
+    }
+
+    #[test]
+    fn deserialize_override_from_json() {
+        let json = r#"{"max_iterations": 8}"#;
+        let ov: AgentConfigOverride = serde_json::from_str(json).unwrap();
+        assert_eq!(ov.max_iterations, Some(8));
+        assert!(ov.temperature.is_none());
+        assert!(ov.workers.is_none());
+    }
+}
