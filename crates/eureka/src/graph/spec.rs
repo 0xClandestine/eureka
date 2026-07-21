@@ -85,9 +85,6 @@ pub enum GraphError {
     /// A node is unreachable from any source.
     #[error("Unreachable node: {0}")]
     UnreachableNode(String),
-    /// A cycle lacks a governing node.
-    #[error("Ungoverned cycle detected: {0}")]
-    UngovernedCycle(String),
     /// No sink node emits a terminal artifact.
     #[error("No sink node found: {0}")]
     MissingSink(String),

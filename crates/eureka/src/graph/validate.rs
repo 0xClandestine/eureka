@@ -5,8 +5,11 @@
 //! 2. No dangling inputs — every required input port has ≥1 inbound edge
 //! 3. Reachability — every node is reachable from a source
 //!    3b. Unknown node kinds — every node kind must be registered (if registry is non-empty)
-//! 4. Governed cycles — every cycle must contain a node with a `"halt"` output port
-//! 5. Sink presence — at least one node emits a terminal artifact
+//! 4. Sink presence — at least one node emits a terminal artifact
+//!
+//! Cycle termination is an operational property governed by budget config
+//! (`max_rounds`, `max_cost_usd`, etc.) — not a topological requirement.
+//! Nodes may emit on a `halt` port for early exit, but it is never required.
 
 use std::collections::{HashMap, HashSet, VecDeque};
 
@@ -236,32 +239,7 @@ pub fn validate_graph(spec: &GraphSpec, registry: &PortRegistry) -> ValidationRe
         }
     }
 
-    // 4. Governed cycles — every SCC/cycle must contain a governor node.
-    let governor_nodes: HashSet<&str> = spec
-        .nodes
-        .iter()
-        .filter(|n| {
-            registry.get(&n.kind).is_some_and(|ps| ps.outputs.iter().any(|p| p.name == "halt"))
-        })
-        .map(|n| n.id.as_str())
-        .collect();
-
-    let sccs = tarjan_scc(spec);
-    for (scc_index, scc) in sccs.iter().enumerate() {
-        if scc.len() > 1 || (scc.len() == 1 && has_self_loop(spec, scc[0].as_str())) {
-            let has_governor = scc.iter().any(|node_id| governor_nodes.contains(node_id.as_str()));
-            if !has_governor {
-                errors.push(GraphError::UngovernedCycle(format!(
-                    "SCC #{} ({}) has no governor node (a node with a 'halt' output port). \
-                     Every cycle must contain at least one governor.",
-                    scc_index,
-                    scc.join(", ")
-                )));
-            }
-        }
-    }
-
-    // 5. Sink presence
+    // 4. Sink presence
     if !registry.specs.is_empty() {
         let all_input_kinds: HashSet<&str> = registry
             .specs
@@ -289,101 +267,6 @@ pub fn validate_graph(spec: &GraphSpec, registry: &PortRegistry) -> ValidationRe
     } else {
         ValidationResult::invalid(errors)
     }
-}
-
-/// Tarjan's strongly connected components algorithm (iterative).
-///
-/// Uses an explicit work stack instead of recursion to avoid stack overflow on
-/// large graphs.  Each work-stack frame carries the node being visited and the
-/// index into its adjacency list that should be processed next, mirroring the
-/// recursive call/return structure without growing the thread stack.
-#[must_use]
-fn tarjan_scc(spec: &GraphSpec) -> Vec<Vec<String>> {
-    let node_ids: Vec<&str> = spec.nodes.iter().map(|n| n.id.as_str()).collect();
-    let index_map: HashMap<&str, usize> =
-        node_ids.iter().enumerate().map(|(i, id)| (*id, i)).collect();
-
-    let mut adj: Vec<Vec<usize>> = vec![vec![]; node_ids.len()];
-    for edge in &spec.edges {
-        if let (Some(&from), Some(&to)) =
-            (index_map.get(edge.from_node.as_str()), index_map.get(edge.to_node.as_str()))
-        {
-            adj[from].push(to);
-        }
-    }
-
-    let n = node_ids.len();
-    let mut next_index = 0usize;
-    let mut indices: Vec<usize> = vec![usize::MAX; n];
-    let mut lowlink: Vec<usize> = vec![0; n];
-    let mut on_stack: Vec<bool> = vec![false; n];
-    let mut scc_stack: Vec<usize> = Vec::new();
-    let mut sccs: Vec<Vec<String>> = Vec::new();
-
-    // Work-stack frame: (node, next_child_index).
-    // On entry the frame has next_child_index = 0 (process first child next).
-    // After visiting a child we return here with an incremented index.
-    let mut work: Vec<(usize, usize)> = Vec::new();
-
-    for root in 0..n {
-        if indices[root] != usize::MAX {
-            continue;
-        }
-
-        // Push the root as if we "called" strongconnect(root).
-        work.push((root, 0));
-        indices[root] = next_index;
-        lowlink[root] = next_index;
-        next_index += 1;
-        scc_stack.push(root);
-        on_stack[root] = true;
-
-        while let Some((v, child_idx)) = work.last_mut() {
-            let v = *v;
-            if *child_idx < adj[v].len() {
-                let w = adj[v][*child_idx];
-                *child_idx += 1;
-                if indices[w] == usize::MAX {
-                    // Tree edge — "recurse" into w.
-                    work.push((w, 0));
-                    indices[w] = next_index;
-                    lowlink[w] = next_index;
-                    next_index += 1;
-                    scc_stack.push(w);
-                    on_stack[w] = true;
-                } else if on_stack[w] {
-                    // Back edge.
-                    lowlink[v] = lowlink[v].min(indices[w]);
-                }
-            } else {
-                // All children of v processed — "return" from strongconnect(v).
-                work.pop();
-                if let Some(&(parent, _)) = work.last() {
-                    lowlink[parent] = lowlink[parent].min(lowlink[v]);
-                }
-                if lowlink[v] == indices[v] {
-                    let mut scc: Vec<String> = Vec::new();
-                    while let Some(w) = scc_stack.pop() {
-                        on_stack[w] = false;
-                        scc.push(node_ids[w].to_string());
-                        if w == v {
-                            break;
-                        }
-                    }
-                    scc.sort();
-                    sccs.push(scc);
-                }
-            }
-        }
-    }
-
-    sccs
-}
-
-/// Check if a node has a self-loop (edge to itself).
-#[must_use]
-fn has_self_loop(spec: &GraphSpec, node_id: &str) -> bool {
-    spec.edges.iter().any(|e| e.from_node == node_id && e.to_node == node_id)
 }
 
 #[cfg(test)]
