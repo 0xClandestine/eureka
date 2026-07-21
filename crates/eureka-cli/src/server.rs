@@ -169,7 +169,10 @@ pub fn track_live_state(
                         SchedulerEvent::ActivationCompleted { node_id, outputs, usage, .. } => {
                             s.active_nodes.remove(node_id.as_str());
                             if !outputs.is_empty() {
-                                s.node_outputs.insert(node_id.clone(), outputs.clone());
+                                s.node_outputs
+                                    .entry(node_id.clone())
+                                    .or_default()
+                                    .extend(outputs.iter().cloned());
                             }
                             round_tokens += usage.total_tokens;
                             round_cost += usage.cost_usd;

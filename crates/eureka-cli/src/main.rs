@@ -201,13 +201,15 @@ async fn main() -> anyhow::Result<()> {
     // Register sqlite-vec extension before any SQLite connection is opened.
     eureka::rag::init::register_sqlite_vec();
 
-    // Initialize tracing
+    // Initialize tracing.
+    // Default filter silences noisy third-party HTTP crates (rig, reqwest, hyper)
+    // while keeping all eureka output at INFO and warnings from everything else.
+    // Override with RUST_LOG env var, e.g. RUST_LOG=eureka=debug,warn
     tracing_subscriber::fmt()
-        .with_env_filter(
-            tracing_subscriber::EnvFilter::try_from_default_env()
-                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
-        )
-        .pretty()
+        .with_env_filter(tracing_subscriber::EnvFilter::try_from_default_env().unwrap_or_else(
+            |_| tracing_subscriber::EnvFilter::new("eureka=info,eureka_cli=info,warn"),
+        ))
+        .compact()
         .init();
 
     let cli = Cli::parse();

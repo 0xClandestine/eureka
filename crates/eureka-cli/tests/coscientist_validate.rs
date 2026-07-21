@@ -28,20 +28,12 @@ struct MockRanker;
 impl Node for MockRanker {
     fn ports(&self) -> PortSpec {
         PortSpec::new(
-            vec![
-                PortSpecEntry {
-                    name: "in".into(),
-                    direction: PortDirection::Input,
-                    kind: "Reviews".into(),
-                    required: true,
-                },
-                PortSpecEntry {
-                    name: "graph".into(),
-                    direction: PortDirection::Input,
-                    kind: "ProximityGraph".into(),
-                    required: false,
-                },
-            ],
+            vec![PortSpecEntry {
+                name: "in".into(),
+                direction: PortDirection::Input,
+                kind: "MatchResults".into(),
+                required: true,
+            }],
             vec![
                 PortSpecEntry {
                     name: "top".into(),
@@ -186,12 +178,102 @@ impl Node for MockSup {
                     required: false,
                 },
                 PortSpecEntry {
+                    name: "generate".into(),
+                    direction: PortDirection::Output,
+                    kind: "Hypotheses".into(),
+                    required: false,
+                },
+                PortSpecEntry {
                     name: "halt".into(),
                     direction: PortDirection::Output,
                     kind: "Control".into(),
                     required: false,
                 },
             ],
+        )
+    }
+    async fn process(
+        &self,
+        _: &NodeCtx,
+        _: Vec<PortMsg>,
+    ) -> Result<(Vec<Emit>, eureka::graph::node::NodeUsage), NodeError> {
+        Ok((vec![], eureka::graph::node::NodeUsage::default()))
+    }
+}
+
+struct MockVerifier;
+#[async_trait]
+impl Node for MockVerifier {
+    fn ports(&self) -> PortSpec {
+        PortSpec::new(
+            vec![PortSpecEntry {
+                name: "in".into(),
+                direction: PortDirection::Input,
+                kind: "Reviews".into(),
+                required: true,
+            }],
+            vec![PortSpecEntry {
+                name: "out".into(),
+                direction: PortDirection::Output,
+                kind: "Reviews".into(),
+                required: false,
+            }],
+        )
+    }
+    async fn process(
+        &self,
+        _: &NodeCtx,
+        _: Vec<PortMsg>,
+    ) -> Result<(Vec<Emit>, eureka::graph::node::NodeUsage), NodeError> {
+        Ok((vec![], eureka::graph::node::NodeUsage::default()))
+    }
+}
+
+struct MockMatchDispatch;
+#[async_trait]
+impl Node for MockMatchDispatch {
+    fn ports(&self) -> PortSpec {
+        PortSpec::new(
+            vec![PortSpecEntry {
+                name: "in".into(),
+                direction: PortDirection::Input,
+                kind: "Reviews".into(),
+                required: true,
+            }],
+            vec![PortSpecEntry {
+                name: "match".into(),
+                direction: PortDirection::Output,
+                kind: "MatchItem".into(),
+                required: false,
+            }],
+        )
+    }
+    async fn process(
+        &self,
+        _: &NodeCtx,
+        _: Vec<PortMsg>,
+    ) -> Result<(Vec<Emit>, eureka::graph::node::NodeUsage), NodeError> {
+        Ok((vec![], eureka::graph::node::NodeUsage::default()))
+    }
+}
+
+struct MockMatchGather;
+#[async_trait]
+impl Node for MockMatchGather {
+    fn ports(&self) -> PortSpec {
+        PortSpec::new(
+            vec![PortSpecEntry {
+                name: "in".into(),
+                direction: PortDirection::Input,
+                kind: "MatchResult".into(),
+                required: true,
+            }],
+            vec![PortSpecEntry {
+                name: "out".into(),
+                direction: PortDirection::Output,
+                kind: "MatchResults".into(),
+                required: false,
+            }],
         )
     }
     async fn process(
@@ -239,24 +321,8 @@ fn test_coscientist_validates() {
             name: agent_spec.id.clone(),
             description: agent_spec.description.clone(),
             preamble: pc,
-            inputs: agent_spec
-                .inputs
-                .iter()
-                .map(|p| PortDef {
-                    kind: p.kind.clone(),
-                    port: p.port.clone(),
-                    ..Default::default()
-                })
-                .collect(),
-            outputs: agent_spec
-                .outputs
-                .iter()
-                .map(|p| PortDef {
-                    kind: p.kind.clone(),
-                    port: p.port.clone(),
-                    ..Default::default()
-                })
-                .collect(),
+            inputs: agent_spec.inputs.clone(),
+            outputs: agent_spec.outputs.clone(),
             config: eureka::config::AgentConfig::default(),
             output_schema: agent_spec.output_schema.clone(),
             tools: agent_spec
@@ -285,7 +351,10 @@ fn test_coscientist_validates() {
     nodes.insert("proximity".to_string(), BoxedNode::new(MockProx));
     nodes.insert("supervisor".to_string(), BoxedNode::new(MockSup));
     nodes.insert("scatter".to_string(), BoxedNode::new(MockScatter));
-    nodes.insert("gather".to_string(), BoxedNode::new(MockGather));
+    nodes.insert("reflect_gather".to_string(), BoxedNode::new(MockGather));
+    nodes.insert("verifier".to_string(), BoxedNode::new(MockVerifier));
+    nodes.insert("match_dispatch".to_string(), BoxedNode::new(MockMatchDispatch));
+    nodes.insert("match_gather".to_string(), BoxedNode::new(MockMatchGather));
 
     let mut registry = PortRegistry::new();
     for (node_id, node) in &nodes {
@@ -381,10 +450,10 @@ fn test_batch_hypothesis_prompts() {
     );
 
     // Evolution still produces an array; verify the output schema supports it.
-    let manifest = GraphManifest::load(&dir.join("coscientist.yml"))
-        .expect("Failed to load manifest");
-    let evo = manifest.agents.iter().find(|a| a.id == "evolution")
-        .expect("evolution agent must exist");
+    let manifest =
+        GraphManifest::load(&dir.join("coscientist.yml")).expect("Failed to load manifest");
+    let evo =
+        manifest.agents.iter().find(|a| a.id == "evolution").expect("evolution agent must exist");
     assert_eq!(
         evo.output_schema["properties"]["hypotheses"]["type"].as_str(),
         Some("array"),
