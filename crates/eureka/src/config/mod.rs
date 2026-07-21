@@ -20,7 +20,7 @@ pub mod tracing;
 pub use agent::{AgentConfig, AgentConfigOverride};
 pub use budget::{parse_duration, Budget, RunStats};
 pub use provider::{Pricing, ProviderConfig, ProviderKind};
-pub use rag::{EmbeddingProvider, RagConfig};
+pub use rag::{EmbeddingProvider, NodeRagConfig, RagConfig};
 pub use scheduler::SchedulerConfig;
 pub use tracing::TracingConfig;
 

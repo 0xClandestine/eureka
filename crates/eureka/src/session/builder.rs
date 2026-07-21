@@ -74,8 +74,8 @@ impl super::Session {
             .map(|s| McpServerDef {
                 name: s.name.clone(),
                 transport: match &s.transport {
-                    crate::manifest::agent::McpTransportSpec::Stdio { command } => {
-                        McpTransport::Stdio { command: command.clone() }
+                    crate::manifest::agent::McpTransportSpec::Stdio { command, env } => {
+                        McpTransport::Stdio { command: command.clone(), env: env.clone() }
                     }
                     crate::manifest::agent::McpTransportSpec::Http { uri } => {
                         McpTransport::Http { uri: uri.clone() }
@@ -232,16 +232,28 @@ impl super::Session {
         ))
     }
 
-    /// Resolve the RAG parameters for `agent_id`, honouring the `rag.agent_ids`
-    /// filter.  Returns `None` when RAG is disabled globally or the agent is not
-    /// in the inclusion list.
+    /// Resolve the RAG parameters for `agent_id`.
+    ///
+    /// Returns `None` when RAG is disabled globally, the agent is excluded by
+    /// the `rag.agent_ids` filter, or the agent's own `rag.enabled = false`.
+    /// Per-agent `top_k` overrides the global value when set.
     fn rag_for(&self, agent_id: &str) -> Option<(crate::rag::RagIndexHandle, usize)> {
         let rag_index = self.rag_index.as_ref()?;
         let rag_cfg = self.config.rag.as_ref().filter(|r| r.enabled)?;
-        if rag_cfg.agent_ids.is_empty() || rag_cfg.agent_ids.iter().any(|id| id == agent_id) {
-            Some((rag_index.clone(), rag_cfg.top_k))
-        } else {
-            None
+
+        // Global agent_ids inclusion filter.
+        if !rag_cfg.agent_ids.is_empty() && !rag_cfg.agent_ids.iter().any(|id| id == agent_id) {
+            return None;
+        }
+
+        // Per-agent NodeRagConfig: enabled flag and top_k override.
+        let node_rag =
+            self.manifest.agents.iter().find(|a| a.id == agent_id).and_then(|a| a.rag.as_ref());
+
+        match node_rag {
+            Some(nr) if !nr.enabled => None,
+            Some(nr) => Some((rag_index.clone(), nr.top_k.unwrap_or(rag_cfg.top_k))),
+            None => Some((rag_index.clone(), rag_cfg.top_k)),
         }
     }
 
@@ -266,19 +278,34 @@ impl super::Session {
 
 /// Connect all MCP servers declared by an agent, returning live `McpConnection`s.
 ///
-/// If any server fails to connect or does not respond to `list_tools`, this
-/// function returns `Err(EngineError::NodeCreation(...))` and no connections
-/// are returned.  Failures are not retried.
+/// Individual server failures are non-fatal: a warning is logged and the
+/// server is skipped so the agent runs without its tools rather than aborting
+/// the entire run.  This allows optional servers (e.g. `lean-lsp-mcp`) to be
+/// listed in the manifest without requiring them to be installed on every
+/// machine.
 async fn connect_mcp_servers(
     specs: &[McpServerDef],
     graph_dir: &Path,
 ) -> Result<Vec<McpConnection>, EngineError> {
     let mut connections = Vec::with_capacity(specs.len());
     for spec in specs {
-        let conn = connect_one_server(spec, graph_dir).await.map_err(|e| {
-            EngineError::NodeCreation(format!("Failed to connect MCP server '{}': {e}", spec.name))
-        })?;
-        connections.push(conn);
+        match connect_one_server(spec, graph_dir).await {
+            Ok(conn) => {
+                tracing::info!(
+                    server = %spec.name,
+                    tools = conn.tools.len(),
+                    "MCP server connected"
+                );
+                connections.push(conn);
+            }
+            Err(e) => {
+                tracing::warn!(
+                    server = %spec.name,
+                    error = %e,
+                    "MCP server unavailable — agent will run without its tools"
+                );
+            }
+        }
     }
     Ok(connections)
 }
@@ -289,10 +316,10 @@ async fn connect_one_server(
     graph_dir: &Path,
 ) -> Result<McpConnection, anyhow::Error> {
     match &spec.transport {
-        McpTransport::Stdio { command } => {
+        McpTransport::Stdio { command, env } => {
             anyhow::ensure!(!command.is_empty(), "MCP stdio command must not be empty");
             let mut cmd = tokio::process::Command::new(&command[0]);
-            cmd.args(&command[1..]).current_dir(graph_dir);
+            cmd.args(&command[1..]).current_dir(graph_dir).envs(env);
             let transport = rmcp::transport::TokioChildProcess::new(cmd)
                 .context("Failed to spawn MCP stdio subprocess")?;
             let service = rmcp::model::ClientInfo::default()

@@ -41,39 +41,34 @@ pub async fn build_rag_components(
     session_id: &str,
     live_tokens: Option<Arc<std::sync::atomic::AtomicU64>>,
     live_cost: Option<Arc<std::sync::Mutex<f64>>>,
+    node_configs: std::collections::HashMap<String, crate::config::NodeRagConfig>,
 ) -> Result<(RagIndexHandle, Arc<RagIndexer>), EngineError> {
     let cost_per_million = cfg.embedding_cost_per_million_tokens;
+    macro_rules! bwm {
+        ($model:expr) => {
+            build_with_model(
+                $model,
+                cfg,
+                db_path,
+                session_id,
+                live_tokens,
+                live_cost,
+                cost_per_million,
+                node_configs,
+            )
+            .await
+        };
+    }
     match cfg.embedding_provider {
         EmbeddingProvider::OpenAI => {
             let client = openai::Client::from_env()
                 .map_err(|e| EngineError::Store(format!("OpenAI client init failed: {e}")))?;
-            let model = client.embedding_model(&cfg.embedding_model);
-            build_with_model(
-                model,
-                cfg,
-                db_path,
-                session_id,
-                live_tokens,
-                live_cost,
-                cost_per_million,
-            )
-            .await
+            bwm!(client.embedding_model(&cfg.embedding_model))
         }
         EmbeddingProvider::Cohere => {
             let client = cohere::Client::from_env()
                 .map_err(|e| EngineError::Store(format!("Cohere client init failed: {e}")))?;
-            // "search_document" is the appropriate input_type for indexing.
-            let model = client.embedding_model(&cfg.embedding_model, "search_document");
-            build_with_model(
-                model,
-                cfg,
-                db_path,
-                session_id,
-                live_tokens,
-                live_cost,
-                cost_per_million,
-            )
-            .await
+            bwm!(client.embedding_model(&cfg.embedding_model, "search_document"))
         }
         EmbeddingProvider::Ollama => {
             let ndims = cfg.embedding_ndims.ok_or_else(|| {
@@ -84,17 +79,7 @@ pub async fn build_rag_components(
             })?;
             let client = ollama::Client::from_env()
                 .map_err(|e| EngineError::Store(format!("Ollama client init failed: {e}")))?;
-            let model = client.embedding_model_with_ndims(&cfg.embedding_model, ndims);
-            build_with_model(
-                model,
-                cfg,
-                db_path,
-                session_id,
-                live_tokens,
-                live_cost,
-                cost_per_million,
-            )
-            .await
+            bwm!(client.embedding_model_with_ndims(&cfg.embedding_model, ndims))
         }
         EmbeddingProvider::VoyageAI => {
             let client = voyageai::Client::from_env()
@@ -103,32 +88,12 @@ pub async fn build_rag_components(
                 || client.embedding_model(&cfg.embedding_model),
                 |n| client.embedding_model_with_ndims(&cfg.embedding_model, n),
             );
-            build_with_model(
-                model,
-                cfg,
-                db_path,
-                session_id,
-                live_tokens,
-                live_cost,
-                cost_per_million,
-            )
-            .await
+            bwm!(model)
         }
         EmbeddingProvider::Gemini => {
             let client = gemini::Client::from_env()
                 .map_err(|e| EngineError::Store(format!("Gemini client init failed: {e}")))?;
-            // Gemini infers ndims from the model name automatically.
-            let model = client.embedding_model(&cfg.embedding_model);
-            build_with_model(
-                model,
-                cfg,
-                db_path,
-                session_id,
-                live_tokens,
-                live_cost,
-                cost_per_million,
-            )
-            .await
+            bwm!(client.embedding_model(&cfg.embedding_model))
         }
         EmbeddingProvider::Together => {
             let client = together::Client::from_env()
@@ -137,16 +102,7 @@ pub async fn build_rag_components(
                 || client.embedding_model(&cfg.embedding_model),
                 |n| client.embedding_model_with_ndims(&cfg.embedding_model, n),
             );
-            build_with_model(
-                model,
-                cfg,
-                db_path,
-                session_id,
-                live_tokens,
-                live_cost,
-                cost_per_million,
-            )
-            .await
+            bwm!(model)
         }
         EmbeddingProvider::Llamafile => {
             let client = llamafile::Client::from_env()
@@ -155,16 +111,7 @@ pub async fn build_rag_components(
                 || client.embedding_model(&cfg.embedding_model),
                 |n| client.embedding_model_with_ndims(&cfg.embedding_model, n),
             );
-            build_with_model(
-                model,
-                cfg,
-                db_path,
-                session_id,
-                live_tokens,
-                live_cost,
-                cost_per_million,
-            )
-            .await
+            bwm!(model)
         }
         EmbeddingProvider::OpenRouter => {
             let client = openrouter::Client::from_env()
@@ -173,16 +120,7 @@ pub async fn build_rag_components(
                 || client.embedding_model(&cfg.embedding_model),
                 |n| client.embedding_model_with_ndims(&cfg.embedding_model, n),
             );
-            build_with_model(
-                model,
-                cfg,
-                db_path,
-                session_id,
-                live_tokens,
-                live_cost,
-                cost_per_million,
-            )
-            .await
+            bwm!(model)
         }
     }
 }
@@ -196,6 +134,7 @@ async fn build_with_model<E>(
     live_tokens: Option<Arc<std::sync::atomic::AtomicU64>>,
     live_cost: Option<Arc<std::sync::Mutex<f64>>>,
     embedding_cost_per_million_tokens: Option<f64>,
+    node_configs: std::collections::HashMap<String, crate::config::NodeRagConfig>,
 ) -> Result<(RagIndexHandle, Arc<RagIndexer>), EngineError>
 where
     E: EmbeddingModel + Clone + Send + Sync + 'static,
@@ -240,6 +179,7 @@ where
         embed_and_insert,
         cfg.index_kinds.iter().cloned().collect::<HashSet<_>>(),
         session_id.to_string(),
+        node_configs,
     );
     if let (Some(lt), Some(lc)) = (&live_tokens, &live_cost) {
         indexer = indexer.with_live_counters(

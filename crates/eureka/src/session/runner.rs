@@ -35,12 +35,22 @@ impl super::Session {
         if self.rag_index.is_none() {
             if let Some(rag_cfg) = self.config.rag.as_ref().filter(|r| r.enabled) {
                 if let Some(ref db_path) = self.db_path {
+                    // Collect per-agent NodeRagConfig so the indexer can apply
+                    // per-node extraction paths and format templates.
+                    let node_rag_configs: HashMap<String, crate::config::NodeRagConfig> = self
+                        .manifest
+                        .agents
+                        .iter()
+                        .filter_map(|a| a.rag.as_ref().map(|r| (a.id.clone(), r.clone())))
+                        .collect();
+
                     match crate::rag::build_rag_components(
                         rag_cfg,
                         db_path,
                         &self.session_id.to_string(),
                         self.live_tokens.clone(),
                         self.live_cost.clone(),
+                        node_rag_configs,
                     )
                     .await
                     {
@@ -161,8 +171,12 @@ impl super::Session {
         // Create the scheduler
         let max_in_flight = self.config.scheduler.max_in_flight;
         let budget = self.config.budget.clone();
-        let mut scheduler = Scheduler::new(expanded_spec.clone(), expanded_nodes, budget, max_in_flight)
-            .with_retry(self.config.scheduler.max_retries, self.config.scheduler.retry_backoff_ms);
+        let mut scheduler =
+            Scheduler::new(expanded_spec.clone(), expanded_nodes, budget, max_in_flight)
+                .with_retry(
+                    self.config.scheduler.max_retries,
+                    self.config.scheduler.retry_backoff_ms,
+                );
         let live_tokens = self.live_tokens.clone();
         let live_input_tokens = self.live_input_tokens.clone();
         let live_output_tokens = self.live_output_tokens.clone();
@@ -222,7 +236,13 @@ impl super::Session {
                     } => {
                         info!(%node_id, %node_kind, round, emit_count, "Node activation completed");
                     }
-                    SchedulerEvent::ActivationRetried { node_id, node_kind, round, attempt, error } => {
+                    SchedulerEvent::ActivationRetried {
+                        node_id,
+                        node_kind,
+                        round,
+                        attempt,
+                        error,
+                    } => {
                         warn!(%node_id, %node_kind, round, attempt, %error, "Node activation retrying");
                     }
                     SchedulerEvent::ActivationFailed { node_id, node_kind, round, error } => {
@@ -234,8 +254,14 @@ impl super::Session {
                     SchedulerEvent::ToolCalled { node_id, tool, args_summary, .. } => {
                         info!(%node_id, %tool, %args_summary, "Tool called");
                     }
-                    SchedulerEvent::ToolCompleted { node_id, tool, success, .. } => {
-                        info!(%node_id, %tool, success, "Tool completed");
+                    SchedulerEvent::ToolCompleted {
+                        node_id,
+                        tool,
+                        success,
+                        result_preview,
+                        ..
+                    } => {
+                        info!(%node_id, %tool, success, %result_preview, "Tool completed");
                     }
                     SchedulerEvent::RunHalted { reason, total_rounds } => {
                         info!(%reason, total_rounds, "Run halted");
