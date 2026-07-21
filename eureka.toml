@@ -45,14 +45,20 @@ output_per_million = 0.248
 # Global defaults for all agents. Override per-agent below under
 # [agent_overrides.<agent_id>].
 temperature = 0.7
-max_iterations = 50
+max_iterations = 15
 workers = 1
-# workers is intentionally 1 for all agents. Per-hypothesis parallelism is
-# provided by the scatter/gather control nodes: scatter fans a hypotheses
-# array out to N independent critic→advocate activations; gather collects
-# them back before ranking. Replica expansion (workers > 1) on an agent
-# whose downstream has fewer replicas causes a fan-in collision where only
-# the last-arriving replica's output reaches the next stage.
+
+[agent_overrides.plan]
+# Plan runs once and must produce output quickly. Cap at 8 turns so it
+# doesn't exhaust its budget on searches before emitting the plan.
+max_iterations = 8
+
+# Generation parallelism is provided by direction_scatter + generation_gather:
+# direction_scatter fans plan.exploration_directions into N PlanDirection items,
+# each generation agent receives one direction and produces one hypothesis,
+# generation_gather collects them into a single pool for the tournament.
+# workers = 1 on generation is intentional — parallelism comes from the graph,
+# not replica expansion.
 
 [scheduler]
 # Up to 8 hypotheses per batch × 2 (critic + advocate in flight simultaneously)
@@ -64,8 +70,9 @@ max_retries = 3
 retry_backoff_ms = 1000
 
 [budget]
-# Safety backstop values. Round count is primarily controlled by the
-# round-governor plugin (graph.json → nodes.governor.config.max_rounds).
+# These are the primary run controls. The supervisor control node never
+# halts the pipeline on its own — it always continues. The run ends when
+# one of these limits is reached, or via POST /runs/{id}/cancel from the UI.
 max_cost_usd = 25.0
 max_tokens = 20_000_000
 max_wallclock = "45m"
@@ -83,5 +90,8 @@ max_rounds = 10
 enabled = true
 embedding_provider = "openrouter"
 embedding_model = "google/gemini-embedding-2"
+# OpenRouter doesn't report ndims for this model — must be set explicitly.
+# google/gemini-embedding-2 outputs 3072 dimensions.
+embedding_ndims = 3072
 top_k = 5
 session_scoped = true
