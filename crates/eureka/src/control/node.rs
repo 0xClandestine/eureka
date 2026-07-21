@@ -140,6 +140,13 @@ impl ControlNode {
             )));
         }
 
+        // Surface stderr even on successful exit so silent-early-return bugs
+        // (emit_count=0 with no stdout) leave a diagnostic trail in the logs.
+        if !output.stderr.is_empty() {
+            let snippet: String = output.stderr.chars().take(2000).collect();
+            tracing::debug!(node = %self.name, stderr = %snippet, "control node stderr");
+        }
+
         let mut emits = Vec::new();
         for line in output.stdout.lines() {
             let line = line.trim();

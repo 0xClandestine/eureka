@@ -18,7 +18,12 @@ use super::error::ControlError;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// Maximum bytes captured from subprocess stdout.
-pub const MAX_OUTPUT_BYTES: usize = 64 * 1024;
+///
+/// Set large enough to accommodate control-node payloads such as a full gather
+/// batch (many reviews × long hypothesis text).  Truncation at this boundary
+/// produces invalid JSON that control nodes cannot parse, so the limit must
+/// comfortably exceed any realistic batch size.
+pub const MAX_OUTPUT_BYTES: usize = 16 * 1024 * 1024;
 
 /// Captured output from a subprocess invocation.
 #[derive(Debug, Clone)]
@@ -208,9 +213,9 @@ mod tests {
         )
         .await
         .unwrap();
+        // The key invariant is that the run completed without deadlocking.
+        // 200 KB is well below MAX_OUTPUT_BYTES so no truncation occurs here.
         assert!(out.success);
-        // Output is capped, but the run completed without deadlocking.
-        assert!(out.stdout.ends_with("[truncated]"));
     }
 
     #[tokio::test]

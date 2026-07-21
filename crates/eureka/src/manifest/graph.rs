@@ -101,13 +101,30 @@ impl GraphManifest {
             });
         }
 
+        // Inject a node_types map into metadata so consumers (e.g. the web UI)
+        // can distinguish agent nodes from control nodes without inspecting kind strings.
+        let node_types: serde_json::Value = self
+            .agents
+            .iter()
+            .map(|a| (a.id.clone(), serde_json::json!("agent")))
+            .chain(self.control.iter().map(|c| (c.id.clone(), serde_json::json!("control"))))
+            .collect::<serde_json::Map<_, _>>()
+            .into();
+        let mut metadata = self.metadata.clone();
+        match metadata {
+            serde_json::Value::Object(ref mut obj) => {
+                obj.insert("node_types".to_string(), node_types);
+            }
+            _ => metadata = serde_json::json!({ "node_types": node_types }),
+        }
+
         GraphSpec {
             name: self.name.clone(),
             description: self.description.clone(),
             nodes,
             edges: self.edges.clone(),
             frontend: self.frontend.clone(),
-            metadata: self.metadata.clone(),
+            metadata,
         }
     }
 }
@@ -191,6 +208,7 @@ edges:
                 tools: vec![],
                 output_schema: serde_json::json!({ "type": "object" }),
                 mcp_servers: vec![],
+                rag: None,
             }],
             control: vec![],
             edges: vec![],
@@ -241,6 +259,7 @@ agents:
                 tools: vec![],
                 output_schema: serde_json::json!({ "type": "object" }),
                 mcp_servers: vec![],
+                rag: None,
             }],
             control: vec![ControlSpec {
                 id: "gov".into(),
