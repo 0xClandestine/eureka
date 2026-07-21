@@ -981,8 +981,13 @@ fn spawn_activation(
             // Check whether this result should be forwarded immediately
             // (success, cancellation, or retries exhausted) before consuming
             // it. Use `as_ref` to inspect without moving.
+            // MaxTurnsError is deterministic — retrying will always hit the
+            // same limit. Forward immediately without consuming retry budget.
+            let is_max_turns =
+                matches!(&result, Err(NodeError::Agent(e)) if e.to_string().contains("MaxTurns"));
             let should_forward = result.is_ok()
                 || matches!(&result, Err(NodeError::Cancelled))
+                || is_max_turns
                 || attempt >= max_retries;
 
             if should_forward {
@@ -1016,9 +1021,8 @@ fn spawn_activation(
             // Exponential backoff: base * 2^(attempt-1), capped at 30 s.
             // Release the permit before sleeping so the semaphore slot is
             // available to other activations during the wait.
-            let backoff_ms = retry_backoff_ms
-                .saturating_mul(1u64 << (attempt - 1).min(5))
-                .min(30_000);
+            let backoff_ms =
+                retry_backoff_ms.saturating_mul(1u64 << (attempt - 1).min(5)).min(30_000);
             tokio::select! {
                 biased;
                 () = cancel.cancelled() => return,
@@ -1920,5 +1924,79 @@ mod tests {
             stats.rounds_completed
         );
         assert!(stats.rounds_completed >= 1);
+    }
+
+    /// A MaxTurnsError should fail the activation immediately without retrying.
+    /// Before the fix, the scheduler would retry up to `max_retries` times,
+    /// burning the same turn budget on each attempt.
+    #[tokio::test]
+    async fn test_max_turns_error_is_not_retried() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        use std::sync::Arc as StdArc;
+
+        struct MaxTurnsNode {
+            call_count: StdArc<AtomicU32>,
+        }
+
+        #[async_trait]
+        impl Node for MaxTurnsNode {
+            fn ports(&self) -> PortSpec {
+                PortSpec::new(
+                    vec![PortSpecEntry {
+                        name: "in".into(),
+                        direction: PortDirection::Input,
+                        kind: "Goal".into(),
+                        required: true,
+                    }],
+                    vec![],
+                )
+            }
+
+            async fn process(
+                &self,
+                _ctx: &NodeCtx,
+                _inputs: Vec<PortMsg>,
+            ) -> Result<(Vec<Emit>, NodeUsage), NodeError> {
+                self.call_count.fetch_add(1, Ordering::SeqCst);
+                Err(NodeError::Agent(
+                    "Provider error: MaxTurnsError: reached max turns limit: 8".into(),
+                ))
+            }
+        }
+
+        let call_count = StdArc::new(AtomicU32::new(0));
+        let spec = GraphSpec {
+            name: Some("max-turns".into()),
+            description: None,
+            nodes: vec![GraphNodeSpec {
+                id: "agent".into(),
+                kind: "test.node".into(),
+                config: serde_json::Value::Null,
+                description: None,
+            }],
+            edges: vec![],
+            frontend: None,
+            metadata: serde_json::Value::Null,
+        };
+        let mut nodes = HashMap::new();
+        nodes.insert(
+            "agent".into(),
+            BoxedNode::new(MaxTurnsNode { call_count: StdArc::clone(&call_count) }),
+        );
+        // Allow up to 3 retries — MaxTurnsError must bypass them all.
+        let mut scheduler = Scheduler::new(spec, nodes, Budget::default(), 4).with_retry(3, 0);
+        let result = scheduler
+            .run(HashMap::from([(
+                "agent".into(),
+                vec![Artifact { kind: "Goal".into(), data: serde_json::json!({}) }],
+            )]))
+            .await;
+
+        assert!(result.is_err(), "should fail");
+        assert_eq!(
+            call_count.load(Ordering::SeqCst),
+            1,
+            "MaxTurnsError must not be retried — node should be called exactly once"
+        );
     }
 }
