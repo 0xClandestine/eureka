@@ -41,6 +41,8 @@ pub enum McpTransport {
     Stdio {
         /// Full argv (already path-resolved by `AgentSpec::resolve_paths`).
         command: Vec<String>,
+        /// Extra environment variables injected into the subprocess.
+        env: std::collections::HashMap<String, String>,
     },
     /// Streamable-HTTP server reachable at this URI.
     Http {

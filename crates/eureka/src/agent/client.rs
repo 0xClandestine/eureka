@@ -15,7 +15,7 @@ use crate::scheduler::SchedulerEvent;
 use async_trait::async_trait;
 use rig_core::agent::{AgentBuilder, AgentHook, Flow, HookContext, StepEvent};
 use rig_core::completion::{CompletionModel, Prompt, Usage};
-use rig_core::tool::Tool;
+use rig_core::tool::{Tool, ToolOutcome};
 use tokio::sync::mpsc;
 
 use super::def::ToolDef;
@@ -195,6 +195,82 @@ impl<M: CompletionModel + Send + Sync + 'static> AgentHook<M> for LiveCounterHoo
 }
 
 // ---------------------------------------------------------------------------
+// ToolEventHook — forwards ToolCall / ToolResult to the scheduler event channel
+// ---------------------------------------------------------------------------
+
+/// A rig `AgentHook` that forwards every tool call and result to the scheduler
+/// event bus, covering both `CommandTool` (shell) and MCP tool calls.
+struct ToolEventHook {
+    node_id: String,
+    node_kind: String,
+    round: u32,
+    event_tx: Option<mpsc::Sender<SchedulerEvent>>,
+}
+
+impl<M: CompletionModel + Send + Sync + 'static> AgentHook<M> for ToolEventHook {
+    fn on_event(
+        &self,
+        _ctx: &HookContext,
+        event: StepEvent<'_, M>,
+    ) -> impl std::future::Future<Output = Flow> + Send {
+        match event {
+            StepEvent::ToolCall { tool_name, args, .. } => {
+                if let Some(tx) = &self.event_tx {
+                    let args_val: serde_json::Value =
+                        serde_json::from_str(args).unwrap_or(serde_json::Value::Null);
+                    let summary = tool_args_summary(args);
+                    if tx
+                        .try_send(SchedulerEvent::ToolCalled {
+                            node_id: self.node_id.clone(),
+                            node_kind: self.node_kind.clone(),
+                            round: self.round,
+                            tool: tool_name.to_string(),
+                            args_summary: summary,
+                            args: args_val,
+                        })
+                        .is_err()
+                    {
+                        tracing::debug!("ToolCalled event dropped: channel full or closed");
+                    }
+                }
+            }
+            StepEvent::ToolResult { tool_name, result, outcome, .. } => {
+                if let Some(tx) = &self.event_tx {
+                    let preview: String = result.chars().take(16_000).collect();
+                    let success = matches!(outcome, ToolOutcome::Success);
+                    if tx
+                        .try_send(SchedulerEvent::ToolCompleted {
+                            node_id: self.node_id.clone(),
+                            node_kind: self.node_kind.clone(),
+                            round: self.round,
+                            tool: tool_name.to_string(),
+                            result_preview: preview,
+                            success,
+                        })
+                        .is_err()
+                    {
+                        tracing::debug!("ToolCompleted event dropped: channel full or closed");
+                    }
+                }
+            }
+            _ => {}
+        }
+        std::future::ready(Flow::cont())
+    }
+}
+
+/// Build a concise args summary from a raw JSON args string.
+fn tool_args_summary(args: &str) -> String {
+    serde_json::from_str::<serde_json::Value>(args)
+        .ok()
+        .as_ref()
+        .and_then(|v| v.as_object())
+        .and_then(|obj| obj.values().find_map(|v| v.as_str()))
+        .map(|s| s.chars().take(80).collect())
+        .unwrap_or_default()
+}
+
+// ---------------------------------------------------------------------------
 // RigClient
 // ---------------------------------------------------------------------------
 
@@ -337,14 +413,25 @@ impl<M: CompletionModel + Clone + Send + Sync + 'static> LlmClient for RigClient
             }
 
             // On a second-chance attempt, drastically reduce turns and strip
-            // command tools so the agent has no reason to defer submit.
+            // all tools (command and MCP) so the agent has no reason to defer submit.
+            let is_second_chance =
+                attempt > 0 && matches!(last_err.as_str(), s if s == "__second_chance__");
+            // On second-chance, include the original input so the agent can
+            // copy routing metadata (_batch_id, _batch_total, etc.) correctly.
+            let second_chance_msg_owned = format!(
+                "Call submit NOW with your result.\n\n\
+                 IMPORTANT: your output must include all routing fields \
+                 (_batch_id, _batch_index, _batch_total, etc.) copied \
+                 exactly from your original input below.\n\n\
+                 Original input:\n{initial_message}"
+            );
             let (effective_preamble, effective_turns, effective_msg, effective_tools) =
-                if attempt > 0 && matches!(last_err.as_str(), s if s == "__second_chance__") {
+                if is_second_chance {
                     let empty: &[ToolDef] = &[];
                     (
                         second_chance_preamble.as_str(),
                         SECOND_CHANCE_TURNS,
-                        "Call submit with your result.",
+                        second_chance_msg_owned.as_str(),
                         empty, // no tools — submit only
                     )
                 } else {
@@ -362,11 +449,9 @@ impl<M: CompletionModel + Clone + Send + Sync + 'static> LlmClient for RigClient
                     Box::new(CommandTool::with_environment(
                         Arc::new(t.clone()),
                         node_id.to_string(),
-                        node_kind.to_string(),
                         round,
                         std::path::PathBuf::from(work_dir),
                         environment.clone(),
-                        event_tx.clone(),
                     ))
                 })
                 .collect();
@@ -380,8 +465,12 @@ impl<M: CompletionModel + Clone + Send + Sync + 'static> LlmClient for RigClient
             }
 
             let mut builder = base_builder.tool(submit).tools(command_tools);
-            for conn in &self.mcp {
-                builder = builder.rmcp_tools(conn.tools.clone(), conn.sink.clone());
+            // On second-chance attempts the agent must call submit immediately;
+            // strip MCP tools too so there is nothing to distract it.
+            if !is_second_chance {
+                for conn in &self.mcp {
+                    builder = builder.rmcp_tools(conn.tools.clone(), conn.sink.clone());
+                }
             }
             let agent = builder.build();
 
@@ -400,6 +489,12 @@ impl<M: CompletionModel + Clone + Send + Sync + 'static> LlmClient for RigClient
                     live_output_tokens: live_output_tokens.clone(),
                     live_cost: live_cost.clone(),
                     pricing: self.pricing.clone(),
+                })
+                .add_hook(ToolEventHook {
+                    node_id: node_id.to_string(),
+                    node_kind: node_kind.to_string(),
+                    round,
+                    event_tx: event_tx.clone(),
                 })
                 .extended_details()
                 .await;

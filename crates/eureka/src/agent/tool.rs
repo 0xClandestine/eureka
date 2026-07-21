@@ -8,10 +8,8 @@ use std::sync::Arc;
 
 use crate::control::process::run_subprocess;
 use crate::persistence::RunEnvironment;
-use crate::scheduler::SchedulerEvent;
 use rig_core::tool::{ToolDyn, ToolError};
 use rig_core::wasm_compat::WasmBoxedFuture;
-use tokio::sync::mpsc;
 
 use super::def::ToolDef;
 
@@ -21,16 +19,12 @@ pub struct CommandTool {
     pub(crate) def: Arc<ToolDef>,
     /// ID of the node that owns this tool (for event reporting).
     node_id: String,
-    /// Kind of the node that owns this tool (for event reporting).
-    node_kind: String,
     /// Scheduler round when this tool is being called.
     round: u32,
     /// Working directory for the subprocess (the graph directory).
     work_dir: std::path::PathBuf,
     /// Run-scoped identity and database capability for the subprocess.
     environment: RunEnvironment,
-    /// Optional channel for emitting `ToolCalled` events.
-    event_tx: Option<mpsc::Sender<SchedulerEvent>>,
 }
 
 impl CommandTool {
@@ -39,19 +33,15 @@ impl CommandTool {
     pub fn new(
         def: Arc<ToolDef>,
         node_id: String,
-        node_kind: String,
         round: u32,
         work_dir: std::path::PathBuf,
-        event_tx: Option<mpsc::Sender<SchedulerEvent>>,
     ) -> Self {
         Self::with_environment(
             def,
             node_id.clone(),
-            node_kind,
             round,
             work_dir,
             RunEnvironment::new(node_id, None),
-            event_tx,
         )
     }
 
@@ -60,36 +50,17 @@ impl CommandTool {
     pub const fn with_environment(
         def: Arc<ToolDef>,
         node_id: String,
-        node_kind: String,
         round: u32,
         work_dir: std::path::PathBuf,
         environment: RunEnvironment,
-        event_tx: Option<mpsc::Sender<SchedulerEvent>>,
     ) -> Self {
-        Self { def, node_id, node_kind, round, work_dir, environment, event_tx }
+        Self { def, node_id, round, work_dir, environment }
     }
 
     /// Execute the tool by running the subprocess and returning its stdout.
     async fn execute(&self, args_json: String) -> Result<String, ToolError> {
         let args_val: serde_json::Value = serde_json::from_str(&args_json)
             .unwrap_or_else(|_| serde_json::Value::Object(serde_json::Map::default()));
-
-        if let Some(tx) = &self.event_tx {
-            let summary = args_summary(&args_val);
-            if tx
-                .try_send(SchedulerEvent::ToolCalled {
-                    node_id: self.node_id.clone(),
-                    node_kind: self.node_kind.clone(),
-                    round: self.round,
-                    tool: self.def.name.clone(),
-                    args_summary: summary,
-                    args: args_val.clone(),
-                })
-                .is_err()
-            {
-                tracing::debug!("ToolCalled event dropped: channel full or closed");
-            }
-        }
 
         let argv = interpolate(&self.def.command, &args_val);
 
@@ -119,23 +90,6 @@ impl CommandTool {
             format!("Error (exit {code}): {snippet}")
         };
 
-        if let Some(tx) = &self.event_tx {
-            let preview: String = output.chars().take(500).collect();
-            if tx
-                .try_send(SchedulerEvent::ToolCompleted {
-                    node_id: self.node_id.clone(),
-                    node_kind: self.node_kind.clone(),
-                    round: self.round,
-                    tool: self.def.name.clone(),
-                    result_preview: preview,
-                    success: result.success,
-                })
-                .is_err()
-            {
-                tracing::debug!("ToolCompleted event dropped: channel full or closed");
-            }
-        }
-
         Ok(output)
     }
 }
@@ -156,14 +110,6 @@ impl ToolDyn for CommandTool {
     fn call(&self, args: String) -> WasmBoxedFuture<'_, Result<String, ToolError>> {
         Box::pin(self.execute(args))
     }
-}
-
-/// Build a concise human-readable summary of a tool call's arguments.
-fn args_summary(args: &serde_json::Value) -> String {
-    args.as_object()
-        .and_then(|obj| obj.values().find_map(|v| v.as_str()))
-        .map(|s| s.chars().take(80).collect())
-        .unwrap_or_default()
 }
 
 /// Substitute `{{key}}` tokens in each argv element using values from `args`.
@@ -246,14 +192,7 @@ mod tests {
             args_schema: serde_json::json!({ "type": "object" }),
             timeout_secs: 5,
         });
-        let tool = CommandTool::new(
-            def,
-            "test".into(),
-            "test".into(),
-            0,
-            std::path::PathBuf::from("."),
-            None,
-        );
+        let tool = CommandTool::new(def, "test".into(), 0, std::path::PathBuf::from("."));
         let result = tool.execute("{}".to_string()).await.unwrap();
         assert_eq!(result, "hello");
     }
@@ -267,14 +206,7 @@ mod tests {
             args_schema: serde_json::json!({ "type": "object" }),
             timeout_secs: 5,
         });
-        let tool = CommandTool::new(
-            def,
-            "test".into(),
-            "test".into(),
-            0,
-            std::path::PathBuf::from("."),
-            None,
-        );
+        let tool = CommandTool::new(def, "test".into(), 0, std::path::PathBuf::from("."));
         let result = tool.execute("{}".to_string()).await.unwrap();
         assert!(result.starts_with("Error (exit 1)"));
     }
@@ -288,14 +220,7 @@ mod tests {
             args_schema: serde_json::json!({ "type": "object" }),
             timeout_secs: 5,
         });
-        let tool = CommandTool::new(
-            def,
-            "test".into(),
-            "test".into(),
-            0,
-            std::path::PathBuf::from("."),
-            None,
-        );
+        let tool = CommandTool::new(def, "test".into(), 0, std::path::PathBuf::from("."));
         let result = tool.execute(r#"{"key":"value"}"#.to_string()).await.unwrap();
         assert_eq!(result, r#"{"key":"value"}"#);
     }
@@ -317,11 +242,9 @@ mod tests {
         let tool = CommandTool::with_environment(
             def,
             "agent".into(),
-            "researcher".into(),
             2,
             std::path::PathBuf::from("."),
             RunEnvironment::new("run-123", Some(db_path.clone())),
-            None,
         );
         let result = tool.execute("{}".to_string()).await.unwrap();
         assert_eq!(result, format!("run-123|{}|agent", db_path.display()));
@@ -349,8 +272,7 @@ mod tests {
             args_schema: serde_json::json!({ "type": "object" }),
             timeout_secs: 5,
         });
-        let tool =
-            CommandTool::new(def, "test".into(), "test".into(), 0, dir.path().to_path_buf(), None);
+        let tool = CommandTool::new(def, "test".into(), 0, dir.path().to_path_buf());
         let result = tool.execute("{}".to_string()).await.unwrap();
         let parsed: serde_json::Value = serde_json::from_str(&result).unwrap();
         let actual_cwd = std::path::PathBuf::from(parsed["cwd"].as_str().unwrap());
